@@ -1,0 +1,31 @@
+# Frontend dependencies and generated output
+frontend/node_modules/
+frontend/dist/
+frontend/package.json.md5
+
+# Wails build output (keep build assets and platform metadata)
+build/bin/
+
+# Local demo renders and capture takes
+demo/
+
+# Generated design-review snapshots
+.impeccable/critique/
+
+# Local application state
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Go test/build artifacts
+coverage.out
+*.test
+
+# macOS metadata
+.DS_Store

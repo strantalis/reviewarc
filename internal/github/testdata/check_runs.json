@@ -1,0 +1,7 @@
+[
+  {"total_count":2,"check_runs":[
+    {"id":302,"name":"Unit tests","status":"completed","conclusion":"success","html_url":"https://github.test/checks/302","details_url":"https://ci.test/302","started_at":"2026-07-11T10:00:00Z","completed_at":"2026-07-11T10:02:00Z","app":{"name":"GitHub Actions"}},
+    {"id":301,"name":"Lint","status":"in_progress","conclusion":null,"html_url":"https://github.test/checks/301","started_at":"2026-07-11T10:01:00Z","completed_at":null,"app":null},
+    {"id":0,"name":"invalid","status":"queued"}
+  ]}
+]

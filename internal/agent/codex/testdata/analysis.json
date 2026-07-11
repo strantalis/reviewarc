@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "baseSha": "1111111111111111111111111111111111111111",
+  "headSha": "2222222222222222222222222222222222222222",
+  "summary": "Changes greeting behavior.",
+  "summaryEvidence": [{"id":"ev-summary","path":"src/greet.go","revision":"head","startLine":1,"endLine":2,"symbol":"Greet"}],
+  "affectedAreas": [{"name":"Greeting","description":"User-facing greeting","evidence":[{"id":"ev-valid","path":"src/greet.go","revision":"head","startLine":1,"endLine":2,"symbol":"Greet"}]}],
+  "chapters": [{
+    "id":"chapter-1","order":1,"title":"Greeting path","description":"Review the greeting","purpose":"Confirm behavior",
+    "evidence":[{"id":"ev-valid","path":"src/greet.go","revision":"head","startLine":1,"endLine":2,"symbol":"Greet"}],
+    "files":[{"path":"src/greet.go","description":"Implementation"}],
+    "symbols":[{"path":"src/greet.go","name":"Greet","evidence":[{"id":"symbol-greet","path":"src/greet.go","revision":"head","startLine":1,"endLine":1,"symbol":"Greet"}]}],
+    "behavioralChanges":[],"risks":[],
+    "facts":[{"id":"fact-chapter","text":"The greeting returns hello.","evidence":[{"id":"ev-valid","path":"src/greet.go","revision":"head","startLine":1,"endLine":2,"symbol":"Greet"}]}],
+    "inferences":[],"unknowns":[],
+    "relatedTests":[{"id":"test-1","path":"src/greet_test.go","description":"Greeting test","evidence":[]}],
+    "suggestedQuestions":[{"id":"question-1","text":"Should empty names be accepted?","rationale":"No guard is visible.","evidence":[]}]
+  }],
+  "behavioralChanges": [],
+  "risks": [{"id":"risk-1","title":"Input handling","description":"Empty input may be surprising.","level":"medium","evidence":[]}],
+  "facts": [
+    {"id":"fact-valid","text":"Greet returns a greeting.","evidence":[{"id":"ev-valid","path":"src/greet.go","revision":"head","startLine":1,"endLine":2,"symbol":"Greet"}]},
+    {"id":"fact-invalid","text":"A secret file changes.","evidence":[{"id":"ev-escape","path":"../secret.txt","revision":"head","startLine":1,"endLine":1,"symbol":""}]}
+  ],
+  "inferences": [{"id":"inference-1","text":"This may be intended for onboarding.","evidence":[]}],
+  "unknowns": [{"id":"unknown-1","text":"Expected empty-input behavior is unknown.","evidence":[]}]
+}

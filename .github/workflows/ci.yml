@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Test and build macOS app
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Check frontend
+        working-directory: frontend
+        run: npm run check
+
+      - name: Test Go packages
+        run: go test ./...
+
+      - name: Build ReviewArc
+        run: go run github.com/wailsapp/wails/v2/cmd/wails@v2.11.0 build
+
+      - name: Upload unsigned app bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: ReviewArc-macOS-unsigned
+          path: build/bin/ReviewArc.app
+          if-no-files-found: error
+          retention-days: 7

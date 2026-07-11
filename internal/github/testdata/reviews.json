@@ -1,0 +1,5 @@
+[[
+  {"id":22,"user":{"login":"bob","name":"Bob"},"body":"Approved","state":"APPROVED","html_url":"https://github.test/reviews/22","commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","submitted_at":"2026-07-11T12:00:00Z"},
+  {"id":11,"user":{"login":"alice","name":"Alice"},"body":"Please clarify","state":"CHANGES_REQUESTED","html_url":"https://github.test/reviews/11","commit_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","submitted_at":"2026-07-11T10:00:00Z"},
+  {"id":0,"user":{"login":"invalid"},"state":"COMMENTED"}
+]]
