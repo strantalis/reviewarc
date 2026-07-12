@@ -3,7 +3,7 @@ import starlight from "@astrojs/starlight";
 import vercel from "@astrojs/vercel";
 
 export default defineConfig({
-  site: "https://reviewarc.vercel.app",
+  site: "https://www.reviewarc.dev",
   output: "static",
   markdown: { syntaxHighlight: "prism" },
   adapter: vercel({ staticHeaders: true }),
