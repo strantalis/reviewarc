@@ -1,0 +1,214 @@
+name: Release macOS beta
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-macos
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build, sign, and notarize DMG
+    runs-on: macos-15
+    timeout-minutes: 45
+    environment: beta
+    env:
+      APPLE_BUNDLE_ID: ${{ vars.APPLE_BUNDLE_ID }}
+      APPLE_COPYRIGHT: ${{ vars.APPLE_COPYRIGHT }}
+      APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
+      APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+      APPLE_DEVELOPER_ID_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 }}
+      APPLE_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+      APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+      APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+      APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Validate Apple release configuration
+        shell: bash
+        run: scripts/release/validate_environment.sh apple
+
+      - name: Set up Go
+        uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Check frontend
+        working-directory: frontend
+        run: npm run check
+
+      - name: Test Go packages
+        run: go test ./...
+
+      - name: Test release scripts
+        run: |
+          scripts/release/test_release.sh
+          node scripts/release/test_semver.mjs
+
+      - name: Derive release metadata
+        id: metadata
+        shell: bash
+        run: scripts/release/derive_metadata.sh "$GITHUB_REF_NAME" "$GITHUB_RUN_NUMBER"
+
+      - name: Import Developer ID certificate
+        shell: bash
+        run: scripts/release/import_certificate.sh
+
+      - name: Build universal macOS app
+        run: >-
+          go run github.com/wailsapp/wails/v2/cmd/wails@v2.11.0 build
+          -clean -trimpath -platform darwin/universal
+
+      - name: Apply release metadata and sign app
+        shell: bash
+        run: |
+          scripts/release/prepare_app.sh \
+            build/bin/ReviewArc.app \
+            "$APPLE_BUNDLE_ID" \
+            "${{ steps.metadata.outputs.marketing_version }}" \
+            "${{ steps.metadata.outputs.build_number }}" \
+            "$APPLE_COPYRIGHT"
+          codesign --force --options runtime --timestamp \
+            --sign "$APPLE_SIGNING_IDENTITY" build/bin/ReviewArc.app
+          scripts/release/verify_app.sh \
+            build/bin/ReviewArc.app "$APPLE_BUNDLE_ID" "$APPLE_TEAM_ID"
+
+      - name: Create and sign DMG
+        id: package
+        shell: bash
+        run: |
+          DMG="dist/ReviewArc-${{ steps.metadata.outputs.release_version }}-macOS-universal.dmg"
+          scripts/release/create_dmg.sh build/bin/ReviewArc.app "$DMG"
+          codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$DMG"
+          codesign --verify --strict --verbose=2 "$DMG"
+          echo "dmg=$DMG" >> "$GITHUB_OUTPUT"
+
+      - name: Notarize and verify delivered DMG
+        id: notarize
+        shell: bash
+        run: scripts/release/notarize_dmg.sh "${{ steps.package.outputs.dmg }}"
+
+      - name: Build release manifest
+        shell: bash
+        run: |
+          scripts/release/create_manifest.sh \
+            "${{ steps.package.outputs.dmg }}" \
+            build/bin/ReviewArc.app \
+            "${{ steps.metadata.outputs.release_version }}" \
+            "${{ steps.metadata.outputs.marketing_version }}" \
+            "${{ steps.metadata.outputs.build_number }}" \
+            "${{ steps.notarize.outputs.submission_id }}" \
+            "$APPLE_TEAM_ID"
+
+      - name: Preserve notarized release candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-candidate-${{ github.ref_name }}
+          path: |
+            dist/*.dmg
+            dist/*.sha256
+            dist/notary-result.json
+            dist/release.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Clean signing material
+        if: always()
+        shell: bash
+        run: scripts/release/cleanup_signing.sh
+
+  publish:
+    name: Publish notarized beta
+    needs: build
+    runs-on: macos-15
+    timeout-minutes: 20
+    environment: beta
+    permissions:
+      contents: write
+    env:
+      BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Validate publication configuration
+        shell: bash
+        run: scripts/release/validate_environment.sh publish
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: scripts/release/package-lock.json
+
+      - name: Install release dependencies
+        working-directory: scripts/release
+        run: npm ci
+
+      - name: Download notarized release candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-candidate-${{ github.ref_name }}
+          path: dist
+
+      - name: Resolve release candidate
+        id: candidate
+        shell: bash
+        run: |
+          DMG="$(find dist -maxdepth 1 -type f -name '*.dmg' -print)"
+          if [[ -z "$DMG" || "$(printf '%s\n' "$DMG" | wc -l | tr -d ' ')" != 1 ]]; then
+            echo "::error::Expected exactly one notarized DMG in the release candidate."
+            exit 1
+          fi
+          shasum -a 256 -c "$DMG.sha256"
+          echo "dmg=$DMG" >> "$GITHUB_OUTPUT"
+
+      - name: Upload immutable release to Vercel Blob
+        shell: bash
+        run: node scripts/release/publish_blob.mjs "${{ steps.candidate.outputs.dmg }}" dist/release.json
+
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/release/publish_github_release.sh "${{ steps.candidate.outputs.dmg }}"
+
+      - name: Promote latest release manifest
+        id: promote
+        shell: bash
+        run: node scripts/release/promote_blob.mjs dist/release.json
+
+      - name: Deploy download site
+        if: steps.promote.outputs.promoted == 'true'
+        shell: bash
+        run: scripts/release/deploy_site.sh dist/release.json

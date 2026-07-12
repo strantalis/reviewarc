@@ -32,6 +32,33 @@ go test ./...
 go run github.com/wailsapp/wails/v2/cmd/wails@v2.11.0 build
 ```
 
+## Signed beta releases
+
+Tags such as `v0.1.0-beta.1` start the fail-closed macOS release workflow. It builds a universal app, applies release metadata, signs it with the LLC's Developer ID Application certificate, creates and signs a DMG, submits it to Apple for notarization, staples and verifies the ticket, then publishes the immutable DMG to Vercel Blob, a GitHub prerelease, and the Vercel download site. If signing, notarization, Gatekeeper assessment, upload verification, or packaging fails, the release is not promoted.
+
+The protected `beta` GitHub environment requires these variables:
+
+- `APPLE_BUNDLE_ID`
+- `APPLE_COPYRIGHT`
+- `APPLE_SIGNING_IDENTITY`
+- `APPLE_TEAM_ID`
+
+It also requires these secrets:
+
+- `APPLE_DEVELOPER_ID_P12_BASE64`
+- `APPLE_DEVELOPER_ID_P12_PASSWORD`
+- `APPLE_NOTARY_KEY_P8_BASE64`
+- `APPLE_NOTARY_KEY_ID`
+- `APPLE_NOTARY_ISSUER_ID`
+- `BLOB_READ_WRITE_TOKEN`
+- `VERCEL_TOKEN`
+- `VERCEL_ORG_ID`
+- `VERCEL_PROJECT_ID`
+
+Use a Team App Store Connect API key for notarization; Apple does not support individual API keys with `notarytool`. Never commit the `.p12`, `.p8`, passwords, or tokens. The download site lives in `site/` and is deployed only after the signed DMG and release manifest have been published successfully.
+
+See [the beta release setup guide](docs/releasing.md) for the Apple Developer, GitHub environment, Vercel Blob, and first-release checklist.
+
 The first launch checks local dependencies and the active GitHub account. Select repositories or whole organizations; source discovery does not clone anything. Opening a PR fetches only its required base/head refs into a bare cache owned by ReviewArc.
 
 To clear only managed Git data, quit ReviewArc and remove the `repositories/` and `worktrees/` directories shown in Settings. To reset all local ReviewArc state, remove the entire displayed data root. This deletes private notes, drafts, and progress as well as caches.

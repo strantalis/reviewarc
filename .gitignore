@@ -2,9 +2,13 @@
 frontend/node_modules/
 frontend/dist/
 frontend/package.json.md5
+scripts/release/node_modules/
+site/.vercel/
+site/release.json
 
 # Wails build output (keep build assets and platform metadata)
 build/bin/
+dist/
 
 # Local demo renders and capture takes
 demo/
