@@ -2,6 +2,8 @@
 
 ReviewArc is a local-first Wails desktop application for reviewing real GitHub pull requests as evidence-backed, guided review journeys. It opens to a unified inbox, creates isolated application-managed Git caches only when a PR is opened, runs Codex in read-only mode, validates every AI-provided code reference, and persists reviewer progress locally in SQLite.
 
+Product documentation and signed release downloads are published at [reviewarc.vercel.app](https://reviewarc.vercel.app).
+
 ## Prerequisites
 
 - Go 1.24 or newer
