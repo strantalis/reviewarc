@@ -1,0 +1,38 @@
+---
+title: Getting started
+description: Prepare GitHub CLI, Git, and Codex, then open your first pull request in ReviewArc.
+---
+
+ReviewArc uses the developer tools and GitHub identity already configured on your Mac.
+
+## Prerequisites
+
+Install these command-line tools and make sure they are available in your shell:
+
+- `git` for fetching pull request revisions into isolated managed caches.
+- `gh` for GitHub authentication, repositories, pull requests, and publishing reviews.
+- `codex` for structured, read-only analysis.
+
+Authenticate GitHub CLI before opening ReviewArc:
+
+```sh
+gh auth login
+gh auth status
+```
+
+ReviewArc follows the Git operations protocol shown by `gh auth status`. If your GitHub CLI account uses SSH, managed Git fetches use SSH; if it uses HTTPS, ReviewArc uses HTTPS.
+
+## Choose sources
+
+1. Open **Settings** and confirm all three dependencies are detected.
+2. Confirm the expected GitHub account and Git operations protocol are shown.
+3. Select the organizations or individual repositories you want in your inbox.
+4. Return to the inbox and refresh.
+
+No existing local checkout is required. ReviewArc does not clone a repository until you open a pull request that needs deeper inspection.
+
+## Open a review
+
+Choose any pull request in the inbox. ReviewArc loads GitHub metadata, creates or updates its managed cache, checks out the exact pull request revision inside application storage, and prepares the changed files and diff for review.
+
+When a notarized macOS build is available, the [ReviewArc home page](/) will show the current download and checksum information.

@@ -1,3 +1,7 @@
+---
+import "../styles/landing.css";
+---
+
 <!doctype html>
 <html lang="en">
   <head>
@@ -6,34 +10,38 @@
     <meta name="theme-color" content="#f3f5f8" />
     <meta name="description" content="ReviewArc turns pull request review into a guided, evidence-backed journey." />
     <title>ReviewArc — Review the change, not the noise</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&amp;family=Newsreader:opsz,wght@6..72,500;6..72,600&amp;display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/styles.css" />
-    <script src="/app.js" defer></script>
   </head>
   <body>
+    <a class="skip-link" href="#main-content">Skip to main content</a>
     <header class="site-header">
       <a class="brand" href="/" aria-label="ReviewArc home">
         <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
         <span>ReviewArc</span>
       </a>
-      <span class="platform-label">For macOS</span>
+      <nav aria-label="Primary navigation">
+        <a href="/docs/">Docs</a>
+        <span class="platform-label">For macOS</span>
+      </nav>
     </header>
 
-    <main>
+    <main id="main-content">
       <section class="hero">
         <div class="hero-copy">
-          <p class="eyebrow" id="channel-label"><span class="status-dot"></span> macOS release</p>
+          <p class="eyebrow" id="channel-label"><span class="status-dot"></span><span id="channel-copy">macOS release</span></p>
           <h1>Review the change.<br /><em>Understand the risk.</em></h1>
           <p class="lede">A local-first review workspace that turns sprawling pull requests into a guided path through behavior, evidence, tests, and uncertainty.</p>
           <div class="download-group">
-            <a class="download-button is-loading" id="download" href="#" aria-disabled="true">
+            <a class="download-button is-loading" id="download" aria-disabled="true">
               <span>Preparing release</span>
               <small>Universal macOS build</small>
             </a>
-            <p class="release-meta" id="release-meta" aria-live="polite">Checking the latest notarized release…</p>
+            <p class="release-meta" id="release-meta" role="status">Checking the latest notarized release…</p>
           </div>
+          <a class="quiet-link" href="/docs/getting-started/">Read the setup guide <span aria-hidden="true">→</span></a>
         </div>
 
         <div class="review-instrument" aria-label="Illustration of ReviewArc's evidence-led review flow">
@@ -51,9 +59,9 @@
             <div class="evidence">
               <span class="label">Current evidence</span>
               <p class="file-path">internal/review/publish.go</p>
-              <pre><code><span class="line">88</span> if preview.Digest != digest {
+              <pre><code><span class="line">88</span> if preview.Digest != digest &#123;
 <span class="line">89</span>   return ErrPreviewChanged
-<span class="line">90</span> }
+<span class="line">90</span> &#125;
 <span class="line add">91</span> return github.Publish(preview)</code></pre>
               <div class="finding"><span>Inference</span><p>Publishing is bound to the exact preview the reviewer confirmed.</p></div>
             </div>
@@ -71,6 +79,14 @@
       </section>
     </main>
 
-    <footer><span>ReviewArc</span><span>Built for careful reviewers.</span></footer>
+    <footer>
+      <span>ReviewArc</span>
+      <span>Built for careful reviewers.</span>
+      <a href="/docs/security-and-local-data/">Security and privacy</a>
+    </footer>
+
+    <script>
+      import "../scripts/release";
+    </script>
   </body>
 </html>

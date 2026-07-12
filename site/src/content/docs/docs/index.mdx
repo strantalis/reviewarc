@@ -1,0 +1,33 @@
+---
+title: ReviewArc documentation
+description: Review pull requests across repositories with an evidence-backed, local-first workflow.
+template: splash
+hero:
+  tagline: A focused macOS workspace for understanding pull requests before you approve them.
+  actions:
+    - text: Get started
+      link: /docs/getting-started/
+      icon: right-arrow
+      variant: primary
+    - text: Understand the analysis
+      link: /docs/analysis-and-reanalysis/
+      icon: open-book
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+ReviewArc opens to a unified inbox of real GitHub pull requests. It creates isolated, application-managed Git caches only when you open a pull request, then uses Codex in read-only mode to organize the change into a guided review.
+
+<CardGrid>
+  <Card title="One review inbox" icon="list-format">
+    Bring review-requested, assigned, and authored pull requests from selected repositories into one place.
+  </Card>
+  <Card title="Evidence, not verdicts" icon="magnifier">
+    Separate facts, inferences, risks, unknowns, and tests—and trace claims back to the reviewed revision.
+  </Card>
+  <Card title="Local by design" icon="padlock">
+    Keep managed repositories, analysis, progress, drafts, and private notes on your Mac.
+  </Card>
+</CardGrid>
+
+ReviewArc helps you move through a review deliberately. It does not approve code for you, and it never publishes to GitHub without an explicit confirmation.

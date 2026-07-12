@@ -1,0 +1,28 @@
+---
+title: Analysis and re-analysis
+description: How ReviewArc evaluates a pull request, validates evidence, and detects stale results.
+---
+
+ReviewArc analyzes the pull request's complete current diff against its base revision. Re-analysis is intentionally end to end: it evaluates the current pull request again rather than analyzing only commits added since the previous run.
+
+That choice keeps chapters, risks, test relationships, and cross-file behavior coherent after a revision changes. It also means re-analysis cost and time generally scale with the full pull request, not only its newest commit.
+
+## Read-only execution
+
+ReviewArc invokes Codex with structured JSON or JSONL output against an isolated snapshot. The analysis process is read-only. ReviewArc does not run arbitrary project commands, package scripts, tests, hooks, or generated instructions from the repository.
+
+Progress is streamed into the app while the structured review model is built.
+
+## Evidence validation
+
+AI output is treated as a proposal, not ground truth. Before displaying evidence, ReviewArc validates that each referenced file belongs to the reviewed revision and that each line range exists in that file or diff.
+
+Claims without valid supporting evidence remain explicitly unverified. ReviewArc preserves the distinction between:
+
+- **Facts** supported directly by the reviewed source or diff.
+- **Inferences** reasoned from available evidence.
+- **Unknowns** that cannot be resolved from the pull request alone.
+
+## Stale analysis
+
+ReviewArc records the head revision used by an analysis. When GitHub reports a different pull request head, the existing analysis is marked stale. Your previous analysis and notes remain available, but the app makes the revision mismatch visible and offers re-analysis against the new head.

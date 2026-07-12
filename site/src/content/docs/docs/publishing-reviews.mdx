@@ -1,0 +1,20 @@
+---
+title: Publishing reviews
+description: Draft locally, inspect the exact payload, and explicitly publish a GitHub review.
+---
+
+Review comments begin as local drafts. You can edit them beside the evidence and code without sending anything to GitHub.
+
+Before publishing, ReviewArc creates a preview of the exact review payload and binds it to:
+
+- the current pull request head revision;
+- a digest of the previewed comments and review event; and
+- a short confirmation window.
+
+You must explicitly confirm that preview. If the pull request revision or preview content changes, ReviewArc refuses to publish the old confirmation and asks you to preview again.
+
+## Review events
+
+You can publish comments with an allowed GitHub review event, including a comment-only review, approval, or request for changes. GitHub's own constraints still apply—for example, authors cannot approve their own pull requests.
+
+ReviewArc reports ambiguous GitHub results instead of silently retrying a publication that may already have succeeded. Published review history and resulting GitHub URLs are stored locally for reference.

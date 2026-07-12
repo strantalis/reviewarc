@@ -1,0 +1,33 @@
+:root {
+  --sl-color-accent-low: #e4e8ff;
+  --sl-color-accent: #4d50bf;
+  --sl-color-accent-high: #26285f;
+  --sl-color-white: #1f2633;
+  --sl-color-gray-1: #343c4a;
+  --sl-color-gray-2: #4f5868;
+  --sl-color-gray-3: #727b89;
+  --sl-color-gray-4: #aeb5c0;
+  --sl-color-gray-5: #dfe3e9;
+  --sl-color-gray-6: #edf0f4;
+  --sl-color-black: #f5f7fa;
+  --sl-font: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --sl-font-mono: "SFMono-Regular", Consolas, monospace;
+}
+
+:root[data-theme="dark"] {
+  --sl-color-accent-low: #2c2f66;
+  --sl-color-accent: #aeb5ff;
+  --sl-color-accent-high: #e4e7ff;
+  --sl-color-white: #f4f6fa;
+  --sl-color-gray-1: #dfe3eb;
+  --sl-color-gray-2: #b8c0cd;
+  --sl-color-gray-3: #7f8999;
+  --sl-color-gray-4: #4c5665;
+  --sl-color-gray-5: #323b49;
+  --sl-color-gray-6: #252d39;
+  --sl-color-black: #171d26;
+}
+
+h1, h2, h3 { letter-spacing: -0.025em; }
+.site-title { letter-spacing: -0.02em; }
+.hero > img, .hero > .hero-html { filter: drop-shadow(0 1.25rem 2.5rem rgb(28 34 48 / .1)); }

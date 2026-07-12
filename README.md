@@ -34,7 +34,7 @@ go run github.com/wailsapp/wails/v2/cmd/wails@v2.11.0 build
 
 ## Signed macOS releases
 
-Tags such as `v0.1.0-beta.1` and `v1.0.0` start the same fail-closed macOS release workflow. Prerelease SemVer tags publish to the beta channel; plain SemVer tags publish to the stable channel. The workflow builds a universal app, applies release metadata, signs it with the LLC's Developer ID Application certificate, creates and signs a DMG, submits it to Apple for notarization, staples and verifies the ticket, then publishes the immutable DMG to Vercel Blob, GitHub Releases, and the Vercel download site. If signing, notarization, Gatekeeper assessment, upload verification, or packaging fails, the release is not promoted.
+Tags such as `v0.1.0-beta.1` and `v1.0.0` start the same fail-closed macOS release workflow. Prerelease SemVer tags publish to the beta channel; plain SemVer tags publish to the stable channel. The workflow builds a universal app, applies release metadata, signs it with the LLC's Developer ID Application certificate, creates and signs a DMG, submits it to Apple for notarization, staples and verifies the ticket, then publishes the immutable DMG to Vercel Blob and GitHub Releases. The Vercel-hosted Astro site reads the promoted channel manifest dynamically, so publishing a release does not require a site deployment. If signing, notarization, Gatekeeper assessment, upload verification, or packaging fails, the release is not promoted.
 
 The protected `release` GitHub environment requires these variables:
 
@@ -51,11 +51,8 @@ It also requires these secrets:
 - `APPLE_NOTARY_KEY_ID`
 - `APPLE_NOTARY_ISSUER_ID`
 - `BLOB_READ_WRITE_TOKEN`
-- `VERCEL_TOKEN`
-- `VERCEL_ORG_ID`
-- `VERCEL_PROJECT_ID`
 
-Use a Team App Store Connect API key for notarization; Apple does not support individual API keys with `notarytool`. Never commit the `.p12`, `.p8`, passwords, or tokens. The download site lives in `site/` and is deployed only after the signed DMG and release manifest have been published successfully.
+Use a Team App Store Connect API key for notarization; Apple does not support individual API keys with `notarytool`. Never commit the `.p12`, `.p8`, passwords, or tokens. The download and documentation site lives in `site/`; Vercel deploys it from `main`, while its release endpoint reads Blob through Vercel workload identity.
 
 See [the release setup guide](docs/releasing.md) for the Apple Developer, GitHub environment, Vercel Blob, and first-release checklist.
 

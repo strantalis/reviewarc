@@ -37,9 +37,6 @@ Add these environment secrets:
 - `APPLE_NOTARY_KEY_ID`
 - `APPLE_NOTARY_ISSUER_ID`
 - `BLOB_READ_WRITE_TOKEN`
-- `VERCEL_TOKEN`
-- `VERCEL_ORG_ID`
-- `VERCEL_PROJECT_ID`
 
 Load file-backed secrets without printing their contents:
 
@@ -52,9 +49,9 @@ Run the remaining `gh secret set` commands interactively so secret values are re
 
 ## Vercel project and Blob store
 
-Create the site project under the intended Vercel team with `site/` as its project directory. Connect a public Blob store dedicated to ReviewArc releases. The release workflow uploads immutable versioned DMGs and manifests, verifies the downloaded DMG checksum, then promotes either `channels/beta/latest.json` or `channels/stable/latest.json` and deploys the site.
+Create the site project under the intended Vercel team with `site/` as its Root Directory, connect the GitHub repository, and use `main` as the production branch. Connect a public Blob store dedicated to ReviewArc releases and upgrade the project connection to OIDC. Vercel then injects short-lived workload identity and `BLOB_STORE_ID` into the site's release endpoint; the site does not need a long-lived Blob token.
 
-The current personal Vercel team slug is `sean-trantalis-projects`. After linking the site project, `.vercel/project.json` provides `orgId` and `projectId`; store those as the GitHub environment secrets above. Create a scoped Vercel access token for CI and use the Blob store's read-write token as `BLOB_READ_WRITE_TOKEN`.
+The release workflow still needs the Blob store's read-write token as `BLOB_READ_WRITE_TOKEN` because GitHub Actions is outside Vercel's workload identity boundary. It uploads immutable versioned DMGs and manifests, verifies the downloaded DMG checksum, then promotes either `channels/beta/latest.json` or `channels/stable/latest.json`. The Astro site reads stable first and falls back to beta only when no stable manifest exists, so release publication does not redeploy the site and GitHub Actions needs no Vercel deployment token.
 
 The Blob store is public because the DMG is a public download. Configure Vercel spend alerts before sharing releases broadly.
 

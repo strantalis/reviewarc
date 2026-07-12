@@ -1,6 +1,7 @@
 export function compareVersions(left, right) {
   const parse = (value) => {
-    const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/.exec(value);
+    const identifier = "(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)";
+    const match = new RegExp(`^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-(${identifier}(?:\\.${identifier})*))?$`).exec(value);
     if (!match) throw new Error(`Invalid semantic version: ${value}`);
     return {
       core: match.slice(1, 4).map(Number),

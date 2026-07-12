@@ -1,0 +1,24 @@
+---
+title: Inbox and sources
+description: Control which repositories appear and understand how ReviewArc finds relevant pull requests.
+---
+
+The inbox combines open pull requests across the repositories you selected. ReviewArc includes pull requests where you are:
+
+- requested as a reviewer;
+- assigned; or
+- the author.
+
+This gives you a working queue without making you choose a local repository first.
+
+## Repository selection
+
+Use Settings to select entire GitHub organizations or individual repositories. Your selection is stored locally and restored on the next launch.
+
+Organization access depends on the scopes and organization authorization of your active `gh` account. If a private repository is missing, check `gh auth status` and the organization's SSO authorization before changing ReviewArc settings.
+
+## Refresh behavior
+
+Refreshing asks GitHub for current pull requests from the selected sources. If one source fails, ReviewArc preserves successful results and reports the partial refresh instead of replacing the inbox with invented or stale entries.
+
+Opening a pull request from the inbox—or entering its GitHub URL in quick open—loads its current head revision. Managed Git storage is created only at that point.

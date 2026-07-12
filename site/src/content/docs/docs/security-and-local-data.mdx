@@ -1,0 +1,24 @@
+---
+title: Security and local data
+description: Understand ReviewArc's trust boundaries, managed repositories, credentials, and local persistence.
+---
+
+ReviewArc is local-first. Application state lives in the macOS application support directory, including inbox settings, managed Git caches, structured analysis, review progress, private notes, drafts, and publication history.
+
+## Managed repositories
+
+ReviewArc does not use or modify your working repositories. It creates isolated, bare Git caches under its own application storage and materializes only the revisions needed for review.
+
+Git hooks are disabled for managed operations. ReviewArc never runs project build commands, test commands, package scripts, or arbitrary repository instructions.
+
+## Credentials and network access
+
+GitHub authentication is delegated to your installed `gh` CLI. ReviewArc does not store a separate GitHub token. The Git transport follows the active account's `gh` protocol setting.
+
+Codex runs in read-only mode with structured output. ReviewArc validates AI-provided paths and line ranges before displaying them and labels unsupported claims as unverified.
+
+Network access is limited to the services required for the workflow: GitHub for repository and pull request data, managed Git remotes for revision fetches, and Codex for the analysis you explicitly start.
+
+## Publishing boundary
+
+Analysis, chapter progress, notes, and draft comments remain local. Only the explicitly previewed and confirmed review payload is sent to GitHub.

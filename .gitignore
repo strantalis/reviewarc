@@ -4,7 +4,10 @@ frontend/dist/
 frontend/package.json.md5
 scripts/release/node_modules/
 site/.vercel/
-site/release.json
+.vercel/
+site/node_modules/
+site/dist/
+site/.astro/
 
 # Wails build output (keep build assets and platform metadata)
 build/bin/
@@ -33,3 +36,4 @@ coverage.out
 
 # macOS metadata
 .DS_Store
+.vercel

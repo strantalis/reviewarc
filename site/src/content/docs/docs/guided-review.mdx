@@ -1,0 +1,24 @@
+---
+title: Guided review
+description: Move through chapters, code, evidence, risks, tests, and private notes.
+---
+
+The review workspace has three coordinated panels:
+
+1. **Chapters and progress** organize the pull request into reviewable concerns and record where you are.
+2. **Code and diffs** show the real changed files and surrounding source for the exact revision.
+3. **Evidence and decisions** collect facts, inferences, risks, related tests, unknowns, suggested questions, and your notes.
+
+Selecting an evidence reference navigates to its validated file and line range. This keeps the analysis beside the code that supports—or fails to support—it.
+
+## Chapter status
+
+Update each chapter as you work. ReviewArc persists review progress across restarts, so you can leave a large review and resume without reconstructing your place.
+
+## Private notes
+
+Notes are local and private. They are not GitHub comments and are never published automatically. Use them to capture questions, decisions, or follow-up context while moving through the review.
+
+## Tests and questions
+
+Related tests are references discovered in the reviewed change, not proof that the test suite passed. ReviewArc does not execute project tests. Suggested reviewer questions are prompts for investigation; they are not findings by themselves.

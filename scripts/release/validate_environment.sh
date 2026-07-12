@@ -19,9 +19,6 @@ case "$scope" in
   publish)
     required=(
       BLOB_READ_WRITE_TOKEN
-      VERCEL_TOKEN
-      VERCEL_ORG_ID
-      VERCEL_PROJECT_ID
     )
     ;;
   *)
@@ -48,9 +45,20 @@ if [[ "$scope" == apple ]]; then
   fi
 fi
 
-if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+if [[ ! "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$ ]]; then
   echo "::error::Release tags must look like v0.1.0 or v0.1.0-beta.1."
   exit 1
+fi
+
+prerelease="${GITHUB_REF_NAME#*-}"
+if [[ "$prerelease" != "$GITHUB_REF_NAME" ]]; then
+  IFS='.' read -r -a identifiers <<< "$prerelease"
+  for identifier in "${identifiers[@]}"; do
+    if [[ "$identifier" =~ ^[0-9]+$ && "$identifier" != "0" && "$identifier" == 0* ]]; then
+      echo "::error::Numeric prerelease identifiers cannot contain leading zeroes."
+      exit 1
+    fi
+  done
 fi
 
 git fetch --no-tags origin main
