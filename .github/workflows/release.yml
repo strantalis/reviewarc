@@ -1,4 +1,4 @@
-name: Release macOS beta
+name: Release macOS
 
 on:
   push:
@@ -17,7 +17,7 @@ jobs:
     name: Build, sign, and notarize DMG
     runs-on: macos-15
     timeout-minutes: 45
-    environment: beta
+    environment: release
     env:
       APPLE_BUNDLE_ID: ${{ vars.APPLE_BUNDLE_ID }}
       APPLE_COPYRIGHT: ${{ vars.APPLE_COPYRIGHT }}
@@ -141,11 +141,11 @@ jobs:
         run: scripts/release/cleanup_signing.sh
 
   publish:
-    name: Publish notarized beta
+    name: Publish notarized release
     needs: build
     runs-on: macos-15
     timeout-minutes: 20
-    environment: beta
+    environment: release
     permissions:
       contents: write
     env:

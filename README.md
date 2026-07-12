@@ -32,11 +32,11 @@ go test ./...
 go run github.com/wailsapp/wails/v2/cmd/wails@v2.11.0 build
 ```
 
-## Signed beta releases
+## Signed macOS releases
 
-Tags such as `v0.1.0-beta.1` start the fail-closed macOS release workflow. It builds a universal app, applies release metadata, signs it with the LLC's Developer ID Application certificate, creates and signs a DMG, submits it to Apple for notarization, staples and verifies the ticket, then publishes the immutable DMG to Vercel Blob, a GitHub prerelease, and the Vercel download site. If signing, notarization, Gatekeeper assessment, upload verification, or packaging fails, the release is not promoted.
+Tags such as `v0.1.0-beta.1` and `v1.0.0` start the same fail-closed macOS release workflow. Prerelease SemVer tags publish to the beta channel; plain SemVer tags publish to the stable channel. The workflow builds a universal app, applies release metadata, signs it with the LLC's Developer ID Application certificate, creates and signs a DMG, submits it to Apple for notarization, staples and verifies the ticket, then publishes the immutable DMG to Vercel Blob, GitHub Releases, and the Vercel download site. If signing, notarization, Gatekeeper assessment, upload verification, or packaging fails, the release is not promoted.
 
-The protected `beta` GitHub environment requires these variables:
+The protected `release` GitHub environment requires these variables:
 
 - `APPLE_BUNDLE_ID`
 - `APPLE_COPYRIGHT`
@@ -57,7 +57,7 @@ It also requires these secrets:
 
 Use a Team App Store Connect API key for notarization; Apple does not support individual API keys with `notarytool`. Never commit the `.p12`, `.p8`, passwords, or tokens. The download site lives in `site/` and is deployed only after the signed DMG and release manifest have been published successfully.
 
-See [the beta release setup guide](docs/releasing.md) for the Apple Developer, GitHub environment, Vercel Blob, and first-release checklist.
+See [the release setup guide](docs/releasing.md) for the Apple Developer, GitHub environment, Vercel Blob, and first-release checklist.
 
 The first launch checks local dependencies and the active GitHub account. Select repositories or whole organizations; source discovery does not clone anything. Opening a PR fetches only its required base/head refs into a bare cache owned by ReviewArc.
 
