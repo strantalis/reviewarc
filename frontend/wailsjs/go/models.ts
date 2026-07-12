@@ -319,6 +319,7 @@ export namespace domain {
 	    dependencies: DependencyStatus[];
 	    paths: AppPaths;
 	    account?: GitHubUser;
+	    gitProtocol: string;
 	    selections: SourceSelection[];
 	    inbox: PullRequestSummary[];
 
@@ -331,6 +332,7 @@ export namespace domain {
 	        this.dependencies = this.convertValues(source["dependencies"], DependencyStatus);
 	        this.paths = this.convertValues(source["paths"], AppPaths);
 	        this.account = this.convertValues(source["account"], GitHubUser);
+	        this.gitProtocol = source["gitProtocol"];
 	        this.selections = this.convertValues(source["selections"], SourceSelection);
 	        this.inbox = this.convertValues(source["inbox"], PullRequestSummary);
 	    }

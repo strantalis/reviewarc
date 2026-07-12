@@ -69,7 +69,7 @@ export interface ReviewSession {
 }
 export interface DependencyStatus { name: DependencyName; state: DependencyState; path?: string; version?: string; message?: string }
 export interface AppPaths { root: string; repositories: string; worktrees: string; database: string; logs: string; cache: string }
-export interface BootstrapState { dependencies: DependencyStatus[]; paths: AppPaths; account?: GitHubUser; selections: SourceSelection[]; inbox: PullRequestSummary[] }
+export interface BootstrapState { dependencies: DependencyStatus[]; paths: AppPaths; account?: GitHubUser; gitProtocol?: 'ssh' | 'https'; selections: SourceSelection[]; inbox: PullRequestSummary[] }
 export interface SourceCatalog { organizations: Organization[]; repositories: Repository[]; selections?: SourceSelection[] }
 export interface SessionDetail { session: ReviewSession; files: ChangedFile[]; diffs?: DiffFile[] }
 export interface OperationEvent { stage: string; message: string; progress?: number; status?: 'running' | 'complete' | 'failed' }

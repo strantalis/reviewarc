@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { App, DiffView, FileContextView, OverviewScreen, SplitDiffView } from './App'
+import { App, DiffView, FileContextView, OverviewScreen, SettingsScreen, SplitDiffView } from './App'
 import { Markdown } from './components'
 import type { BootstrapState, ReviewSession } from './types'
 
@@ -28,6 +28,15 @@ describe('App startup', () => {
     expect(await screen.findByText('Pull request inbox')).toBeInTheDocument()
     await waitFor(() => expect(window.go?.main?.App?.RefreshInbox).toHaveBeenCalled())
     expect(screen.getByText('Your review queue is clear')).toBeInTheDocument()
+  })
+})
+
+describe('Settings', () => {
+  it('shows the authenticated account and effective SSH protocol used for managed Git operations', () => {
+    render(<SettingsScreen state={{dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], paths, account: {login: 'strantalis', name: 'Sean', avatarUrl: ''}, gitProtocol: 'ssh', selections: [], inbox: []}} onSources={vi.fn()}/>)
+    expect(screen.getByText('Authenticated as @strantalis')).toBeInTheDocument()
+    expect(screen.getByText('Git operations: SSH')).toBeInTheDocument()
+    expect(screen.getByText(/follow your/)).toHaveTextContent('Managed repository fetches follow your gh protocol setting.')
   })
 })
 

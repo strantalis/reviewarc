@@ -72,11 +72,21 @@ func TestInboxSortUsesGitHubUpdatedTime(t *testing.T) {
 
 func TestPreferredGitHubRemoteHonorsGHProtocol(t *testing.T) {
 	ref := domain.RepositoryRef{Owner: "acme", Name: "api"}
-	if got := preferredGitHubRemote(protocolRunner{protocol: "ssh"})(ref); got != "git@github.com:acme/api.git" {
+	runner := &protocolRunner{protocol: "ssh"}
+	if got := githubGitProtocol(runner); got != "ssh" {
+		t.Fatalf("protocol=%q", got)
+	}
+	remote := preferredGitHubRemote(runner)
+	if got := remote(ref); got != "git@github.com:acme/api.git" {
 		t.Fatalf("SSH remote=%q", got)
 	}
-	if got := preferredGitHubRemote(protocolRunner{protocol: "https"})(ref); got != "https://github.com/acme/api.git" {
+	runner.protocol = "https"
+	if got := remote(ref); got != "https://github.com/acme/api.git" {
 		t.Fatalf("HTTPS remote=%q", got)
+	}
+	runner.protocol = "unexpected"
+	if got := remote(ref); got != "https://github.com/acme/api.git" {
+		t.Fatalf("fallback remote=%q", got)
 	}
 }
 

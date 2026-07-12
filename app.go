@@ -106,6 +106,7 @@ type App struct {
 	active            map[string]context.CancelFunc
 	analysisBySession map[string]string
 	publish           map[string]pendingPublish
+	gitProtocol       func() string
 }
 
 func NewApp() (*App, error) {
@@ -114,6 +115,7 @@ func NewApp() (*App, error) {
 		return nil, err
 	}
 	runner := proc.NewExecRunner()
+	gitProtocol := func() string { return githubGitProtocol(runner) }
 	remoteURL := preferredGitHubRemote(runner)
 	store, err := persistence.Open(paths.Database)
 	if err != nil {
@@ -123,18 +125,29 @@ func NewApp() (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	return &App{paths: paths, detector: dependencies.New(runner), github: githubclient.New(runner), store: store, repos: gitcache.NewManager(paths.Repositories, paths.Worktrees, runner, gitcache.Options{RemoteURL: remoteURL}), agent: codex.New(runner, codex.Config{}), prepared: map[string]preparedState{}, active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}, publish: map[string]pendingPublish{}}, nil
+	return &App{paths: paths, detector: dependencies.New(runner), github: githubclient.New(runner), store: store, repos: gitcache.NewManager(paths.Repositories, paths.Worktrees, runner, gitcache.Options{RemoteURL: remoteURL}), agent: codex.New(runner, codex.Config{}), prepared: map[string]preparedState{}, active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}, publish: map[string]pendingPublish{}, gitProtocol: gitProtocol}, nil
 }
 
-func preferredGitHubRemote(runner proc.Runner) func(domain.RepositoryRef) string {
+func githubGitProtocol(runner proc.Runner) string {
 	protocol := "https"
 	if result, err := runner.Run(context.Background(), proc.Command{Tool: proc.GH, Args: []string{"config", "get", "git_protocol", "--host", "github.com"}, Timeout: 5 * time.Second, MaxOutput: 1024}); err == nil {
 		protocol = strings.ToLower(strings.TrimSpace(string(result.Stdout)))
 	}
 	if protocol == "ssh" {
+		return "ssh"
+	}
+	return "https"
+}
+func githubRemote(protocol string) func(domain.RepositoryRef) string {
+	if protocol == "ssh" {
 		return func(r domain.RepositoryRef) string { return "git@github.com:" + r.Owner + "/" + r.Name + ".git" }
 	}
 	return func(r domain.RepositoryRef) string { return "https://github.com/" + r.Owner + "/" + r.Name + ".git" }
+}
+func preferredGitHubRemote(runner proc.Runner) func(domain.RepositoryRef) string {
+	return func(r domain.RepositoryRef) string {
+		return githubRemote(githubGitProtocol(runner))(r)
+	}
 }
 func (a *App) startup(ctx context.Context) { a.mu.Lock(); a.ctx = ctx; a.mu.Unlock() }
 func (a *App) shutdown(context.Context)    { _ = a.store.Close() }
@@ -172,7 +185,11 @@ func (a *App) Bootstrap() domain.BootstrapState {
 		inbox = append(inbox, item)
 	}
 	sortInbox(inbox)
-	state := domain.BootstrapState{Dependencies: a.detector.Detect(ctx), Paths: a.paths, Selections: selections, Inbox: inbox}
+	protocol := "https"
+	if a.gitProtocol != nil {
+		protocol = a.gitProtocol()
+	}
+	state := domain.BootstrapState{Dependencies: a.detector.Detect(ctx), Paths: a.paths, Selections: selections, Inbox: inbox, GitProtocol: protocol}
 	if user, err := a.github.CurrentUser(ctx); err == nil {
 		state.Account = &user
 	}

@@ -457,6 +457,7 @@ type BootstrapState struct {
 	Dependencies []DependencyStatus   `json:"dependencies"`
 	Paths        AppPaths             `json:"paths"`
 	Account      *GitHubUser          `json:"account,omitempty"`
+	GitProtocol  string               `json:"gitProtocol"`
 	Selections   []SourceSelection    `json:"selections"`
 	Inbox        []PullRequestSummary `json:"inbox"`
 }
