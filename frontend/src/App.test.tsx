@@ -154,7 +154,7 @@ describe('Repository sources', () => {
     expect(search).toHaveAttribute('spellcheck', 'false')
   })
 
-  it('loads owner repositories in bounded pages and appends without duplicates', async () => {
+  it('searches all owner repository pages without requiring manual pagination', async () => {
     const state: BootstrapState = {dependencies: [], paths, account: {login: 'sean', name: 'Sean', avatarUrl: ''}, selections: [], inbox: []}
     const repository = (name: string) => ({ref: {host: 'github.com', owner: 'sean', name, cloneUrl: '', databaseId: name}, description: '', isPrivate: true, isArchived: false, updatedAt: '2026-07-12T00:00:00Z'})
     const first = Array.from({length: 50}, (_, index) => repository(`repo-${String(index).padStart(2, '0')}`))
@@ -169,7 +169,7 @@ describe('Repository sources', () => {
     render(<SourceSelector state={state} onDone={vi.fn()}/>)
     fireEvent.click(screen.getByRole('button', {name: 'Show personal repositories from sean'}))
     expect(await screen.findByText('Showing 50 of 51')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', {name: 'Load 50 more'}))
+    fireEvent.change(screen.getByPlaceholderText('Search all repositories'), {target: {value: 'repo-50'}})
     expect(await screen.findByText('sean/repo-50')).toBeInTheDocument()
     expect(screen.queryByRole('button', {name: 'Load 50 more'})).not.toBeInTheDocument()
     expect(refresh).toHaveBeenNthCalledWith(2, {owner: 'sean', cursor: 'next'})
