@@ -19,20 +19,19 @@ const formatBytes = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 const renderRelease = (release: ReleaseManifest) => {
   if (!download || !releaseMeta || !channelCopy) return;
   const artifact = release.macOS;
-  const isBeta = release.channel === "beta";
   download.href = artifact.downloadUrl;
   download.removeAttribute("aria-disabled");
   download.classList.remove("is-loading");
   const title = download.querySelector("span");
   const detail = download.querySelector("small");
-  if (title) title.textContent = isBeta ? `Download beta ${release.version}` : `Download ReviewArc ${release.version}`;
+  if (title) title.textContent = `Download ReviewArc ${release.version}`;
   if (detail) detail.textContent = `Universal macOS · ${formatBytes(artifact.sizeBytes)}`;
-  channelCopy.textContent = isBeta ? "Private macOS beta" : "Notarized macOS release";
-  releaseMeta.textContent = `Apple notarized · SHA-256 ${artifact.sha256.slice(0, 12)}…`;
+  channelCopy.textContent = "ReviewArc for macOS";
+  releaseMeta.textContent = `SHA-256 ${artifact.sha256.slice(0, 12)}…`;
 };
 
 const renderUnavailable = () => {
-  if (releaseMeta) releaseMeta.textContent = "The first notarized release is being prepared.";
+  if (releaseMeta) releaseMeta.textContent = "The first ReviewArc release is being prepared.";
 };
 
 fetch("/api/release.json", { cache: "no-store" })
