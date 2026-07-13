@@ -1390,7 +1390,6 @@ export namespace domain {
 
 
 }
-
 export namespace main {
 
 	export class AccountState {
@@ -1668,6 +1667,58 @@ export namespace main {
 	        this.repositories = this.convertValues(source["repositories"], domain.Repository);
 	        this.archivedKeys = source["archivedKeys"];
 	        this.errors = source["errors"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class SoftwareUpdateStatus {
+	    state: string;
+	    channel: string;
+	    // Go type: update
+	    release?: any;
+	    downloadedBytes: number;
+	    totalBytes: number;
+	    // Go type: time
+	    lastCheckedAt?: any;
+	    checkMode?: string;
+	    error: string;
+	    errorVisible: boolean;
+	    currentVersion: string;
+	    currentBuild: string;
+
+	    static createFrom(source: any = {}) {
+	        return new SoftwareUpdateStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.state = source["state"];
+	        this.channel = source["channel"];
+	        this.release = this.convertValues(source["release"], null);
+	        this.downloadedBytes = source["downloadedBytes"];
+	        this.totalBytes = source["totalBytes"];
+	        this.lastCheckedAt = this.convertValues(source["lastCheckedAt"], null);
+	        this.checkMode = source["checkMode"];
+	        this.error = source["error"];
+	        this.errorVisible = source["errorVisible"];
+	        this.currentVersion = source["currentVersion"];
+	        this.currentBuild = source["currentBuild"];
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

@@ -4,6 +4,26 @@ on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+*"
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Update channel to control
+        required: true
+        type: choice
+        options:
+          - beta
+          - stable
+      action:
+        description: Pause or resume updates from this channel
+        required: true
+        type: choice
+        options:
+          - pause
+          - resume
+      reason:
+        description: Operator-visible reason recorded in channel policy
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -15,6 +35,7 @@ concurrency:
 jobs:
   build:
     name: Build, sign, and notarize DMG
+    if: github.event_name == 'push'
     runs-on: macos-15
     timeout-minutes: 45
     environment: release
@@ -23,11 +44,14 @@ jobs:
       APPLE_COPYRIGHT: ${{ vars.APPLE_COPYRIGHT }}
       APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
       APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+      SPARKLE_FEED_URL: ${{ vars.SPARKLE_FEED_URL }}
+      SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
       APPLE_DEVELOPER_ID_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 }}
       APPLE_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
       APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
       APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
       APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+      SPARKLE_ED25519_PRIVATE_KEY_BASE64: ${{ secrets.SPARKLE_ED25519_PRIVATE_KEY_BASE64 }}
 
     steps:
       - name: Check out release tag
@@ -77,10 +101,22 @@ jobs:
         shell: bash
         run: scripts/release/import_certificate.sh
 
+      - name: Fetch pinned Sparkle distribution
+        shell: bash
+        run: scripts/release/fetch_sparkle.sh dist/sparkle
+
       - name: Build universal macOS app
         run: >-
           go run github.com/wailsapp/wails/v2/cmd/wails@v2.13.0 build
           -clean -trimpath -platform darwin/universal
+          -tags sparkle
+          -ldflags "-X reviewarc/internal/buildinfo.Version=${{ steps.metadata.outputs.release_version }}
+          -X reviewarc/internal/buildinfo.BuildNumber=${{ steps.metadata.outputs.build_number }}
+          -X reviewarc/internal/buildinfo.Channel=${{ steps.metadata.outputs.channel }}"
+
+      - name: Embed Sparkle framework
+        shell: bash
+        run: build/darwin/updater/embed_sparkle.sh build/bin/ReviewArc.app dist/sparkle/Sparkle.framework
 
       - name: Apply release metadata and sign app
         shell: bash
@@ -90,11 +126,16 @@ jobs:
             "$APPLE_BUNDLE_ID" \
             "${{ steps.metadata.outputs.marketing_version }}" \
             "${{ steps.metadata.outputs.build_number }}" \
-            "$APPLE_COPYRIGHT"
+            "$APPLE_COPYRIGHT" \
+            "$SPARKLE_PUBLIC_ED_KEY" \
+            "$SPARKLE_FEED_URL"
+          build/darwin/updater/sign_sparkle.sh \
+            build/bin/ReviewArc.app "$APPLE_SIGNING_IDENTITY"
           codesign --force --options runtime --timestamp \
             --sign "$APPLE_SIGNING_IDENTITY" build/bin/ReviewArc.app
           scripts/release/verify_app.sh \
             build/bin/ReviewArc.app "$APPLE_BUNDLE_ID" "$APPLE_TEAM_ID"
+          build/darwin/updater/verify_sparkle.sh build/bin/ReviewArc.app
 
       - name: Create and sign DMG
         id: package
@@ -111,6 +152,11 @@ jobs:
         shell: bash
         run: scripts/release/notarize_dmg.sh "${{ steps.package.outputs.dmg }}"
 
+      - name: Sign exact notarized DMG for Sparkle
+        id: sparkle-signature
+        shell: bash
+        run: scripts/release/sign_sparkle_update.sh "${{ steps.package.outputs.dmg }}" dist/sparkle
+
       - name: Build release manifest
         shell: bash
         run: |
@@ -121,7 +167,8 @@ jobs:
             "${{ steps.metadata.outputs.marketing_version }}" \
             "${{ steps.metadata.outputs.build_number }}" \
             "${{ steps.notarize.outputs.submission_id }}" \
-            "$APPLE_TEAM_ID"
+            "$APPLE_TEAM_ID" \
+            "${{ steps.sparkle-signature.outputs.ed_signature }}"
 
       - name: Preserve notarized release candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -143,6 +190,7 @@ jobs:
   publish:
     name: Publish notarized release
     needs: build
+    if: github.event_name == 'push'
     runs-on: macos-15
     timeout-minutes: 20
     environment: release
@@ -203,3 +251,41 @@ jobs:
       - name: Promote latest release manifest
         shell: bash
         run: node scripts/release/promote_blob.mjs dist/release.json
+
+  channel-control:
+    name: Pause or resume update channel
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: release
+    env:
+      BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Validate channel control configuration
+        shell: bash
+        run: scripts/release/validate_environment.sh channel
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: scripts/release/package-lock.json
+
+      - name: Install release dependencies
+        working-directory: scripts/release
+        run: npm ci
+
+      - name: Validate channel policy logic
+        run: node scripts/release/test_channel_policy.mjs
+
+      - name: Apply channel policy
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          CHANNEL_ACTION: ${{ inputs.action }}
+          CHANNEL_REASON: ${{ inputs.reason }}
+        run: node scripts/release/set_channel_policy.mjs "$CHANNEL" "$CHANNEL_ACTION" "$CHANNEL_REASON"

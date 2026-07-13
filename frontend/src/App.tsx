@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import {
-  AlertTriangle, ArrowLeft, ArrowRight, BookOpen, Check, ChevronRight, CircleHelp, Code2,
+  AlertTriangle, ArrowLeft, ArrowRight, BookOpen, Check, ChevronRight, CircleHelp, Code2, Download,
   Columns2, Command, ExternalLink, FileCode2, FileDiff, Filter, GitPullRequest, Inbox, ListFilter, LoaderCircle,
   Maximize2, MessageSquare, Minimize2, PanelRight, Pencil, Plus, RefreshCw, Reply, Search, Settings, ShieldCheck,
   SlidersHorizontal, Sparkles, Trash2, X,
@@ -12,7 +12,7 @@ import { analysisLabel, chapterStatusLabel, filterInbox, normalizeProgress, prim
 import type {
   AnalysisStatus, BootstrapState, ChangedFile, ChapterStatus, Claim, CommentRange, DependencyStatus, DiffFile, EvidenceReference, FileContent, Operation,
   OperationEvent, PublishPreview, PullRequestRef, PullRequestReviewComment, PullRequestSummary, Relationship, ReviewChapter,
-  Repository, RepositoryPage, ReviewComment, ReviewSession, SourceSelection, SourceState, Organization,
+  Repository, RepositoryPage, ReviewComment, ReviewSession, SoftwareUpdateStatus, SourceSelection, SourceState, UpdateChannel, Organization,
   ThreadReplyPreview,
 } from './types'
 
@@ -65,18 +65,22 @@ export function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [commandOpen, setCommandOpen] = useState(false)
+  const [softwareUpdate, setSoftwareUpdate] = useState<SoftwareUpdateStatus>()
+  const [updateBusy, setUpdateBusy] = useState(false)
+  const [dismissedUpdateBuild, setDismissedUpdateBuild] = useState('')
   const openRequest = useRef(0)
 
   const load = async () => {
     setLoading(true); setError('')
     try {
-      const state = await backend.bootstrap()
+      const [state, updateStatus] = await Promise.all([backend.bootstrap(), backend.getUpdateStatus()])
       const gh = state.dependencies.find((dep) => dep.name === 'gh')
       if (gh?.state === 'available') {
         const account = await backend.refreshAccount()
         if (account.user) state.account = account.user
       }
       setBootstrap(state)
+      setSoftwareUpdate(updateStatus)
       state.selections ??= []
       state.inbox ??= []
       if (state.account && !state.selections.some((s) => s.enabled)) setScreen('sources')
@@ -85,6 +89,7 @@ export function App() {
   }
 
   useEffect(() => { void load() }, [])
+  useEffect(() => backend.on('reviewarc:update:v1', (raw) => setSoftwareUpdate(raw as SoftwareUpdateStatus)), [])
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); setCommandOpen(true) }
@@ -100,6 +105,23 @@ export function App() {
 	try { const value = await backend.openPullRequest(pr.ref); if (openRequest.current === request) { setSession(value); setOpeningPR(undefined) } }
 	catch (err) { if (openRequest.current === request) { setOpeningPR(undefined); setScreen('inbox'); setError(errorText(err)) } }
   }
+  const checkForUpdates = async () => {
+    setUpdateBusy(true)
+    try { setSoftwareUpdate(await backend.checkForUpdates()) }
+    catch (err) { setError(errorText(err)) }
+    finally { setUpdateBusy(false) }
+  }
+  const setUpdateChannel = async (channel: UpdateChannel) => {
+    setUpdateBusy(true)
+    try { setSoftwareUpdate(await backend.setUpdateChannel(channel)); setDismissedUpdateBuild('') }
+    catch (err) { setError(errorText(err)) }
+    finally { setUpdateBusy(false) }
+  }
+  const installUpdate = async () => {
+    setUpdateBusy(true)
+    try { await backend.installUpdate() }
+    catch (err) { setError(errorText(err)); setUpdateBusy(false) }
+  }
 
   if (loading && !bootstrap) return <StartupLoading />
   if (!bootstrap) return <main className="startup"><WindowControls/><Logo/><ErrorBanner message={error || 'ReviewArc could not load its local state.'} onRetry={load}/></main>
@@ -109,9 +131,10 @@ export function App() {
 
   return <div className="app-shell">
     <AppHeader state={bootstrap} screen={screen} onNavigate={(next) => { setScreen(next); if (next === 'inbox') { openRequest.current++; setSession(undefined); setOpeningPR(undefined) } }}/>
+    {softwareUpdate?.state === 'ready' && softwareUpdate.release && softwareUpdate.release.build !== dismissedUpdateBuild && <UpdateReadyBanner update={softwareUpdate} busy={updateBusy} onLater={() => setDismissedUpdateBuild(softwareUpdate.release!.build)} onInstall={installUpdate}/>}
     {error && <div className="global-error"><ErrorBanner message={error} onRetry={() => setError('')} actionLabel="Dismiss"/></div>}
     {screen === 'sources' && <SourceSelector state={bootstrap} onDone={async () => { const next = await backend.bootstrap(); setBootstrap({...next, account: bootstrap.account}); setScreen('inbox') }} />}
-    {screen === 'settings' && <SettingsScreen state={bootstrap} onSources={() => setScreen('sources')}/>}
+    {screen === 'settings' && <SettingsScreen state={bootstrap} update={softwareUpdate} updateBusy={updateBusy} onCheckUpdate={checkForUpdates} onSetUpdateChannel={setUpdateChannel} onInstallUpdate={installUpdate} onSources={() => setScreen('sources')}/>}
     {screen === 'inbox' && <InboxScreen state={bootstrap} onUpdate={(inbox) => setBootstrap({...bootstrap, inbox})} onOpen={openPR}/>}
     {openingPR && screen === 'overview' && <OpeningPullRequest pr={openingPR} onBack={() => { openRequest.current++; setOpeningPR(undefined); setScreen('inbox') }}/>}
     {session && screen === 'overview' && (
@@ -533,7 +556,30 @@ function CommandPalette({items, onClose, onOpen}: {items: PullRequestSummary[]; 
   return <div className="modal-backdrop command-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className="command-palette" role="dialog" aria-modal="true" aria-labelledby="quick-open-title"><header><Command size={17}/><label><span id="quick-open-title" className="sr-only">Quick open a pull request</span><input id="quick-open-input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Quick open a pull request…"/></label><kbd>esc</kbd></header><div className="command-results">{results.map((item) => <button key={`${repoName(item)}#${item.ref.number}`} onClick={() => onOpen(item)}><GitPullRequest size={15}/><span><strong>#{item.ref.number} {item.title}</strong><small>{repoName(item)}</small></span><ChevronRight size={15}/></button>)}{!results.length && <p>No matching pull requests.</p>}</div></section></div>
 }
 
-export function SettingsScreen({state, onSources}: {state: BootstrapState; onSources: () => void}) {
+function updateStatusCopy(update: SoftwareUpdateStatus) {
+  const version = update.release ? `ReviewArc ${update.release.version}` : 'The latest ReviewArc release'
+  if (update.state === 'unsupported') return 'Automatic updates are available in signed release builds.'
+  if (update.state === 'checking') return 'Checking the selected release channel…'
+  if (update.state === 'available') return `${version} is available.`
+  if (update.state === 'downloading') return `Downloading ${version} in the background…`
+  if (update.state === 'ready') return `${version} is downloaded and ready to install.`
+  if (update.state === 'installing') return `Installing ${version}. ReviewArc will reopen when it is ready.`
+  if (update.state === 'failed') return update.error || 'ReviewArc could not complete the update check.'
+  if (update.lastCheckedAt) return `Last checked ${relativeTime(update.lastCheckedAt)}.`
+  return 'ReviewArc checks for updates in the background while the app is running.'
+}
+
+function UpdateReadyBanner({update, busy, onLater, onInstall}: {update: SoftwareUpdateStatus; busy: boolean; onLater: () => void; onInstall: () => void}) {
+  return <aside className="update-ready-banner" aria-live="polite"><span><Download size={17}/></span><div><strong>ReviewArc {update.release?.version} is ready</strong><small>Restart ReviewArc to finish updating. Your local review state is preserved.</small></div>{update.release?.releaseNotesUrl && <button className="button text small" onClick={() => backend.openGitHubURL(update.release!.releaseNotesUrl!)}>Release notes<ExternalLink size={12}/></button>}<button className="button secondary small" disabled={busy} onClick={onLater}>Later</button><button className="button primary small" disabled={busy} onClick={onInstall}>{busy ? <LoaderCircle className="spin" size={14}/> : <RefreshCw size={14}/>}Restart to update</button></aside>
+}
+
+function SoftwareUpdateSettings({update, busy, onCheck, onSetChannel, onInstall}: {update: SoftwareUpdateStatus; busy: boolean; onCheck: () => void; onSetChannel: (channel: UpdateChannel) => void; onInstall: () => void}) {
+  const progress = update.totalBytes ? Math.min(100, Math.round(((update.downloadedBytes ?? 0) / update.totalBytes) * 100)) : undefined
+  const unavailable = update.state === 'unsupported' || update.state === 'installing' || update.state === 'ready'
+  return <section className="software-update-settings"><div className="settings-section-heading"><div><h2>Software updates</h2><p>ReviewArc updates forward within your selected release channel. It never installs an older build.</p></div><code>v{update.currentVersion} · build {update.currentBuild}</code></div><div className="update-channel-control"><div><strong>Release channel</strong><small>{update.channel === 'beta' ? 'Beta includes early builds and all newer GA releases.' : 'Stable receives generally available releases only.'}</small></div><div role="group" aria-label="Release channel"><button type="button" aria-pressed={update.channel === 'stable'} disabled={busy || unavailable} onClick={() => onSetChannel('stable')}>Stable</button><button type="button" aria-pressed={update.channel === 'beta'} disabled={busy || unavailable} onClick={() => onSetChannel('beta')}>Beta</button></div></div>{update.channel === 'beta' && <p className="beta-channel-note"><AlertTriangle size={14}/>Beta builds may be less stable. Returning to Stable does not downgrade the installed app.</p>}<div className={`update-status-row state-${update.state}`} role="status"><span>{update.state === 'checking' || update.state === 'downloading' || update.state === 'installing' ? <LoaderCircle className="spin" size={15}/> : update.state === 'failed' ? <AlertTriangle size={15}/> : update.state === 'ready' ? <Check size={15}/> : <RefreshCw size={15}/>}</span><div><strong>{updateStatusCopy(update)}</strong>{progress != null && <div className="update-download-progress" aria-label={`Download ${progress}% complete`}><i style={{width: `${progress}%`}}/></div>}</div><div className="update-actions">{update.release?.releaseNotesUrl && <button className="button text small" onClick={() => backend.openGitHubURL(update.release!.releaseNotesUrl!)}>Release notes<ExternalLink size={12}/></button>}{update.state === 'ready' ? <button className="button primary small" disabled={busy} onClick={onInstall}>Restart to update</button> : <button className="button secondary small" disabled={busy || unavailable || update.state === 'checking' || update.state === 'downloading'} onClick={onCheck}>{busy || update.state === 'checking' ? <LoaderCircle className="spin" size={13}/> : <RefreshCw size={13}/>}Check now</button>}</div></div></section>
+}
+
+export function SettingsScreen({state, update, updateBusy = false, onCheckUpdate = () => {}, onSetUpdateChannel = () => {}, onInstallUpdate = () => {}, onSources}: {state: BootstrapState; update?: SoftwareUpdateStatus; updateBusy?: boolean; onCheckUpdate?: () => void; onSetUpdateChannel?: (channel: UpdateChannel) => void; onInstallUpdate?: () => void; onSources: () => void}) {
   const protocol = (state.gitProtocol || 'https').toUpperCase()
-  return <main className="page settings-page"><div className="page-heading"><div><h1>Settings</h1><p>Local integrations, GitHub connection, data locations, and review sources.</p></div></div><div className="settings-layout"><section><h2>Local integrations</h2><div className="settings-rows">{state.dependencies.map((dep) => <div key={dep.name}><span className={`setup-status ${dep.state}`}>{dep.state === 'available' ? <Check size={14}/> : <X size={14}/>}</span><div><strong>{dependencyLabel(dep.name)}</strong><small>{dep.version || dep.message || (dep.state === 'available' ? 'Available' : 'Not detected by ReviewArc')}</small>{dep.state !== 'available' && <p className="dependency-help">{missingDependencyHelp(dep.name)}</p>}</div><code title={dep.path}>{dep.path || 'Not found'}</code></div>)}</div></section><section><h2>GitHub connection</h2><div className="settings-rows"><div><span className="setup-status available"><Check size={14}/></span><div><strong>Authenticated as @{state.account?.login || 'unknown'}</strong><small>Credentials are managed by GitHub CLI.</small></div><code>gh</code></div><div><span className="setup-status available"><GitPullRequest size={14}/></span><div><strong>Git operations: {protocol}</strong><small>Managed repository fetches follow your <code>gh</code> protocol setting.</small></div><code>{state.gitProtocol || 'https'}</code></div></div></section><section><h2>GitHub sources</h2><p>{state.selections.filter((x) => x.enabled).length} organizations or repositories selected.</p><button className="button secondary" onClick={onSources}><SlidersHorizontal size={15}/>Manage sources</button></section><section><h2>Managed data</h2><dl className="path-list"><div><dt>Repository caches</dt><dd>{state.paths.repositories}</dd></div><div><dt>Database</dt><dd>{state.paths.database}</dd></div><div><dt>Logs</dt><dd>{state.paths.logs}</dd></div></dl><p className="safety-copy"><ShieldCheck size={16}/>ReviewArc operates only in these managed locations. It never checks out or modifies your working repositories.</p></section></div></main>
+  return <main className="page settings-page"><div className="page-heading"><div><h1>Settings</h1><p>Local integrations, GitHub connection, updates, data locations, and review sources.</p></div></div><div className="settings-layout">{update && <SoftwareUpdateSettings update={update} busy={updateBusy} onCheck={onCheckUpdate} onSetChannel={onSetUpdateChannel} onInstall={onInstallUpdate}/>}<section><h2>Local integrations</h2><div className="settings-rows">{state.dependencies.map((dep) => <div key={dep.name}><span className={`setup-status ${dep.state}`}>{dep.state === 'available' ? <Check size={14}/> : <X size={14}/>}</span><div><strong>{dependencyLabel(dep.name)}</strong><small>{dep.version || dep.message || (dep.state === 'available' ? 'Available' : 'Not detected by ReviewArc')}</small>{dep.state !== 'available' && <p className="dependency-help">{missingDependencyHelp(dep.name)}</p>}</div><code title={dep.path}>{dep.path || 'Not found'}</code></div>)}</div></section><section><h2>GitHub connection</h2><div className="settings-rows"><div><span className="setup-status available"><Check size={14}/></span><div><strong>Authenticated as @{state.account?.login || 'unknown'}</strong><small>Credentials are managed by GitHub CLI.</small></div><code>gh</code></div><div><span className="setup-status available"><GitPullRequest size={14}/></span><div><strong>Git operations: {protocol}</strong><small>Managed repository fetches follow your <code>gh</code> protocol setting.</small></div><code>{state.gitProtocol || 'https'}</code></div></div></section><section><h2>GitHub sources</h2><p>{state.selections.filter((x) => x.enabled).length} organizations or repositories selected.</p><button className="button secondary" onClick={onSources}><SlidersHorizontal size={15}/>Manage sources</button></section><section><h2>Managed data</h2><dl className="path-list"><div><dt>Repository caches</dt><dd>{state.paths.repositories}</dd></div><div><dt>Database</dt><dd>{state.paths.database}</dd></div><div><dt>Logs</dt><dd>{state.paths.logs}</dd></div></dl><p className="safety-copy"><ShieldCheck size={16}/>ReviewArc operates only in these managed locations. It never checks out or modifies your working repositories.</p></section></div></main>
 }

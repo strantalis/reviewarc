@@ -24,6 +24,7 @@ import (
 	githubclient "reviewarc/internal/github"
 	"reviewarc/internal/persistence"
 	proc "reviewarc/internal/process"
+	"reviewarc/internal/update"
 )
 
 type AccountState struct {
@@ -145,6 +146,8 @@ type App struct {
 	publish           map[string]pendingPublish
 	threadReplies     map[string]pendingThreadReply
 	gitProtocol       func() string
+	updater           *update.Service
+	updateCancel      context.CancelFunc
 }
 
 func NewApp() (*App, error) {
@@ -163,7 +166,9 @@ func NewApp() (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	return &App{paths: paths, detector: dependencies.New(runner), github: githubclient.New(runner), store: store, repos: gitcache.NewManager(paths.Repositories, paths.Worktrees, runner, gitcache.Options{RemoteURL: remoteURL}), agent: codex.New(runner, codex.Config{}), prepared: map[string]preparedState{}, active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}, publish: map[string]pendingPublish{}, threadReplies: map[string]pendingThreadReply{}, gitProtocol: gitProtocol}, nil
+	app := &App{paths: paths, detector: dependencies.New(runner), github: githubclient.New(runner), store: store, repos: gitcache.NewManager(paths.Repositories, paths.Worktrees, runner, gitcache.Options{RemoteURL: remoteURL}), agent: codex.New(runner, codex.Config{}), prepared: map[string]preparedState{}, active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}, publish: map[string]pendingPublish{}, threadReplies: map[string]pendingThreadReply{}, gitProtocol: gitProtocol}
+	app.configureUpdater()
+	return app, nil
 }
 
 func githubGitProtocol(runner proc.Runner) string {
@@ -188,7 +193,27 @@ func preferredGitHubRemote(runner proc.Runner) func(domain.RepositoryRef) string
 	}
 }
 func (a *App) startup(ctx context.Context) { a.mu.Lock(); a.ctx = ctx; a.mu.Unlock() }
-func (a *App) shutdown(context.Context)    { _ = a.store.Close() }
+func (a *App) domReady(ctx context.Context) {
+	configureNativeWindowChrome(ctx)
+	if a.updater == nil {
+		return
+	}
+	updateCtx, cancel := context.WithCancel(ctx)
+	a.mu.Lock()
+	a.updateCancel = cancel
+	a.mu.Unlock()
+	_ = a.updater.Start(updateCtx)
+}
+func (a *App) shutdown(context.Context) {
+	a.mu.Lock()
+	cancel := a.updateCancel
+	a.updateCancel = nil
+	a.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	_ = a.store.Close()
+}
 func (a *App) appContext() context.Context {
 	a.mu.RLock()
 	defer a.mu.RUnlock()

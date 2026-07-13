@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-scope="${1:?validation scope must be apple or publish}"
+scope="${1:?validation scope must be apple, publish, or channel}"
 case "$scope" in
   apple)
     required=(
@@ -9,20 +9,23 @@ case "$scope" in
       APPLE_COPYRIGHT
       APPLE_SIGNING_IDENTITY
       APPLE_TEAM_ID
+      SPARKLE_FEED_URL
+      SPARKLE_PUBLIC_ED_KEY
       APPLE_DEVELOPER_ID_P12_BASE64
       APPLE_DEVELOPER_ID_P12_PASSWORD
       APPLE_NOTARY_KEY_P8_BASE64
       APPLE_NOTARY_KEY_ID
       APPLE_NOTARY_ISSUER_ID
+      SPARKLE_ED25519_PRIVATE_KEY_BASE64
     )
     ;;
-  publish)
+  publish|channel)
     required=(
       BLOB_READ_WRITE_TOKEN
     )
     ;;
   *)
-    echo "Validation scope must be apple or publish." >&2
+    echo "Validation scope must be apple, publish, or channel." >&2
     exit 1
     ;;
 esac
@@ -43,6 +46,19 @@ if [[ "$scope" == apple ]]; then
     echo "::error::APPLE_TEAM_ID must be the 10-character Apple Developer Team ID."
     exit 1
   fi
+  sparkle_public_key_pattern='^[A-Za-z0-9+/]{43}=$'
+  if [[ ! "$SPARKLE_PUBLIC_ED_KEY" =~ $sparkle_public_key_pattern ]]; then
+    echo "::error::SPARKLE_PUBLIC_ED_KEY must be a base64-encoded Ed25519 public key."
+    exit 1
+  fi
+  if [[ "$SPARKLE_FEED_URL" != "https://www.reviewarc.dev/api/appcast.xml" ]]; then
+    echo "::error::SPARKLE_FEED_URL must be https://www.reviewarc.dev/api/appcast.xml."
+    exit 1
+  fi
+fi
+
+if [[ "$scope" == channel ]]; then
+  exit 0
 fi
 
 if [[ ! "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$ ]]; then

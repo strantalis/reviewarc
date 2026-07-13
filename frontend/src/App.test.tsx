@@ -2,13 +2,15 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { App, DiffView, FileContextView, OverviewScreen, ReviewWorkspace, SettingsScreen, SourceSelector, SplitDiffView } from './App'
 import { Markdown, WindowControls } from './components'
-import type { BootstrapState, ReviewSession } from './types'
+import type { BootstrapState, ReviewSession, SoftwareUpdateStatus } from './types'
 
 const paths = {root: '/tmp/reviewarc', repositories: '/tmp/reviewarc/repos', worktrees: '/tmp/reviewarc/worktrees', database: '/tmp/reviewarc/db.sqlite', logs: '/tmp/reviewarc/logs', cache: '/tmp/reviewarc/cache'}
+const idleUpdate: SoftwareUpdateStatus = {currentVersion: '0.1.0', currentBuild: '7', state: 'idle', channel: 'stable'}
 
 function installBackend(state: BootstrapState, account: unknown = {status: 'authenticated', user: {login: 'sean', name: 'Sean', avatarUrl: ''}}) {
   window.go = {main: {App: {
     Bootstrap: vi.fn().mockResolvedValue(state),
+    GetUpdateStatus: vi.fn().mockResolvedValue(idleUpdate),
     RefreshAccount: vi.fn().mockResolvedValue(account),
     RefreshInbox: vi.fn().mockResolvedValue({items: [], errors: {}, partial: false}),
   }}}
@@ -92,6 +94,26 @@ describe('Settings', () => {
     expect(screen.getByText('Git operations: SSH')).toBeInTheDocument()
     expect(screen.getByText(/follow your/)).toHaveTextContent('Managed repository fetches follow your gh protocol setting.')
     expect(screen.getByTitle('/opt/homebrew/bin/gh')).toHaveTextContent('/opt/homebrew/bin/gh')
+  })
+
+  it('locks the release channel while an update is ready and surfaces restart', () => {
+    const onSetChannel = vi.fn()
+    const onInstall = vi.fn()
+    const update: SoftwareUpdateStatus = {currentVersion: '0.2.0-beta.3', currentBuild: '42', state: 'ready', channel: 'beta', release: {version: '0.2.0-beta.4', build: '45', releaseNotesUrl: 'https://github.com/strantalis/reviewarc/releases/tag/v0.2.0-beta.4'}}
+    render(<SettingsScreen state={{dependencies: [], paths, selections: [], inbox: []}} update={update} onSetUpdateChannel={onSetChannel} onInstallUpdate={onInstall} onSources={vi.fn()}/>)
+    expect(screen.getByText('v0.2.0-beta.3 · build 42')).toBeInTheDocument()
+    expect(screen.getByText(/Returning to Stable does not downgrade/)).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: 'Stable'})).toBeDisabled()
+    expect(onSetChannel).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', {name: 'Restart to update'}))
+    expect(onInstall).toHaveBeenCalledOnce()
+  })
+
+  it('allows switching channels while the updater is idle', () => {
+    const onSetChannel = vi.fn()
+    render(<SettingsScreen state={{dependencies: [], paths, selections: [], inbox: []}} update={idleUpdate} onSetUpdateChannel={onSetChannel} onSources={vi.fn()}/>)
+    fireEvent.click(screen.getByRole('button', {name: 'Beta'}))
+    expect(onSetChannel).toHaveBeenCalledWith('beta')
   })
 })
 

@@ -7,6 +7,8 @@ export function Bootstrap():Promise<domain.BootstrapState>;
 
 export function CancelOperation(arg1:string):Promise<void>;
 
+export function CheckForUpdates():Promise<main.SoftwareUpdateStatus>;
+
 export function ConfirmPublish(arg1:string,arg2:string):Promise<Array<domain.ReviewComment>>;
 
 export function ConfirmThreadReply(arg1:string,arg2:string):Promise<domain.PullRequestReviewComment>;
@@ -22,6 +24,10 @@ export function GetDiff(arg1:string,arg2:string):Promise<domain.DiffFile>;
 export function GetFile(arg1:string,arg2:string,arg3:domain.Revision):Promise<domain.FileContent>;
 
 export function GetSession(arg1:string):Promise<domain.ReviewSession>;
+
+export function GetUpdateStatus():Promise<main.SoftwareUpdateStatus>;
+
+export function InstallUpdate():Promise<void>;
 
 export function ListCachedOwnerRepositories(arg1:string):Promise<main.RepositoryPage>;
 
@@ -52,5 +58,7 @@ export function SaveNote(arg1:main.NoteInput):Promise<domain.ReviewNote>;
 export function SaveSelections(arg1:Array<domain.SourceSelection>):Promise<void>;
 
 export function SetChapterStatus(arg1:string,arg2:string,arg3:domain.ChapterStatus):Promise<domain.ReviewSession>;
+
+export function SetUpdateChannel(arg1:string):Promise<main.SoftwareUpdateStatus>;
 
 export function StartAnalysis(arg1:string):Promise<main.Operation>;

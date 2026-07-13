@@ -10,6 +10,10 @@ export function CancelOperation(arg1) {
   return window['go']['main']['App']['CancelOperation'](arg1);
 }
 
+export function CheckForUpdates() {
+  return window['go']['main']['App']['CheckForUpdates']();
+}
+
 export function ConfirmPublish(arg1, arg2) {
   return window['go']['main']['App']['ConfirmPublish'](arg1, arg2);
 }
@@ -40,6 +44,14 @@ export function GetFile(arg1, arg2, arg3) {
 
 export function GetSession(arg1) {
   return window['go']['main']['App']['GetSession'](arg1);
+}
+
+export function GetUpdateStatus() {
+  return window['go']['main']['App']['GetUpdateStatus']();
+}
+
+export function InstallUpdate() {
+  return window['go']['main']['App']['InstallUpdate']();
 }
 
 export function ListCachedOwnerRepositories(arg1) {
@@ -100,6 +112,10 @@ export function SaveSelections(arg1) {
 
 export function SetChapterStatus(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetChapterStatus'](arg1, arg2, arg3);
+}
+
+export function SetUpdateChannel(arg1) {
+  return window['go']['main']['App']['SetUpdateChannel'](arg1);
 }
 
 export function StartAnalysis(arg1) {

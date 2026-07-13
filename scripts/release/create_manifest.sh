@@ -8,6 +8,7 @@ marketing_version="${4:?marketing version required}"
 build_number="${5:?build number required}"
 submission_id="${6:?notarization submission ID required}"
 team_id="${7:?Apple Team ID required}"
+sparkle_signature="${8:?Sparkle Ed25519 signature required}"
 plist="$app/Contents/Info.plist"
 sha256="$(shasum -a 256 "$dmg" | awk '{print $1}')"
 size="$(stat -f '%z' "$dmg")"
@@ -15,6 +16,8 @@ bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")"
 minimum_macos="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$plist")"
 channel=stable
 [[ "$release_version" == *-* ]] && channel=beta
+signature_pattern='^[A-Za-z0-9+/]{86}==$'
+[[ "$sparkle_signature" =~ $signature_pattern ]] || { echo "Invalid Sparkle Ed25519 signature" >&2; exit 1; }
 
 jq -n \
   --arg version "$release_version" \
@@ -31,6 +34,7 @@ jq -n \
   --arg bundleId "$bundle_id" \
   --arg minimumMacOS "$minimum_macos" \
   --arg teamId "$team_id" \
+  --arg sparkleSignature "$sparkle_signature" \
   '{
     schemaVersion: 1,
     product: "ReviewArc",
@@ -48,6 +52,10 @@ jq -n \
       fileName: $fileName,
       sizeBytes: $size,
       sha256: $sha256,
+      sparkle: {
+        edSignature: $sparkleSignature,
+        contentType: "application/x-apple-diskimage"
+      },
       downloadUrl: null,
       notarization: {status: "accepted", submissionId: $notarizationSubmissionId},
       ticketStapled: true

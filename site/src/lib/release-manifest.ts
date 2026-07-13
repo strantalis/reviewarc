@@ -3,6 +3,7 @@ import { z } from "zod";
 const prereleaseIdentifier = "(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)";
 const semverPattern = new RegExp(`^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-(${prereleaseIdentifier}(?:\\.${prereleaseIdentifier})*))?$`);
 const sha256Pattern = /^[a-f0-9]{64}$/;
+const ed25519SignaturePattern = /^[A-Za-z0-9+/]{86}==$/;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const safeFilenamePattern = /^ReviewArc-[0-9A-Za-z.-]+-macOS-universal\.dmg$/;
 
@@ -26,6 +27,10 @@ const releaseManifestSchema = z.strictObject({
     fileName: z.string().regex(safeFilenamePattern).max(160),
     sizeBytes: z.number().int().positive().max(2_147_483_648),
     sha256: z.string().regex(sha256Pattern),
+    sparkle: z.strictObject({
+      edSignature: z.string().regex(ed25519SignaturePattern),
+      contentType: z.literal("application/x-apple-diskimage"),
+    }).optional(),
     downloadUrl: z.url({ protocol: /^https$/ }),
     notarization: z.strictObject({
       status: z.literal("accepted"),
@@ -66,6 +71,9 @@ const releaseManifestSchema = z.strictObject({
 });
 
 export type ReleaseManifest = z.infer<typeof releaseManifestSchema>;
+export type SparkleReleaseManifest = ReleaseManifest & {
+  macOS: ReleaseManifest["macOS"] & { sparkle: NonNullable<ReleaseManifest["macOS"]["sparkle"]> };
+};
 
 export function parseReleaseManifest(value: unknown, expectedChannel: ReleaseManifest["channel"]): ReleaseManifest {
   const manifest = releaseManifestSchema.parse(value);

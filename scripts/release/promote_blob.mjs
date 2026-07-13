@@ -7,7 +7,12 @@ if (!manifestPath) throw new Error("Manifest path is required");
 
 const manifestText = await readFile(manifestPath, "utf8");
 const manifest = JSON.parse(manifestText);
-if (manifest.schemaVersion !== 1 || !manifest.macOS?.downloadUrl?.startsWith("https://")) {
+if (
+  manifest.schemaVersion !== 1 ||
+  !manifest.macOS?.downloadUrl?.startsWith("https://") ||
+  !/^[A-Za-z0-9+/]{86}==$/.test(manifest.macOS?.sparkle?.edSignature ?? "") ||
+  manifest.macOS?.sparkle?.contentType !== "application/x-apple-diskimage"
+) {
   throw new Error("Refusing to promote an incomplete release manifest");
 }
 if (manifest.channel !== "beta" && manifest.channel !== "stable") {

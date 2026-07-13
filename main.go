@@ -35,7 +35,7 @@ func applicationOptions(app *App) *options.App {
 		AssetServer: &assetserver.Options{Assets: assets},
 		Mac:         &macoptions.Options{TitleBar: macoptions.TitleBarHidden()},
 		OnStartup:   app.startup,
-		OnDomReady:  configureNativeWindowChrome,
+		OnDomReady:  app.domReady,
 		OnShutdown:  app.shutdown,
 		Bind:        []interface{}{app},
 	}

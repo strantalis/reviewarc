@@ -28,6 +28,8 @@ Create a protected environment named `release`. Limit deployment branches/tags a
 - `APPLE_COPYRIGHT`
 - `APPLE_SIGNING_IDENTITY`
 - `APPLE_TEAM_ID`
+- `SPARKLE_PUBLIC_ED_KEY`: the base64 public key printed by Sparkle's `generate_keys`
+- `SPARKLE_FEED_URL`: the production HTTPS feed URL, `https://www.reviewarc.dev/api/appcast.xml`
 
 Add these environment secrets:
 
@@ -37,6 +39,7 @@ Add these environment secrets:
 - `APPLE_NOTARY_KEY_ID`
 - `APPLE_NOTARY_ISSUER_ID`
 - `BLOB_READ_WRITE_TOKEN`
+- `SPARKLE_ED25519_PRIVATE_KEY_BASE64`: base64 encoding of the private key file exported by Sparkle's `generate_keys`
 
 Load file-backed secrets without printing their contents:
 
@@ -47,11 +50,37 @@ base64 -i /path/to/AuthKey_KEYID.p8 | gh secret set APPLE_NOTARY_KEY_P8_BASE64 -
 
 Run the remaining `gh secret set` commands interactively so secret values are read from the terminal, not shell history.
 
+## Sparkle signing key
+
+ReviewArc uses Sparkle's Ed25519 signature in addition to Apple code signing and notarization. The signature authenticates the exact final DMG that the updater downloads. Generate the key once from the pinned Sparkle distribution and keep its private half out of the repository and Blob store:
+
+```sh
+./bin/generate_keys --account reviewarc
+./bin/generate_keys --account reviewarc -x /secure/path/reviewarc-sparkle-private-key
+base64 -i /secure/path/reviewarc-sparkle-private-key | gh secret set SPARKLE_ED25519_PRIVATE_KEY_BASE64 --env release --repo strantalis/reviewarc
+```
+
+Copy the public value printed by `generate_keys` to the protected environment variable `SPARKLE_PUBLIC_ED_KEY`. Back up the exported private key in the LLC's credential vault; losing it requires a carefully staged key rotation.
+
+The workflow downloads Sparkle 2.9.2 from its official GitHub release and verifies SHA-256 `1cb340cbbef04c6c0d162078610c25e2221031d794a3449d89f2f56f4df77c95` before using either the framework or `sign_update`. Update the version, URL, and checksum together in `build/darwin/updater/sparkle.env`; both developer and release fetchers read that file.
+
+The app embeds `SUPublicEDKey`, `SUFeedURL`, and verification settings in its final `Info.plist`. `SUVerifyUpdateBeforeExtraction` is enabled. `SURequireSignedFeed` is intentionally not enabled: the DMG enclosure is signed, but the dynamically assembled appcast itself is not. See Sparkle's [security setup](https://sparkle-project.org/documentation/) and [publishing guide](https://sparkle-project.org/documentation/publishing/).
+
 ## Vercel project and Blob store
 
 Create the site project under the intended Vercel team with `site/` as its Root Directory, connect the GitHub repository, and use `main` as the production branch. Connect a public Blob store dedicated to ReviewArc releases and upgrade the project connection to OIDC. Vercel then injects short-lived workload identity and `BLOB_STORE_ID` into the site's release endpoint; the site does not need a long-lived Blob token.
 
-The release workflow still needs the Blob store's read-write token as `BLOB_READ_WRITE_TOKEN` because GitHub Actions is outside Vercel's workload identity boundary. It uploads immutable versioned DMGs and manifests, verifies the downloaded DMG checksum, then promotes either `channels/beta/latest.json` or `channels/stable/latest.json`. The Astro site reads stable first and falls back to beta only when no stable manifest exists, so release publication does not redeploy the site and GitHub Actions needs no Vercel deployment token.
+The release workflow still needs the Blob store's read-write token as `BLOB_READ_WRITE_TOKEN` because GitHub Actions is outside Vercel's workload identity boundary. It uploads immutable versioned DMGs and manifests, verifies the downloaded DMG checksum, then promotes either `channels/beta/latest.json` or `channels/stable/latest.json`. The Astro site's existing `/api/release.json` endpoint continues to read stable first and fall back to beta only when no stable manifest exists, so release publication does not redeploy the site and GitHub Actions needs no Vercel deployment token.
+
+The updater reads `/api/appcast.xml`. That feed validates both current channel manifests and includes:
+
+- the monotonic GitHub run number as `sparkle:version`;
+- the full SemVer, including any prerelease suffix, as `sparkle:shortVersionString`;
+- the DMG byte length and Sparkle Ed25519 signature;
+- stable releases on Sparkle's default channel;
+- beta releases on the `beta` Sparkle channel.
+
+A Stable client therefore ignores beta items. A Beta client is allowed to consider beta and default-channel items, which lets it move forward to a newer GA release. ReviewArc has no downgrade path.
 
 The Blob store is public because the DMG is a public download. Configure Vercel spend alerts before sharing releases broadly.
 
@@ -64,6 +93,12 @@ git tag -s v0.1.0-beta.1 -m "ReviewArc 0.1.0 beta 1"
 git push origin v0.1.0-beta.1
 ```
 
-The first job builds, signs, notarizes, verifies, and preserves the exact candidate as a private Actions artifact. The second job publishes that preserved candidate. If publication fails, rerun only the failed job so the exact notarized bytes are reused.
+The first job builds, signs, notarizes, staples, verifies, Sparkle-signs, and preserves the exact candidate as a private Actions artifact. Sparkle signing reads but does not modify the final DMG. The second job publishes that preserved candidate. If publication fails, rerun only the failed job so the exact notarized bytes are reused.
+
+## Pausing an update channel
+
+If a release is unsafe, run the **Release macOS** workflow manually, choose `stable` or `beta`, and select `pause`. Supply a short, non-sensitive reason. The protected `release` environment applies its normal reviewer controls before the workflow writes `channels/<channel>/policy.json`.
+
+The appcast omits every paused channel. `/api/release.json` is deliberately unaffected so the public website's current download behavior does not change. Pausing does not delete immutable artifacts, alter installed apps, or roll users backward. Publish a higher fixed build, then run the workflow with `resume` after validating it. A malformed or unreadable policy makes the appcast fail closed with no update.
 
 Before calling any release distributable, download the DMG through the public site on a clean Mac, confirm Gatekeeper accepts it, drag ReviewArc to Applications, launch it, and exercise dependency detection plus GitHub authentication. Test on both Apple Silicon and Intel hardware before claiming both architectures are supported end to end.

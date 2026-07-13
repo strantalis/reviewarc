@@ -75,6 +75,7 @@ function verifyManifest(existingText) {
     existing.git?.commit === manifest.git?.commit &&
     existing.macOS?.sha256 === manifest.macOS.sha256 &&
     existing.macOS?.sizeBytes === manifest.macOS.sizeBytes &&
+    existing.macOS?.sparkle?.edSignature === manifest.macOS.sparkle.edSignature &&
     existing.macOS?.bundleId === manifest.macOS.bundleId &&
     existing.macOS?.downloadUrl === manifest.macOS.downloadUrl;
   if (!matches) throw new Error("Existing immutable manifest does not match this release");

@@ -1,4 +1,4 @@
-import type { AccountState, BootstrapState, ChapterStatus, ChangedFile, DiffFile, FileContent, InboxResult, Operation, PublishPreview, PullRequestRef, PullRequestReviewComment, RepositoryPage, ReviewComment, ReviewNote, ReviewSession, SelectedRepositoryRefresh, SourceSelection, SourceState, ThreadReplyPreview, Organization } from './types'
+import type { AccountState, BootstrapState, ChapterStatus, ChangedFile, DiffFile, FileContent, InboxResult, Operation, PublishPreview, PullRequestRef, PullRequestReviewComment, RepositoryPage, ReviewComment, ReviewNote, ReviewSession, SelectedRepositoryRefresh, SoftwareUpdateStatus, SourceSelection, SourceState, ThreadReplyPreview, UpdateChannel, Organization } from './types'
 
 type WailsMethod = (...args: unknown[]) => Promise<unknown>
 type AppBinding = Record<string, WailsMethod>
@@ -29,6 +29,10 @@ async function call<T>(names: string[], ...args: unknown[]): Promise<T> {
 
 export const backend = {
   bootstrap: () => call<BootstrapState>(['Bootstrap']),
+  getUpdateStatus: () => call<SoftwareUpdateStatus>(['GetUpdateStatus']),
+  checkForUpdates: () => call<SoftwareUpdateStatus>(['CheckForUpdates']),
+  setUpdateChannel: (channel: UpdateChannel) => call<SoftwareUpdateStatus>(['SetUpdateChannel'], channel),
+  installUpdate: () => call<void>(['InstallUpdate']),
   refreshAccount: () => call<AccountState>(['RefreshAccount']),
   listSources: () => call<SourceState>(['ListSources']),
   refreshSourceAccess: (organizations: Organization[]) => call<Organization[]>(['RefreshSourceAccess'], organizations),
