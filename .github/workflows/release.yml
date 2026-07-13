@@ -106,6 +106,8 @@ jobs:
         run: scripts/release/fetch_sparkle.sh dist/sparkle
 
       - name: Build universal macOS app
+        env:
+          DYLD_FRAMEWORK_PATH: ${{ github.workspace }}/dist/sparkle
         run: >-
           go run github.com/wailsapp/wails/v2/cmd/wails@v2.13.0 build
           -clean -trimpath -platform darwin/universal
