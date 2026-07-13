@@ -3,6 +3,9 @@ package process
 import (
 	"context"
 	"errors"
+	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -83,13 +86,141 @@ func TestLimitedBufferCapsButReportsConsumedBytes(t *testing.T) {
 
 func TestMinimalEnvironmentSeparatesCredentialsByTool(t *testing.T) {
 	source := []string{"PATH=/bin", "GH_TOKEN=github", "OPENAI_API_KEY=openai", "UNRELATED=nope"}
-	if got := minimalEnvironment(source, Git); len(got) != 1 {
+	if got := minimalEnvironment(source, Git, "/safe/bin"); len(got) != 1 || got[0] != "PATH=/safe/bin" {
 		t.Fatalf("git env leaked credentials: %v", got)
 	}
-	if got := minimalEnvironment(source, GH); len(got) != 2 || got[1] != "GH_TOKEN=github" {
+	if got := minimalEnvironment(source, GH, "/safe/bin"); len(got) != 2 || got[0] != "GH_TOKEN=github" || got[1] != "PATH=/safe/bin" {
 		t.Fatalf("unexpected gh env: %v", got)
 	}
-	if got := minimalEnvironment(source, Codex); len(got) != 2 || got[1] != "OPENAI_API_KEY=openai" {
+	if got := minimalEnvironment(source, Codex, "/safe/bin"); len(got) != 2 || got[0] != "OPENAI_API_KEY=openai" || got[1] != "PATH=/safe/bin" {
 		t.Fatalf("unexpected codex env: %v", got)
 	}
+}
+
+func TestMinimalEnvironmentPreservesValidatedSSHAgentOnlyForGit(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "reviewarc-agent-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "agent.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	source := []string{"HOME=/Users/fixture", "SSH_AUTH_SOCK=" + socket}
+	gitEnv := minimalEnvironment(source, Git, "/usr/bin:/bin")
+	if !containsString(gitEnv, "SSH_AUTH_SOCK="+socket) {
+		t.Fatalf("git environment lost SSH agent socket: %v", gitEnv)
+	}
+	for _, tool := range []Tool{GH, Codex} {
+		if containsString(minimalEnvironment(source, tool, "/usr/bin:/bin"), "SSH_AUTH_SOCK="+socket) {
+			t.Fatalf("%s environment inherited Git SSH agent socket", tool)
+		}
+	}
+	if validSocket(filepath.Join(t.TempDir(), "missing.sock")) {
+		t.Fatal("missing path accepted as an SSH agent socket")
+	}
+}
+
+func TestResolveExecutableUsesAbsoluteExecutableFromSearchDirs(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gh")
+	if err := os.WriteFile(path, []byte("fixture"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolveExecutable(GH, []string{dir}); got != path {
+		t.Fatalf("resolved path=%q, want %q", got, path)
+	}
+	if got := resolveExecutable(Tool("sh"), []string{dir}); got != "" {
+		t.Fatalf("unknown tool resolved to %q", got)
+	}
+}
+
+func TestExecutableSearchDirsRejectsRelativeAndMissingPathEntries(t *testing.T) {
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "missing")
+	got := executableSearchDirs([]string{"PATH=relative:" + dir + ":" + missing}, "/Users/fixture")
+	if got[0] != dir {
+		t.Fatalf("search dirs=%v, want existing absolute PATH dir first", got)
+	}
+	joined := strings.Join(got, ":")
+	if strings.Contains(joined, "relative") || strings.Contains(joined, missing) {
+		t.Fatalf("unsafe or missing PATH entry retained: %v", got)
+	}
+	for _, want := range []string{"/opt/homebrew/bin", "/usr/local/bin", "/Users/fixture/.local/bin", "/Users/fixture/.local/share/mise/shims", "/usr/bin", "/bin"} {
+		if !containsString(got, want) {
+			t.Fatalf("search dirs missing %q: %v", want, got)
+		}
+	}
+}
+
+func TestExecutableSearchDirsIncludesInstalledNVMVersion(t *testing.T) {
+	home := t.TempDir()
+	nvmBin := filepath.Join(home, ".config", "nvm", "versions", "node", "v24.1.0", "bin")
+	if err := os.MkdirAll(nvmBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !containsString(executableSearchDirs([]string{"PATH=/usr/bin:/bin"}, home), nvmBin) {
+		t.Fatalf("nvm bin directory was not discovered: %s", nvmBin)
+	}
+}
+
+func TestRefreshPathsDiscoversToolInstalledAfterRunnerStarts(t *testing.T) {
+	dir := t.TempDir()
+	runner := &ExecRunner{source: []string{"PATH=" + dir, "HOME=" + t.TempDir()}, home: t.TempDir()}
+	runner.RefreshPaths()
+	initial, _ := runner.ResolvedPath(GH)
+	path := filepath.Join(dir, "gh")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf 'gh version fixture\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runner.RefreshPaths()
+	resolved, err := runner.ResolvedPath(GH)
+	if err != nil || resolved != path {
+		t.Fatalf("refreshed path=(%q, %v), want %q", resolved, err, path)
+	}
+	if initial == path {
+		t.Fatalf("tool path %q was resolved before it existed", path)
+	}
+}
+
+func TestRunnerExecutesAbsoluteScriptWithSynthesizedPath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "codex")
+	if err := os.WriteFile(path, []byte("#!/usr/bin/env sh\nprintf 'codex fixture\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := NewExecRunner()
+	if err := r.SetPath(Codex, path); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := r.ResolvedPath(Codex)
+	if err != nil || resolved != path {
+		t.Fatalf("ResolvedPath()=(%q, %v), want %q", resolved, err, path)
+	}
+	got, err := r.Run(context.Background(), Command{Tool: Codex, Timeout: time.Second})
+	if err != nil || string(got.Stdout) != "codex fixture\n" {
+		t.Fatalf("Run stdout=%q err=%v", got.Stdout, err)
+	}
+}
+
+func TestRunnerReportsMissingResolvedTool(t *testing.T) {
+	r := NewExecRunner()
+	r.mu.Lock()
+	r.paths[GH] = ""
+	r.mu.Unlock()
+	if _, err := r.Run(context.Background(), Command{Tool: GH}); !errors.Is(err, ErrToolNotFound) {
+		t.Fatalf("Run error=%v, want ErrToolNotFound", err)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

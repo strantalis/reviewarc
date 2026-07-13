@@ -119,9 +119,11 @@ type GitHubUser struct {
 }
 
 type Organization struct {
-	Login     string `json:"login"`
-	Name      string `json:"name"`
-	AvatarURL string `json:"avatarUrl"`
+	Login        string `json:"login"`
+	Name         string `json:"name"`
+	AvatarURL    string `json:"avatarUrl"`
+	AccessStatus string `json:"accessStatus"`
+	SSOURL       string `json:"ssoUrl,omitempty"`
 }
 
 type Repository struct {
@@ -187,19 +189,22 @@ type PullRequestReview struct {
 
 // PullRequestReviewComment is an existing inline GitHub review comment.
 type PullRequestReviewComment struct {
-	ID           int64      `json:"id"`
-	ReviewID     int64      `json:"reviewId"`
-	ReplyToID    int64      `json:"replyToId,omitempty"`
-	Author       GitHubUser `json:"author"`
-	Body         string     `json:"body"`
-	Path         string     `json:"path"`
-	Line         *int       `json:"line,omitempty"`
-	OriginalLine *int       `json:"originalLine,omitempty"`
-	Side         DiffSide   `json:"side,omitempty"`
-	CommitSHA    string     `json:"commitSha"`
-	CreatedAt    time.Time  `json:"createdAt"`
-	UpdatedAt    time.Time  `json:"updatedAt"`
-	URL          string     `json:"url"`
+	ID                int64      `json:"id"`
+	ReviewID          int64      `json:"reviewId"`
+	ReplyToID         int64      `json:"replyToId,omitempty"`
+	Author            GitHubUser `json:"author"`
+	Body              string     `json:"body"`
+	Path              string     `json:"path"`
+	StartLine         *int       `json:"startLine,omitempty"`
+	Line              *int       `json:"line,omitempty"`
+	OriginalStartLine *int       `json:"originalStartLine,omitempty"`
+	OriginalLine      *int       `json:"originalLine,omitempty"`
+	StartSide         DiffSide   `json:"startSide,omitempty"`
+	Side              DiffSide   `json:"side,omitempty"`
+	CommitSHA         string     `json:"commitSha"`
+	CreatedAt         time.Time  `json:"createdAt"`
+	UpdatedAt         time.Time  `json:"updatedAt"`
+	URL               string     `json:"url"`
 }
 
 // CheckRun describes a GitHub check run for the pull request head revision.
@@ -260,6 +265,7 @@ type DiffHunk struct {
 type DiffFile struct {
 	File  ChangedFile `json:"file"`
 	Hunks []DiffHunk  `json:"hunks"`
+	Patch string      `json:"patch"`
 }
 
 type FileContent struct {
@@ -409,6 +415,8 @@ type ReviewComment struct {
 	Kind      CommentKind   `json:"kind"`
 	Body      string        `json:"body"`
 	Path      string        `json:"path,omitempty"`
+	StartLine *int          `json:"startLine,omitempty"`
+	StartSide DiffSide      `json:"startSide,omitempty"`
 	Line      *int          `json:"line,omitempty"`
 	Side      DiffSide      `json:"side,omitempty"`
 	Status    CommentStatus `json:"status"`

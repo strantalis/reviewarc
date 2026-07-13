@@ -9,6 +9,8 @@ export function CancelOperation(arg1:string):Promise<void>;
 
 export function ConfirmPublish(arg1:string,arg2:string):Promise<Array<domain.ReviewComment>>;
 
+export function ConfirmThreadReply(arg1:string,arg2:string):Promise<domain.PullRequestReviewComment>;
+
 export function DeleteDraftComment(arg1:string):Promise<void>;
 
 export function DeleteNote(arg1:string):Promise<void>;
@@ -21,6 +23,8 @@ export function GetFile(arg1:string,arg2:string,arg3:domain.Revision):Promise<do
 
 export function GetSession(arg1:string):Promise<domain.ReviewSession>;
 
+export function ListCachedOwnerRepositories(arg1:string):Promise<main.RepositoryPage>;
+
 export function ListSources():Promise<main.SourceState>;
 
 export function OpenPullRequest(arg1:domain.PullRequestRef):Promise<domain.ReviewSession>;
@@ -29,9 +33,17 @@ export function PreparePublish(arg1:string,arg2:Array<string>):Promise<main.Publ
 
 export function PrepareReview(arg1:string,arg2:Array<string>,arg3:string):Promise<main.PublishPreview>;
 
+export function PrepareThreadReply(arg1:string,arg2:number,arg3:string):Promise<main.ThreadReplyPreview>;
+
 export function RefreshAccount():Promise<main.AccountState>;
 
 export function RefreshInbox():Promise<main.InboxState>;
+
+export function RefreshOwnerRepositories(arg1:main.RepositoryPageInput):Promise<main.RepositoryPage>;
+
+export function RefreshSelectedRepositories():Promise<main.SelectedRepositoryRefresh>;
+
+export function RefreshSourceAccess(arg1:Array<domain.Organization>):Promise<Array<domain.Organization>>;
 
 export function SaveDraftComment(arg1:main.CommentInput):Promise<domain.ReviewComment>;
 

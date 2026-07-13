@@ -23,11 +23,7 @@ a { color: inherit; }
 .site-header nav { display: flex; align-items: center; gap: 1.25rem; }
 .site-header nav a, footer a, .quiet-link { text-underline-offset: .22em; text-decoration-thickness: 1px; }
 .brand { display: inline-flex; align-items: center; gap: .7rem; font-weight: 600; text-decoration: none; letter-spacing: -.02em; }
-.brand-mark { position: relative; display: inline-block; width: 28px; height: 23px; }
-.brand-mark i { position: absolute; width: 28px; height: 12px; border: 2px solid var(--indigo); border-color: var(--indigo) transparent transparent; border-radius: 50%; transform-origin: center bottom; }
-.brand-mark i:nth-child(1) { top: 8px; transform: rotate(-22deg); }
-.brand-mark i:nth-child(2) { top: 4px; transform: rotate(0deg); border-top-color: color-mix(in oklch, var(--indigo), var(--cyan) 40%); }
-.brand-mark i:nth-child(3) { top: 0; transform: rotate(22deg); border-top-color: var(--cyan); }
+.brand-mark { display: block; width: 31px; height: 25px; flex: none; }
 .platform-label { color: var(--muted); font-size: .75rem; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
 
 .hero { min-height: calc(100vh - 72px); padding-block: clamp(4.5rem, 10vw, 8rem); display: grid; align-items: center; gap: clamp(4rem, 8vw, 7rem); }

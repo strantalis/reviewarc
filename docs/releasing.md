@@ -6,7 +6,7 @@ ReviewArc releases are built from version tags by `.github/workflows/release.yml
 
 Prepare these items in the LLC's Apple Developer team. Do not paste private keys, certificate archives, passwords, or tokens into an issue, commit, or chat.
 
-1. Choose a stable reverse-DNS bundle identifier, such as `com.yourcompany.reviewarc`. This is the `APPLE_BUNDLE_ID` GitHub environment variable and should not change after distribution begins.
+1. Use the stable bundle identifier `com.silkcitylabs.reviewarc`. This is the `APPLE_BUNDLE_ID` GitHub environment variable and must not change after distribution begins.
 2. Copy the 10-character Apple Developer Team ID. This is the `APPLE_TEAM_ID` environment variable.
 3. Create a **Developer ID Application** certificate for distribution outside the Mac App Store. Install it on the Mac where its private key was created, then export the certificate and private key together from Keychain Access as a password-protected `.p12` file.
 4. In App Store Connect, create a **team** API key for notarization and download its `.p8` file once. Record the Key ID and Issuer ID. Individual API keys cannot authenticate `notarytool`.

@@ -1,0 +1,2 @@
+ALTER TABLE comments ADD COLUMN start_line INTEGER;
+ALTER TABLE comments ADD COLUMN start_side TEXT NOT NULL DEFAULT '';

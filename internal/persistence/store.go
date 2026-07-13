@@ -170,6 +170,23 @@ func (s *Store) ListSelections(ctx context.Context) ([]domain.SourceSelection, e
 	return out, rows.Err()
 }
 
+func (s *Store) RemoveRepositorySelections(ctx context.Context, keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, key := range keys {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM selections WHERE kind=? AND lower(selection_key)=lower(?)`, domain.SelectionRepository, key); err != nil {
+			return wrap("remove archived repository selection", err)
+		}
+	}
+	return tx.Commit()
+}
+
 func repoKey(ref domain.RepositoryRef) string {
 	return strings.ToLower(ref.Host + "/" + ref.Owner + "/" + ref.Name)
 }
@@ -181,6 +198,24 @@ func (s *Store) UpsertRepository(ctx context.Context, repo domain.Repository) er
 	}
 	_, err = s.db.ExecContext(ctx, `INSERT INTO repositories(repo_key,repository_json,updated_at) VALUES(?,?,?) ON CONFLICT(repo_key) DO UPDATE SET repository_json=excluded.repository_json,updated_at=excluded.updated_at`, repoKey(repo.Ref), b, encodeTime(time.Now()))
 	return wrap("save repository", err)
+}
+
+func (s *Store) UpsertRepositories(ctx context.Context, repositories []domain.Repository) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return wrap("save repositories", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, repo := range repositories {
+		b, marshalErr := json.Marshal(repo)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		if _, execErr := tx.ExecContext(ctx, `INSERT INTO repositories(repo_key,repository_json,updated_at) VALUES(?,?,?) ON CONFLICT(repo_key) DO UPDATE SET repository_json=excluded.repository_json,updated_at=excluded.updated_at`, repoKey(repo.Ref), b, encodeTime(time.Now())); execErr != nil {
+			return wrap("save repositories", execErr)
+		}
+	}
+	return wrap("save repositories", tx.Commit())
 }
 
 func (s *Store) ListRepositories(ctx context.Context) ([]domain.Repository, error) {
@@ -198,6 +233,30 @@ func (s *Store) ListRepositories(ctx context.Context) ([]domain.Repository, erro
 		var v domain.Repository
 		if json.Unmarshal(b, &v) == nil {
 			out = append(out, v)
+		}
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ListRepositoriesByOwner(ctx context.Context, owner string, limit int) ([]domain.Repository, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	prefix := "github.com/" + strings.ToLower(owner) + "/%"
+	rows, err := s.db.QueryContext(ctx, `SELECT repository_json FROM repositories WHERE repo_key LIKE ? ORDER BY repo_key`, prefix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]domain.Repository, 0, limit)
+	for rows.Next() && len(out) < limit {
+		var b []byte
+		if err := rows.Scan(&b); err != nil {
+			return nil, err
+		}
+		var repository domain.Repository
+		if json.Unmarshal(b, &repository) == nil && !repository.IsArchived && strings.EqualFold(repository.Ref.Owner, owner) {
+			out = append(out, repository)
 		}
 	}
 	return out, rows.Err()
@@ -533,7 +592,7 @@ func (s *Store) SaveComment(ctx context.Context, v domain.ReviewComment) error {
 	if created.IsZero() {
 		created = now
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO comments(id,session_id,chapter_id,kind,body,path,line,side,status,github_id,github_url,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET chapter_id=excluded.chapter_id,kind=excluded.kind,body=excluded.body,path=excluded.path,line=excluded.line,side=excluded.side,status=excluded.status,github_id=excluded.github_id,github_url=excluded.github_url,updated_at=excluded.updated_at`, v.ID, v.SessionID, v.ChapterID, v.Kind, v.Body, v.Path, v.Line, v.Side, v.Status, v.GitHubID, v.GitHubURL, encodeTime(created), encodeTime(now))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO comments(id,session_id,chapter_id,kind,body,path,start_line,start_side,line,side,status,github_id,github_url,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET chapter_id=excluded.chapter_id,kind=excluded.kind,body=excluded.body,path=excluded.path,start_line=excluded.start_line,start_side=excluded.start_side,line=excluded.line,side=excluded.side,status=excluded.status,github_id=excluded.github_id,github_url=excluded.github_url,updated_at=excluded.updated_at`, v.ID, v.SessionID, v.ChapterID, v.Kind, v.Body, v.Path, v.StartLine, v.StartSide, v.Line, v.Side, v.Status, v.GitHubID, v.GitHubURL, encodeTime(created), encodeTime(now))
 	return wrap("save comment", err)
 }
 func (s *Store) DeleteComment(ctx context.Context, id string) error {
@@ -541,7 +600,7 @@ func (s *Store) DeleteComment(ctx context.Context, id string) error {
 	return wrap("delete draft comment", err)
 }
 func (s *Store) ListComments(ctx context.Context, id string) ([]domain.ReviewComment, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,session_id,chapter_id,kind,body,path,line,side,status,github_id,github_url,created_at,updated_at FROM comments WHERE session_id=? ORDER BY created_at,id`, id)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,session_id,chapter_id,kind,body,path,start_line,start_side,line,side,status,github_id,github_url,created_at,updated_at FROM comments WHERE session_id=? ORDER BY created_at,id`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -550,7 +609,7 @@ func (s *Store) ListComments(ctx context.Context, id string) ([]domain.ReviewCom
 	for rows.Next() {
 		var v domain.ReviewComment
 		var c, u string
-		if err := rows.Scan(&v.ID, &v.SessionID, &v.ChapterID, &v.Kind, &v.Body, &v.Path, &v.Line, &v.Side, &v.Status, &v.GitHubID, &v.GitHubURL, &c, &u); err != nil {
+		if err := rows.Scan(&v.ID, &v.SessionID, &v.ChapterID, &v.Kind, &v.Body, &v.Path, &v.StartLine, &v.StartSide, &v.Line, &v.Side, &v.Status, &v.GitHubID, &v.GitHubURL, &c, &u); err != nil {
 			return nil, err
 		}
 		v.CreatedAt, _ = decodeTime(c)

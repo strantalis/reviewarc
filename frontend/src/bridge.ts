@@ -1,4 +1,4 @@
-import type { AccountState, BootstrapState, ChapterStatus, ChangedFile, DiffFile, FileContent, InboxResult, Operation, PublishPreview, PullRequestRef, ReviewComment, ReviewNote, ReviewSession, SourceSelection, SourceState } from './types'
+import type { AccountState, BootstrapState, ChapterStatus, ChangedFile, DiffFile, FileContent, InboxResult, Operation, PublishPreview, PullRequestRef, PullRequestReviewComment, RepositoryPage, ReviewComment, ReviewNote, ReviewSession, SelectedRepositoryRefresh, SourceSelection, SourceState, ThreadReplyPreview, Organization } from './types'
 
 type WailsMethod = (...args: unknown[]) => Promise<unknown>
 type AppBinding = Record<string, WailsMethod>
@@ -6,7 +6,13 @@ type AppBinding = Record<string, WailsMethod>
 declare global {
   interface Window {
     go?: { main?: { App?: AppBinding } }
-    runtime?: { EventsOn?: (name: string, callback: (payload: unknown) => void) => () => void }
+    runtime?: {
+      EventsOn?: (name: string, callback: (payload: unknown) => void) => () => void
+      BrowserOpenURL?: (url: string) => void
+      Quit?: () => void
+      WindowMinimise?: () => void
+      WindowToggleMaximise?: () => void
+    }
   }
 }
 
@@ -25,6 +31,10 @@ export const backend = {
   bootstrap: () => call<BootstrapState>(['Bootstrap']),
   refreshAccount: () => call<AccountState>(['RefreshAccount']),
   listSources: () => call<SourceState>(['ListSources']),
+  refreshSourceAccess: (organizations: Organization[]) => call<Organization[]>(['RefreshSourceAccess'], organizations),
+  refreshSelectedRepositories: () => call<SelectedRepositoryRefresh>(['RefreshSelectedRepositories']),
+  listCachedOwnerRepositories: (owner: string) => call<RepositoryPage>(['ListCachedOwnerRepositories'], owner),
+  refreshOwnerRepositories: (owner: string, cursor = '') => call<RepositoryPage>(['RefreshOwnerRepositories'], {owner, cursor}),
   saveSelections: (selections: SourceSelection[]) => call<void>(['SaveSelections'], selections),
   refreshInbox: () => call<InboxResult>(['RefreshInbox']),
   openPullRequest: (ref: PullRequestRef) => call<ReviewSession>(['OpenPullRequest'], ref),
@@ -37,10 +47,24 @@ export const backend = {
   updateChapter: (sessionId: string, chapterId: string, status: ChapterStatus) => call<ReviewSession>(['SetChapterStatus'], sessionId, chapterId, status),
   saveNote: (sessionId: string, chapterId: string, body: string, id = '') => call<ReviewNote>(['SaveNote'], {id, sessionId, chapterId, body}),
   deleteNote: (id: string) => call<void>(['DeleteNote'], id),
-  saveDraft: (sessionId: string, chapterId: string, body: string, path?: string, line?: number, side: 'LEFT' | 'RIGHT' = 'RIGHT', id = '') => call<ReviewComment>(['SaveDraftComment'], {id, sessionId, chapterId, kind: path ? 'inline' : 'general', body, path: path ?? '', line: line ?? 0, side}),
+  saveDraft: (sessionId: string, chapterId: string, body: string, path?: string, startLine?: number, startSide: 'LEFT' | 'RIGHT' = 'RIGHT', line?: number, side: 'LEFT' | 'RIGHT' = 'RIGHT', id = '') => call<ReviewComment>(['SaveDraftComment'], {id, sessionId, chapterId, kind: path ? 'inline' : 'general', body, path: path ?? '', startLine, startSide: startLine ? startSide : '', line: line ?? 0, side}),
   deleteDraft: (id: string) => call<void>(['DeleteDraftComment'], id),
   preparePublish: (sessionId: string, commentIds: string[]) => call<PublishPreview>(['PreparePublish'], sessionId, commentIds),
   prepareReview: (sessionId: string, commentIds: string[], event: 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES') => call<PublishPreview>(['PrepareReview'], sessionId, commentIds, event),
   confirmPublish: (token: string, digest: string) => call<ReviewComment[]>(['ConfirmPublish'], token, digest),
+  prepareThreadReply: (sessionId: string, targetCommentId: number, body: string) => call<ThreadReplyPreview>(['PrepareThreadReply'], sessionId, targetCommentId, body),
+  confirmThreadReply: (token: string, digest: string) => call<PullRequestReviewComment>(['ConfirmThreadReply'], token, digest),
   on: (name: string, callback: (payload: unknown) => void) => window.runtime?.EventsOn?.(name, callback) ?? (() => {}),
+  openGitHubSSO: (rawUrl: string) => {
+    const url = new URL(rawUrl)
+    if (url.protocol !== 'https:' || url.hostname.toLowerCase() !== 'github.com' || !/^\/orgs\/[^/]+\/sso$/.test(url.pathname) || !url.searchParams.has('authorization_request')) throw new Error('GitHub returned an invalid SSO authorization link.')
+    if (!window.runtime?.BrowserOpenURL) throw new BridgeUnavailableError('BrowserOpenURL')
+    window.runtime.BrowserOpenURL(url.toString())
+  },
+  openGitHubURL: (rawUrl: string) => {
+    const url = new URL(rawUrl)
+    if (url.protocol !== 'https:' || url.hostname.toLowerCase() !== 'github.com') throw new Error('GitHub returned an invalid external link.')
+    if (!window.runtime?.BrowserOpenURL) throw new BridgeUnavailableError('BrowserOpenURL')
+    window.runtime.BrowserOpenURL(url.toString())
+  },
 }

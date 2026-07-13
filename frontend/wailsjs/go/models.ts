@@ -599,6 +599,7 @@ export namespace domain {
 	export class DiffFile {
 	    file: ChangedFile;
 	    hunks: DiffHunk[];
+	    patch: string;
 
 	    static createFrom(source: any = {}) {
 	        return new DiffFile(source);
@@ -608,6 +609,7 @@ export namespace domain {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.file = this.convertValues(source["file"], ChangedFile);
 	        this.hunks = this.convertValues(source["hunks"], DiffHunk);
+	        this.patch = source["patch"];
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -676,6 +678,8 @@ export namespace domain {
 	    login: string;
 	    name: string;
 	    avatarUrl: string;
+	    accessStatus: string;
+	    ssoUrl?: string;
 
 	    static createFrom(source: any = {}) {
 	        return new Organization(source);
@@ -686,6 +690,8 @@ export namespace domain {
 	        this.login = source["login"];
 	        this.name = source["name"];
 	        this.avatarUrl = source["avatarUrl"];
+	        this.accessStatus = source["accessStatus"];
+	        this.ssoUrl = source["ssoUrl"];
 	    }
 	}
 	export class PullRequestReviewComment {
@@ -695,8 +701,11 @@ export namespace domain {
 	    author: GitHubUser;
 	    body: string;
 	    path: string;
+	    startLine?: number;
 	    line?: number;
+	    originalStartLine?: number;
 	    originalLine?: number;
+	    startSide?: string;
 	    side?: string;
 	    commitSha: string;
 	    // Go type: time
@@ -717,8 +726,11 @@ export namespace domain {
 	        this.author = this.convertValues(source["author"], GitHubUser);
 	        this.body = source["body"];
 	        this.path = source["path"];
+	        this.startLine = source["startLine"];
 	        this.line = source["line"];
+	        this.originalStartLine = source["originalStartLine"];
 	        this.originalLine = source["originalLine"];
+	        this.startSide = source["startSide"];
 	        this.side = source["side"];
 	        this.commitSha = source["commitSha"];
 	        this.createdAt = this.convertValues(source["createdAt"], null);
@@ -1215,6 +1227,8 @@ export namespace domain {
 	    kind: string;
 	    body: string;
 	    path?: string;
+	    startLine?: number;
+	    startSide?: string;
 	    line?: number;
 	    side?: string;
 	    status: string;
@@ -1237,6 +1251,8 @@ export namespace domain {
 	        this.kind = source["kind"];
 	        this.body = source["body"];
 	        this.path = source["path"];
+	        this.startLine = source["startLine"];
+	        this.startSide = source["startSide"];
 	        this.line = source["line"];
 	        this.side = source["side"];
 	        this.status = source["status"];
@@ -1418,6 +1434,8 @@ export namespace main {
 	    kind: string;
 	    body: string;
 	    path: string;
+	    startLine?: number;
+	    startSide: string;
 	    line?: number;
 	    side: string;
 
@@ -1433,6 +1451,8 @@ export namespace main {
 	        this.kind = source["kind"];
 	        this.body = source["body"];
 	        this.path = source["path"];
+	        this.startLine = source["startLine"];
+	        this.startSide = source["startSide"];
 	        this.line = source["line"];
 	        this.side = source["side"];
 	    }
@@ -1516,6 +1536,8 @@ export namespace main {
 	    kind: string;
 	    body: string;
 	    path?: string;
+	    startLine?: number;
+	    startSide?: string;
 	    line?: number;
 	    side?: string;
 
@@ -1529,6 +1551,8 @@ export namespace main {
 	        this.kind = source["kind"];
 	        this.body = source["body"];
 	        this.path = source["path"];
+	        this.startLine = source["startLine"];
+	        this.startSide = source["startSide"];
 	        this.line = source["line"];
 	        this.side = source["side"];
 	    }
@@ -1578,6 +1602,92 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class RepositoryPage {
+	    items: domain.Repository[];
+	    totalCount: number;
+	    endCursor?: string;
+	    hasNextPage: boolean;
+	    cached: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new RepositoryPage(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], domain.Repository);
+	        this.totalCount = source["totalCount"];
+	        this.endCursor = source["endCursor"];
+	        this.hasNextPage = source["hasNextPage"];
+	        this.cached = source["cached"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class RepositoryPageInput {
+	    owner: string;
+	    cursor: string;
+
+	    static createFrom(source: any = {}) {
+	        return new RepositoryPageInput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.owner = source["owner"];
+	        this.cursor = source["cursor"];
+	    }
+	}
+	export class SelectedRepositoryRefresh {
+	    repositories: domain.Repository[];
+	    archivedKeys: string[];
+	    errors: Record<string, string>;
+
+	    static createFrom(source: any = {}) {
+	        return new SelectedRepositoryRefresh(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.repositories = this.convertValues(source["repositories"], domain.Repository);
+	        this.archivedKeys = source["archivedKeys"];
+	        this.errors = source["errors"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class SourceState {
 	    organizations: domain.Organization[];
 	    repositories: domain.Repository[];
@@ -1592,6 +1702,55 @@ export namespace main {
 	        this.organizations = this.convertValues(source["organizations"], domain.Organization);
 	        this.repositories = this.convertValues(source["repositories"], domain.Repository);
 	        this.selections = this.convertValues(source["selections"], domain.SourceSelection);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ThreadReplyPreview {
+	    token: string;
+	    digest: string;
+	    repository: string;
+	    number: number;
+	    headSha: string;
+	    rootCommentId: number;
+	    rootAuthor: string;
+	    path: string;
+	    body: string;
+	    // Go type: time
+	    expiresAt: any;
+
+	    static createFrom(source: any = {}) {
+	        return new ThreadReplyPreview(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.token = source["token"];
+	        this.digest = source["digest"];
+	        this.repository = source["repository"];
+	        this.number = source["number"];
+	        this.headSha = source["headSha"];
+	        this.rootCommentId = source["rootCommentId"];
+	        this.rootAuthor = source["rootAuthor"];
+	        this.path = source["path"];
+	        this.body = source["body"];
+	        this.expiresAt = this.convertValues(source["expiresAt"], null);
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

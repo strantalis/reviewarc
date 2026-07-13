@@ -14,7 +14,7 @@ import (
 var hunkHeader = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
 
 func ParsePatch(file domain.ChangedFile, patch []byte) (domain.DiffFile, error) {
-	result := domain.DiffFile{File: file, Hunks: []domain.DiffHunk{}}
+	result := domain.DiffFile{File: file, Hunks: []domain.DiffHunk{}, Patch: string(patch)}
 	if bytes.Contains(patch, []byte("GIT binary patch")) || bytes.Contains(patch, []byte("Binary files ")) {
 		result.File.IsBinary = true
 		return result, nil

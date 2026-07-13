@@ -23,7 +23,7 @@ cd frontend
 npm install
 npm run check
 cd ..
-go run github.com/wailsapp/wails/v2/cmd/wails@v2.11.0 dev
+go run github.com/wailsapp/wails/v2/cmd/wails@v2.13.0 dev
 ```
 
 ## Build and test
@@ -31,7 +31,7 @@ go run github.com/wailsapp/wails/v2/cmd/wails@v2.11.0 dev
 ```sh
 cd frontend && npm run check && cd ..
 go test ./...
-go run github.com/wailsapp/wails/v2/cmd/wails@v2.11.0 build
+go run github.com/wailsapp/wails/v2/cmd/wails@v2.13.0 build
 ```
 
 ## Signed macOS releases

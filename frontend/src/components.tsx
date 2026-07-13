@@ -1,10 +1,48 @@
-import type { ReactNode } from 'react'
-import { AlertTriangle, Check, Circle, Clock3, LoaderCircle, ShieldAlert, Sparkles } from 'lucide-react'
+import { useRef, type ReactNode } from 'react'
+import * as RadixSelect from '@radix-ui/react-select'
+import { AlertTriangle, Check, ChevronDown, Circle, Clock3, LoaderCircle, Minus, Plus, ShieldAlert, Sparkles, X } from 'lucide-react'
+import { Quit, WindowMinimise, WindowToggleMaximise } from '../wailsjs/runtime/runtime'
 import type { AnalysisStatus, ChapterStatus, DependencyStatus, RiskLevel } from './types'
 import { analysisLabel, chapterStatusLabel, riskLabel } from './lib'
+import reviewArcMark from './assets/reviewarc-mark.svg'
 
 export function Logo({compact = false}: {compact?: boolean}) {
-  return <div className="brand" aria-label="ReviewArc"><span className="brand-mark" aria-hidden="true"><i/><i/><i/></span>{!compact && <strong>ReviewArc</strong>}</div>
+  return <div className="brand" aria-label="ReviewArc"><img className="brand-mark" src={reviewArcMark} alt="" width="31" height="25"/>{!compact && <strong>ReviewArc</strong>}</div>
+}
+
+export function WindowControls() {
+  return <div className="window-controls" role="group" aria-label="Window controls">
+    <button className="window-control close" aria-label="Close ReviewArc" title="Close" onClick={Quit}><X size={10}/></button>
+    <button className="window-control minimise" aria-label="Minimize ReviewArc" title="Minimize" onClick={WindowMinimise}><Minus size={10}/></button>
+    <button className="window-control zoom" aria-label="Zoom ReviewArc" title="Zoom" onClick={WindowToggleMaximise}><Plus size={10}/></button>
+  </div>
+}
+
+export type SelectOption = {value: string; label: string; description?: string}
+
+export function SelectControl({label, value, options, onChange, disabled = false, className = '', help, icon}: {label: string; value: string; options: SelectOption[]; onChange: (value: string) => void; disabled?: boolean; className?: string; help?: string; icon?: ReactNode}) {
+  const trigger = useRef<HTMLButtonElement>(null)
+  const openedByPointer = useRef(false)
+  return <RadixSelect.Root value={value} onValueChange={onChange} disabled={disabled}>
+    <RadixSelect.Trigger ref={trigger} className={`select-trigger ${className}`.trim()} aria-label={label} title={help} onPointerDown={() => { openedByPointer.current = true }} onKeyDown={() => { openedByPointer.current = false }}>
+      {icon}<RadixSelect.Value/><RadixSelect.Icon className="select-chevron"><ChevronDown size={14}/></RadixSelect.Icon>
+    </RadixSelect.Trigger>
+    <RadixSelect.Portal>
+      <RadixSelect.Content className="select-content" position="popper" sideOffset={5} collisionPadding={8} onCloseAutoFocus={(event) => {
+        if (!openedByPointer.current) return
+        event.preventDefault()
+        trigger.current?.blur()
+        openedByPointer.current = false
+      }}>
+        <RadixSelect.Viewport className="select-viewport">
+          {options.map((option) => <RadixSelect.Item className="select-option" value={option.value} key={option.value}>
+            <RadixSelect.ItemIndicator><Check size={14}/></RadixSelect.ItemIndicator>
+            <span><RadixSelect.ItemText>{option.label}</RadixSelect.ItemText>{option.description && <small>{option.description}</small>}</span>
+          </RadixSelect.Item>)}
+        </RadixSelect.Viewport>
+      </RadixSelect.Content>
+    </RadixSelect.Portal>
+  </RadixSelect.Root>
 }
 
 export function StatusDot({status}: {status: ChapterStatus}) {
@@ -28,8 +66,8 @@ export function EmptyState({icon, title, children, action}: {icon: ReactNode; ti
 
 export function Skeleton({rows = 5}: {rows?: number}) { return <div className="skeleton-list" aria-label="Loading">{Array.from({length: rows}, (_, i) => <div className="skeleton-row" key={i}><i/><span/><b/></div>)}</div> }
 
-export function ErrorBanner({title = 'Something went wrong', message, onRetry}: {title?: string; message: string; onRetry?: () => void}) {
-  return <div className="error-banner" role="alert"><AlertTriangle size={18}/><div><strong>{title}</strong><p>{message}</p></div>{onRetry && <button className="button secondary small" onClick={onRetry}>Try again</button>}</div>
+export function ErrorBanner({title = 'Something went wrong', message, onRetry, actionLabel = 'Try again'}: {title?: string; message: string; onRetry?: () => void; actionLabel?: string}) {
+  return <div className="error-banner" role="alert"><AlertTriangle size={18}/><div><strong>{title}</strong><p>{message}</p></div>{onRetry && <button className="button secondary small" onClick={onRetry}>{actionLabel}</button>}</div>
 }
 
 function inlineMarkdown(value: string): ReactNode[] {

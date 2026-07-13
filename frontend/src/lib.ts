@@ -27,19 +27,24 @@ export function relationshipLabel(value: Relationship) {
   return ({reviewRequested: 'Needs your review', assigned: 'Assigned to you', authored: 'Authored by you', selectedRepo: 'Selected repository'} satisfies Record<Relationship, string>)[value]
 }
 
+export function primaryRelationship(relationships: Relationship[]): Relationship {
+  return (['reviewRequested', 'assigned', 'authored', 'selectedRepo'] as const).find((relationship) => relationships.includes(relationship)) ?? 'selectedRepo'
+}
+
 export function normalizeProgress(progress?: Partial<ReviewProgress>): ReviewProgress {
   const total = progress?.total ?? 0
   const reviewed = progress?.reviewed ?? 0
   return {total, reviewed, blocked: progress?.blocked ?? 0, clarify: progress?.clarify ?? 0, percent: progress?.percent ?? (total ? Math.round(reviewed / total * 100) : 0)}
 }
 
-export function filterInbox(items: PullRequestSummary[], query: string, relationship: Relationship | 'all', repository: string, analysis: AnalysisStatus | 'all') {
+export function filterInbox(items: PullRequestSummary[], query: string, relationship: Relationship | 'all', repository: string, label: string, analysis: AnalysisStatus | 'all') {
   const normalized = query.trim().toLowerCase()
   return items.filter((pr) => {
-    const haystack = `${repoName(pr)} ${pr.title} ${pr.author.login} ${pr.ref.number}`.toLowerCase()
+    const haystack = `${repoName(pr)} ${pr.title} ${pr.author.login} ${pr.ref.number} ${pr.labels.join(' ')}`.toLowerCase()
     return (!normalized || haystack.includes(normalized)) &&
       (relationship === 'all' || pr.relationships.includes(relationship)) &&
       (repository === 'all' || repoName(pr) === repository) &&
+      (label === 'all' || pr.labels.some((item) => item.localeCompare(label, undefined, {sensitivity: 'accent'}) === 0)) &&
       (analysis === 'all' || pr.analysisStatus === analysis)
   })
 }

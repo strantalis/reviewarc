@@ -10,7 +10,7 @@ export type ClaimKind = 'fact' | 'inference' | 'unknown'
 export interface RepositoryRef { host: string; owner: string; name: string; cloneUrl: string; databaseId: string }
 export interface PullRequestRef { repository: RepositoryRef; number: number }
 export interface GitHubUser { login: string; name: string; avatarUrl: string }
-export interface Organization { login: string; name: string; avatarUrl: string }
+export interface Organization { login: string; name: string; avatarUrl: string; accessStatus?: 'available' | 'ssoRequired' | 'denied' | 'unknown'; ssoUrl?: string }
 export interface Repository { ref: RepositoryRef; description: string; isPrivate: boolean; isArchived: boolean; updatedAt: string }
 export interface SourceSelection { kind: 'organization' | 'repository'; key: string; enabled: boolean }
 export interface ReviewProgress { total: number; reviewed: number; blocked: number; clarify: number; percent: number }
@@ -21,7 +21,7 @@ export interface PullRequestSummary {
 }
 export interface Commit { sha: string; message: string; author: GitHubUser; authoredAt: string }
 export interface PullRequestReview { id: number; author: GitHubUser; state: string; body: string; commitSha: string; submittedAt: string; url: string }
-export interface PullRequestReviewComment { id: number; reviewId: number; replyToId?: number; author: GitHubUser; body: string; path: string; line?: number; originalLine?: number; side?: 'LEFT' | 'RIGHT'; commitSha: string; createdAt: string; updatedAt: string; url: string }
+export interface PullRequestReviewComment { id: number; reviewId: number; replyToId?: number; author: GitHubUser; body: string; path: string; startLine?: number; line?: number; originalStartLine?: number; originalLine?: number; startSide?: 'LEFT' | 'RIGHT'; side?: 'LEFT' | 'RIGHT'; commitSha: string; createdAt: string; updatedAt: string; url: string }
 export interface CheckRun { id: number; name: string; status: string; conclusion?: string; appName?: string; url: string; detailsUrl?: string; startedAt: string; completedAt: string }
 export interface PullRequest extends PullRequestSummary {
   body: string; baseRef: string; headRef: string; baseSha: string; headSha: string; headRepository: RepositoryRef
@@ -30,7 +30,7 @@ export interface PullRequest extends PullRequestSummary {
 export interface ChangedFile { path: string; previousPath: string; status: string; additions: number; deletions: number; isBinary: boolean }
 export interface DiffLine { kind: 'context' | 'add' | 'delete' | 'noNewline'; content: string; oldLine?: number; newLine?: number }
 export interface DiffHunk { header: string; oldStart: number; oldLines: number; newStart: number; newLines: number; lines: DiffLine[] }
-export interface DiffFile { file: ChangedFile; hunks: DiffHunk[] }
+export interface DiffFile { file: ChangedFile; hunks: DiffHunk[]; patch: string }
 export interface FileContent { path: string; revision: 'base' | 'head'; sha: string; content: string; isBinary: boolean; lineCount: number }
 export interface EvidenceReference {
   id: string; path: string; revision: 'base' | 'head'; startLine: number; endLine: number; symbol?: string
@@ -58,9 +58,10 @@ export interface ReviewAnalysis {
 }
 export interface ReviewNote { id: string; sessionId: string; chapterId?: string; body: string; createdAt: string; updatedAt: string }
 export interface ReviewComment {
-  id: string; sessionId: string; chapterId?: string; kind: 'general' | 'inline'; body: string; path?: string; line?: number
-  side?: 'LEFT' | 'RIGHT'; status: 'draft' | 'published' | 'failed'; githubId?: string; githubUrl?: string; createdAt: string; updatedAt: string
+  id: string; sessionId: string; chapterId?: string; kind: 'general' | 'inline'; body: string; path?: string; startLine?: number
+  startSide?: 'LEFT' | 'RIGHT'; line?: number; side?: 'LEFT' | 'RIGHT'; status: 'draft' | 'published' | 'failed'; githubId?: string; githubUrl?: string; createdAt: string; updatedAt: string
 }
+export interface CommentRange { startLine: number; startSide: 'LEFT' | 'RIGHT'; endLine: number; endSide: 'LEFT' | 'RIGHT' }
 export interface ReviewSession {
   id: string; pullRequest: PullRequest; baseSha: string; headSha: string; status: 'preparing' | 'ready' | 'failed'
   analysisStatus: AnalysisStatus; analysis?: ReviewAnalysis; chapters: {chapterId: string; status: ChapterStatus; updatedAt: string}[]
@@ -75,8 +76,11 @@ export interface SessionDetail { session: ReviewSession; files: ChangedFile[]; d
 export interface OperationEvent { stage: string; message: string; progress?: number; status?: 'running' | 'complete' | 'failed' }
 export interface AccountState { status: string; user?: GitHubUser; message?: string }
 export interface SourceState extends SourceCatalog {}
+export interface RepositoryPage { items: Repository[]; totalCount: number; endCursor?: string; hasNextPage: boolean; cached: boolean }
+export interface SelectedRepositoryRefresh { repositories: Repository[]; archivedKeys: string[]; errors: Record<string, string> }
 export interface InboxResult { items: PullRequestSummary[]; errors?: Record<string, string>; partial?: boolean }
 export interface Operation { id: string; sessionId?: string; kind: string; stage: string; message: string; state: string }
-export interface PublishItem { draftId: string; kind: 'general' | 'inline'; body: string; path?: string; line?: number; side?: 'LEFT' | 'RIGHT' }
+export interface PublishItem { draftId: string; kind: 'general' | 'inline'; body: string; path?: string; startLine?: number; startSide?: 'LEFT' | 'RIGHT'; line?: number; side?: 'LEFT' | 'RIGHT' }
 export type ReviewEvent = 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES'
 export interface PublishPreview { token: string; digest: string; repository: string; number: number; headSha: string; items: PublishItem[]; event: ReviewEvent; expiresAt: string }
+export interface ThreadReplyPreview { token: string; digest: string; repository: string; number: number; headSha: string; rootCommentId: number; rootAuthor: string; path: string; body: string; expiresAt: string }

@@ -43,6 +43,31 @@ type repositoriesPageJSON struct {
 	}
 }
 
+type organizationRepositoriesPageJSON struct {
+	Data struct {
+		Organization struct {
+			Repositories struct{ Nodes []repositoryJSON }
+		}
+	}
+}
+
+type pageInfoJSON struct {
+	HasNextPage bool
+	EndCursor   string
+}
+
+type ownerRepositoriesJSON struct {
+	Data struct {
+		RepositoryOwner *struct {
+			Repositories struct {
+				TotalCount int
+				Nodes      []repositoryJSON
+				PageInfo   pageInfoJSON
+			}
+		}
+	}
+}
+
 type namedUserJSON struct{ Login string }
 type labelJSON struct{ Name string }
 type pullRequestSummaryJSON struct {
@@ -54,6 +79,41 @@ type pullRequestSummaryJSON struct {
 	Assignees, ReviewRequests              []namedUserJSON
 	Labels                                 []labelJSON
 	ReviewDecision, HeadRefOid, BaseRefOid string
+}
+
+type searchPullRequestJSON struct {
+	Number                                 int
+	Title, URL, UpdatedAt                  string
+	Author                                 namedUserJSON
+	IsDraft                                bool
+	Additions, Deletions, ChangedFiles     int
+	ReviewDecision, HeadRefOid, BaseRefOid string
+	Assignees                              struct{ Nodes []namedUserJSON }
+	Labels                                 struct{ Nodes []labelJSON }
+	ReviewRequests                         struct {
+		Nodes []struct{ RequestedReviewer namedUserJSON }
+	}
+	Repository repositoryJSON
+}
+
+func (r searchPullRequestJSON) summaryJSON() pullRequestSummaryJSON {
+	reviewRequests := make([]namedUserJSON, 0, len(r.ReviewRequests.Nodes))
+	for _, request := range r.ReviewRequests.Nodes {
+		if request.RequestedReviewer.Login != "" {
+			reviewRequests = append(reviewRequests, request.RequestedReviewer)
+		}
+	}
+	return pullRequestSummaryJSON{Number: r.Number, Title: r.Title, URL: r.URL, UpdatedAt: r.UpdatedAt, Author: r.Author, IsDraft: r.IsDraft, Additions: r.Additions, Deletions: r.Deletions, ChangedFiles: r.ChangedFiles, Assignees: r.Assignees.Nodes, ReviewRequests: reviewRequests, Labels: r.Labels.Nodes, ReviewDecision: r.ReviewDecision, HeadRefOid: r.HeadRefOid, BaseRefOid: r.BaseRefOid}
+}
+
+type searchPullRequestsPageJSON struct {
+	Data struct {
+		Search struct {
+			IssueCount int
+			Nodes      []searchPullRequestJSON
+			PageInfo   pageInfoJSON
+		}
+	}
 }
 
 func (r pullRequestSummaryJSON) domain(repository domain.RepositoryRef, login string) domain.PullRequestSummary {
@@ -156,13 +216,25 @@ type reviewCommentJSON struct {
 	User                userJSON
 	Body                string
 	Path                string
+	StartLine           *int `json:"start_line"`
 	Line                *int
-	OriginalLine        *int `json:"original_line"`
+	OriginalStartLine   *int   `json:"original_start_line"`
+	OriginalLine        *int   `json:"original_line"`
+	StartSide           string `json:"start_side"`
 	Side                string
 	CommitID            string `json:"commit_id"`
 	CreatedAt           string `json:"created_at"`
 	UpdatedAt           string `json:"updated_at"`
 	HTMLURL             string `json:"html_url"`
+}
+
+func (r reviewCommentJSON) domain() domain.PullRequestReviewComment {
+	return domain.PullRequestReviewComment{
+		ID: r.ID, ReviewID: r.PullRequestReviewID, ReplyToID: r.InReplyToID,
+		Author: r.User.domain(), Body: r.Body, Path: r.Path, StartLine: positiveLine(r.StartLine), Line: positiveLine(r.Line),
+		OriginalStartLine: positiveLine(r.OriginalStartLine), OriginalLine: positiveLine(r.OriginalLine), StartSide: mapDiffSide(r.StartSide), Side: mapDiffSide(r.Side), CommitSHA: r.CommitID,
+		CreatedAt: parseTime(r.CreatedAt), UpdatedAt: parseTime(r.UpdatedAt), URL: r.HTMLURL,
+	}
 }
 
 type checkRunJSON struct {
@@ -272,12 +344,7 @@ func parsePullRequestContext(pr *domain.PullRequest, reviewsData, commentsData, 
 			if item.ID <= 0 || item.Path == "" {
 				continue
 			}
-			pr.ReviewComments = append(pr.ReviewComments, domain.PullRequestReviewComment{
-				ID: item.ID, ReviewID: item.PullRequestReviewID, ReplyToID: item.InReplyToID,
-				Author: item.User.domain(), Body: item.Body, Path: item.Path, Line: positiveLine(item.Line),
-				OriginalLine: positiveLine(item.OriginalLine), Side: mapDiffSide(item.Side), CommitSHA: item.CommitID,
-				CreatedAt: parseTime(item.CreatedAt), UpdatedAt: parseTime(item.UpdatedAt), URL: item.HTMLURL,
-			})
+			pr.ReviewComments = append(pr.ReviewComments, item.domain())
 		}
 	}
 	pr.CheckRuns = make([]domain.CheckRun, 0)

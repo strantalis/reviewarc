@@ -39,7 +39,7 @@ func TestMigrationsAndReopen(t *testing.T) {
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&applied); err != nil {
 		t.Fatal(err)
 	}
-	if applied != 1 {
+	if applied != 2 {
 		t.Fatalf("applied migrations = %d", applied)
 	}
 }
@@ -67,6 +67,31 @@ func TestSelectionsReplaceAndPersist(t *testing.T) {
 	}
 }
 
+func TestRepositoryOwnerCacheIsScopedLimitedAndExcludesArchived(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	repositories := []domain.Repository{
+		{Ref: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "a"}},
+		{Ref: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "b"}},
+		{Ref: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "archive"}, IsArchived: true},
+		{Ref: domain.RepositoryRef{Host: "github.com", Owner: "other", Name: "c"}},
+	}
+	if err := s.UpsertRepositories(ctx, repositories); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListRepositoriesByOwner(ctx, "ACME", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Ref.Name != "a" {
+		t.Fatalf("repositories=%+v", got)
+	}
+	got, err = s.ListRepositoriesByOwner(ctx, "acme", 50)
+	if err != nil || len(got) != 2 || got[1].Ref.Name != "b" {
+		t.Fatalf("repositories=%+v error=%v", got, err)
+	}
+}
+
 func TestSessionAnalysisProgressNotesAndComments(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
@@ -88,8 +113,8 @@ func TestSessionAnalysisProgressNotesAndComments(t *testing.T) {
 	if err := s.SaveNote(ctx, note); err != nil {
 		t.Fatal(err)
 	}
-	line := 42
-	comment := domain.ReviewComment{ID: "comment-1", SessionID: session.ID, ChapterID: "flow", Kind: domain.CommentInline, Body: "Could this race?", Path: "internal/store.go", Line: &line, Side: domain.DiffSideRight, Status: domain.CommentDraft}
+	startLine, line := 39, 42
+	comment := domain.ReviewComment{ID: "comment-1", SessionID: session.ID, ChapterID: "flow", Kind: domain.CommentInline, Body: "Could this race?", Path: "internal/store.go", StartLine: &startLine, StartSide: domain.DiffSideRight, Line: &line, Side: domain.DiffSideRight, Status: domain.CommentDraft}
 	if err := s.SaveComment(ctx, comment); err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +131,7 @@ func TestSessionAnalysisProgressNotesAndComments(t *testing.T) {
 	if len(got.Notes) != 1 || got.Notes[0].Body != note.Body {
 		t.Fatalf("notes = %#v", got.Notes)
 	}
-	if len(got.Comments) != 1 || got.Comments[0].Line == nil || *got.Comments[0].Line != 42 {
+	if len(got.Comments) != 1 || got.Comments[0].StartLine == nil || *got.Comments[0].StartLine != 39 || got.Comments[0].StartSide != domain.DiffSideRight || got.Comments[0].Line == nil || *got.Comments[0].Line != 42 {
 		t.Fatalf("comments = %#v", got.Comments)
 	}
 	if err := s.SetCommentPublication(ctx, comment.ID, domain.CommentPublished, "991", "https://github.test/comment/991"); err != nil {
@@ -340,6 +365,29 @@ func TestInvalidChapterStatusRejected(t *testing.T) {
 	s := openTestStore(t)
 	if err := s.SetChapterStatus(context.Background(), "missing", "chapter", domain.ChapterStatus("done")); err == nil {
 		t.Fatal("invalid status accepted")
+	}
+}
+
+func TestRemoveRepositorySelectionsIsScopedAndCaseInsensitive(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	selections := []domain.SourceSelection{
+		{Kind: domain.SelectionRepository, Key: "Acme/Old", Enabled: true},
+		{Kind: domain.SelectionRepository, Key: "acme/active", Enabled: true},
+		{Kind: domain.SelectionOrganization, Key: "Acme", Enabled: true},
+	}
+	if err := s.ReplaceSelections(ctx, selections); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RemoveRepositorySelections(ctx, []string{"acme/old"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListSelections(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Kind != domain.SelectionOrganization || got[1].Key != "acme/active" {
+		t.Fatalf("selections=%+v", got)
 	}
 }
 

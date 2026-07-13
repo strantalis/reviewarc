@@ -5,6 +5,9 @@ script_dir="$(cd "$(dirname "$0")" && pwd)"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/reviewarc-release-test.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
 
+template_plist="$script_dir/../../build/darwin/Info.plist"
+grep -Fq '<string>com.silkcitylabs.reviewarc</string>' "$template_plist"
+
 GITHUB_OUTPUT="$tmp/metadata.out" "$script_dir/derive_metadata.sh" v0.3.0-beta.2 57
 grep -qx 'release_version=0.3.0-beta.2' "$tmp/metadata.out"
 grep -qx 'marketing_version=0.3.0' "$tmp/metadata.out"

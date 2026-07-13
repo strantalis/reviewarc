@@ -14,6 +14,10 @@ export function ConfirmPublish(arg1, arg2) {
   return window['go']['main']['App']['ConfirmPublish'](arg1, arg2);
 }
 
+export function ConfirmThreadReply(arg1, arg2) {
+  return window['go']['main']['App']['ConfirmThreadReply'](arg1, arg2);
+}
+
 export function DeleteDraftComment(arg1) {
   return window['go']['main']['App']['DeleteDraftComment'](arg1);
 }
@@ -38,6 +42,10 @@ export function GetSession(arg1) {
   return window['go']['main']['App']['GetSession'](arg1);
 }
 
+export function ListCachedOwnerRepositories(arg1) {
+  return window['go']['main']['App']['ListCachedOwnerRepositories'](arg1);
+}
+
 export function ListSources() {
   return window['go']['main']['App']['ListSources']();
 }
@@ -54,12 +62,28 @@ export function PrepareReview(arg1, arg2, arg3) {
   return window['go']['main']['App']['PrepareReview'](arg1, arg2, arg3);
 }
 
+export function PrepareThreadReply(arg1, arg2, arg3) {
+  return window['go']['main']['App']['PrepareThreadReply'](arg1, arg2, arg3);
+}
+
 export function RefreshAccount() {
   return window['go']['main']['App']['RefreshAccount']();
 }
 
 export function RefreshInbox() {
   return window['go']['main']['App']['RefreshInbox']();
+}
+
+export function RefreshOwnerRepositories(arg1) {
+  return window['go']['main']['App']['RefreshOwnerRepositories'](arg1);
+}
+
+export function RefreshSelectedRepositories() {
+  return window['go']['main']['App']['RefreshSelectedRepositories']();
+}
+
+export function RefreshSourceAccess(arg1) {
+  return window['go']['main']['App']['RefreshSourceAccess'](arg1);
 }
 
 export function SaveDraftComment(arg1) {

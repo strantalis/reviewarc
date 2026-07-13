@@ -15,6 +15,9 @@ func TestParsePatchTracksLinesAndNoNewline(t *testing.T) {
 	if len(got.Hunks) != 1 || len(got.Hunks[0].Lines) != 4 {
 		t.Fatalf("unexpected hunks: %#v", got.Hunks)
 	}
+	if got.Patch != string(patch) {
+		t.Fatal("raw validated patch was not retained for the renderer")
+	}
 	if got.Hunks[0].Lines[1].OldLine == nil || *got.Hunks[0].Lines[1].OldLine != 2 || got.Hunks[0].Lines[2].NewLine == nil || *got.Hunks[0].Lines[2].NewLine != 2 {
 		t.Fatalf("wrong line mapping: %#v", got.Hunks[0].Lines)
 	}

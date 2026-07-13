@@ -1,15 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"reviewarc/internal/dependencies"
 	"reviewarc/internal/domain"
 	githubclient "reviewarc/internal/github"
 	"reviewarc/internal/persistence"
@@ -22,7 +26,53 @@ type appFixtureRunner struct {
 	commands []proc.Command
 }
 
+type pullRequestFixtureRunner struct {
+	mu       sync.Mutex
+	metadata []byte
+	comments []byte
+	commands []proc.Command
+}
+
+func (r *pullRequestFixtureRunner) Run(_ context.Context, command proc.Command) (proc.Result, error) {
+	r.mu.Lock()
+	r.commands = append(r.commands, command)
+	r.mu.Unlock()
+	endpoint := command.Args[len(command.Args)-1]
+	if reflect.DeepEqual(command.Args, []string{"api", "--method", "POST", "repos/acme/api/pulls/7/reviews", "--input", "-"}) {
+		return proc.Result{Stdout: []byte(`{"id":991,"html_url":"https://github.com/acme/api/pull/7#pullrequestreview-991"}`)}, nil
+	}
+	if reflect.DeepEqual(command.Args, []string{"api", "--method", "POST", "repos/acme/api/pulls/7/comments/101/replies", "--input", "-"}) {
+		return proc.Result{Stdout: []byte(`{"id":202,"pull_request_review_id":11,"in_reply_to_id":101,"user":{"login":"sean"},"body":"Follow-up","path":"quota/limiter.go","line":16,"side":"RIGHT","commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","created_at":"2026-07-13T04:00:00Z","updated_at":"2026-07-13T04:00:00Z","html_url":"https://github.com/acme/api/pull/7#discussion_r202"}`)}, nil
+	}
+	switch endpoint {
+	case "repos/acme/api/pulls/7":
+		return proc.Result{Stdout: r.metadata}, nil
+	case "repos/acme/api/pulls/7/comments?per_page=100":
+		if len(r.comments) > 0 {
+			return proc.Result{Stdout: r.comments}, nil
+		}
+		return proc.Result{Stdout: []byte(`[[]]`)}, nil
+	case "repos/acme/api/commits/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/check-runs?per_page=100":
+		return proc.Result{Stdout: []byte(`[{"check_runs":[]}]`)}, nil
+	default:
+		return proc.Result{Stdout: []byte(`[[]]`)}, nil
+	}
+}
+
 type protocolRunner struct{ protocol string }
+
+type bootstrapRefreshRunner struct{ refreshed bool }
+
+func (r *bootstrapRefreshRunner) RefreshPaths() { r.refreshed = true }
+func (r *bootstrapRefreshRunner) ResolvedPath(tool proc.Tool) (string, error) {
+	return "/fixture/bin/" + string(tool), nil
+}
+func (r *bootstrapRefreshRunner) Run(_ context.Context, command proc.Command) (proc.Result, error) {
+	if len(command.Args) >= 2 && command.Args[0] == "api" && command.Args[1] == "user" {
+		return proc.Result{Stdout: []byte(`{"login":"strantalis","name":"Sean","avatar_url":""}`)}, nil
+	}
+	return proc.Result{Stdout: []byte(string(command.Tool) + " version fixture\n")}, nil
+}
 
 func (r protocolRunner) Run(_ context.Context, command proc.Command) (proc.Result, error) {
 	if !reflect.DeepEqual(command.Args, []string{"config", "get", "git_protocol", "--host", "github.com"}) {
@@ -44,7 +94,7 @@ func (f *appFixtureRunner) Run(_ context.Context, command proc.Command) (proc.Re
 	return f.results[i], err
 }
 
-func TestSelectedRepositoriesSupportsOrganizationAndRepositorySelections(t *testing.T) {
+func TestSelectedSourcesKeepOrganizationsOutOfRepositoryFanout(t *testing.T) {
 	repositories := []domain.Repository{
 		{Ref: domain.RepositoryRef{Owner: "Acme", Name: "api"}},
 		{Ref: domain.RepositoryRef{Owner: "Acme", Name: "web"}},
@@ -56,9 +106,65 @@ func TestSelectedRepositoriesSupportsOrganizationAndRepositorySelections(t *test
 		{Kind: domain.SelectionRepository, Key: "ignored/repo", Enabled: false},
 	}
 	got := selectedRepositories(repositories, selections)
-	want := []domain.RepositoryRef{repositories[0].Ref, repositories[1].Ref, repositories[2].Ref}
+	want := []domain.RepositoryRef{repositories[2].Ref}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("selected=%+v, want %+v", got, want)
+	}
+	if organizations := selectedOrganizations(selections); !reflect.DeepEqual(organizations, []string{"ACME"}) {
+		t.Fatalf("organizations=%v", organizations)
+	}
+}
+
+func TestSelectedRepositoriesExcludeArchivedCachedRows(t *testing.T) {
+	repositories := []domain.Repository{{Ref: domain.RepositoryRef{Owner: "acme", Name: "active"}}, {Ref: domain.RepositoryRef{Owner: "acme", Name: "archived"}, IsArchived: true}}
+	selections := []domain.SourceSelection{{Kind: domain.SelectionRepository, Key: "acme/active", Enabled: true}, {Kind: domain.SelectionRepository, Key: "acme/archived", Enabled: true}}
+	got := selectedRepositories(repositories, selections)
+	if len(got) != 1 || got[0].Name != "active" {
+		t.Fatalf("selected=%+v", got)
+	}
+	active := activeSourceSelections(selections, repositories)
+	if len(active) != 1 || active[0].Key != "acme/active" {
+		t.Fatalf("active selections=%+v", active)
+	}
+}
+
+func TestRefreshSelectedRepositoriesDetectsArchiveTransition(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	selection := domain.SourceSelection{Kind: domain.SelectionRepository, Key: "acme/old", Enabled: true}
+	if err := store.ReplaceSelections(ctx, []domain.SourceSelection{selection}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertRepositories(ctx, []domain.Repository{{Ref: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "old"}}}); err != nil {
+		t.Fatal(err)
+	}
+	runner := &appFixtureRunner{results: []proc.Result{{Stdout: []byte(`{"id":"R_1","name":"old","nameWithOwner":"acme/old","description":"Archived","updatedAt":"2026-07-12T00:00:00Z","isPrivate":true,"isArchived":true,"owner":{"login":"acme"}}`)}}}
+	app := &App{ctx: ctx, github: githubclient.New(runner), store: store}
+
+	refreshed, err := app.RefreshSelectedRepositories()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refreshed.Repositories) != 0 || !reflect.DeepEqual(refreshed.ArchivedKeys, []string{"acme/old"}) || len(refreshed.Errors) != 0 {
+		t.Fatalf("refresh=%+v", refreshed)
+	}
+	cached, err := store.ListRepositories(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cached) != 1 || !cached[0].IsArchived {
+		t.Fatalf("cached=%+v", cached)
+	}
+	selections, err := store.ListSelections(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selections) != 0 {
+		t.Fatalf("archived selection remained persisted: %+v", selections)
 	}
 }
 
@@ -90,6 +196,47 @@ func TestPreferredGitHubRemoteHonorsGHProtocol(t *testing.T) {
 	}
 }
 
+func TestBootstrapRefreshesDependenciesBeforeReadingGitProtocol(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	runner := &bootstrapRefreshRunner{}
+	app := &App{
+		detector: dependencies.New(runner),
+		github:   githubclient.New(runner),
+		store:    store,
+		gitProtocol: func() string {
+			if runner.refreshed {
+				return "ssh"
+			}
+			return "https"
+		},
+	}
+	state := app.Bootstrap()
+	if !runner.refreshed || state.GitProtocol != "ssh" {
+		t.Fatalf("refreshed=%v protocol=%q, want refreshed SSH state", runner.refreshed, state.GitProtocol)
+	}
+}
+
+func TestApplicationOptionsKeepNativeWindowShapeWithCustomControls(t *testing.T) {
+	configured := applicationOptions(&App{})
+	if configured.Frameless {
+		t.Fatal("a titled native window is required for macOS rounded corners")
+	}
+	if configured.Mac == nil || configured.Mac.TitleBar == nil {
+		t.Fatal("custom controls require a hidden native title bar")
+	}
+	titleBar := configured.Mac.TitleBar
+	if titleBar.HideTitleBar || !titleBar.HideTitle || !titleBar.FullSizeContent || !titleBar.TitlebarAppearsTransparent {
+		t.Fatalf("title bar must preserve the native window shape with full-size content: %+v", titleBar)
+	}
+	if configured.OnDomReady == nil {
+		t.Fatal("native AppKit controls must be hidden after the window is ready")
+	}
+}
+
 func TestAnalysisStatusAfterCancellationPreservesPreviousWalkthrough(t *testing.T) {
 	if got := analysisStatusAfterCancellation(domain.ReviewSession{}); got != domain.AnalysisNotStarted {
 		t.Fatalf("new analysis cancellation status=%q", got)
@@ -118,11 +265,30 @@ func TestAnalysisWasCancelledRecognizesContextAndWrappedError(t *testing.T) {
 	}
 }
 
+func TestCollectAnalysisDiffFailsClosedWhenAnyChangedFileCannotLoad(t *testing.T) {
+	files := []domain.ChangedFile{{Path: "first.go"}, {Path: "missing.go"}, {Path: "never.go"}}
+	loaded := 0
+	got, err := collectAnalysisDiff(files, func(file domain.ChangedFile) (domain.DiffFile, error) {
+		loaded++
+		if file.Path == "missing.go" {
+			return domain.DiffFile{}, errors.New("object unavailable")
+		}
+		return domain.DiffFile{File: file}, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "missing.go") {
+		t.Fatalf("error=%v, want changed file context", err)
+	}
+	if got != "" || loaded != 2 {
+		t.Fatalf("diff=%q loaded=%d, want no partial analysis input", got, loaded)
+	}
+}
+
 func TestBuildReviewPayloadSeparatesGeneralAndInlineComments(t *testing.T) {
+	startLine := 24
 	line := 27
 	payload := buildReviewPayload(PublishPreview{HeadSHA: "head", Items: []PublishItem{
 		{Kind: domain.CommentGeneral, Body: "First general note"},
-		{Kind: domain.CommentInline, Body: "Check this branch", Path: "internal/store.go", Line: &line, Side: domain.DiffSideRight},
+		{Kind: domain.CommentInline, Body: "Check this branch", Path: "internal/store.go", StartLine: &startLine, StartSide: domain.DiffSideRight, Line: &line, Side: domain.DiffSideRight},
 		{Kind: domain.CommentGeneral, Body: "Second general note"},
 	}})
 	var got struct {
@@ -130,10 +296,12 @@ func TestBuildReviewPayloadSeparatesGeneralAndInlineComments(t *testing.T) {
 		Body     string `json:"body"`
 		Event    string `json:"event"`
 		Comments []struct {
-			Path string          `json:"path"`
-			Line int             `json:"line"`
-			Side domain.DiffSide `json:"side"`
-			Body string          `json:"body"`
+			Path      string          `json:"path"`
+			StartLine int             `json:"start_line"`
+			StartSide domain.DiffSide `json:"start_side"`
+			Line      int             `json:"line"`
+			Side      domain.DiffSide `json:"side"`
+			Body      string          `json:"body"`
 		} `json:"comments"`
 	}
 	if err := json.Unmarshal(payload, &got); err != nil {
@@ -142,8 +310,41 @@ func TestBuildReviewPayloadSeparatesGeneralAndInlineComments(t *testing.T) {
 	if got.CommitID != "head" || got.Body != "First general note\n\nSecond general note" || got.Event != "COMMENT" || len(got.Comments) != 1 {
 		t.Fatalf("payload=%s", payload)
 	}
-	if got.Comments[0].Path != "internal/store.go" || got.Comments[0].Line != line || got.Comments[0].Side != domain.DiffSideRight {
+	if got.Comments[0].Path != "internal/store.go" || got.Comments[0].StartLine != startLine || got.Comments[0].StartSide != domain.DiffSideRight || got.Comments[0].Line != line || got.Comments[0].Side != domain.DiffSideRight {
 		t.Fatalf("inline=%+v", got.Comments[0])
+	}
+}
+
+func TestValidateInlineDiffAcceptsOnlyPresentOrderedRanges(t *testing.T) {
+	old4, old5, new4, new5 := 4, 5, 4, 5
+	diff := domain.DiffFile{Hunks: []domain.DiffHunk{
+		{Lines: []domain.DiffLine{
+			{Kind: domain.DiffContext, OldLine: &old4, NewLine: &new4},
+			{Kind: domain.DiffDelete, OldLine: &old5},
+			{Kind: domain.DiffAdd, NewLine: &new5},
+		}},
+	}}
+	start, end := 4, 5
+	if err := validateInlineDiff(diff, &start, domain.DiffSideRight, &end, domain.DiffSideRight); err != nil {
+		t.Fatalf("valid range rejected: %v", err)
+	}
+	missing := 3
+	if err := validateInlineDiff(diff, &missing, domain.DiffSideRight, &end, domain.DiffSideRight); err == nil || !strings.Contains(err.Error(), "start") {
+		t.Fatalf("missing start error = %v", err)
+	}
+	reversedStart, reversedEnd := 5, 4
+	normalized, err := normalizeInlineDiff(diff, &reversedStart, domain.DiffSideRight, &reversedEnd, domain.DiffSideRight)
+	if err != nil || normalized.StartLine == nil || *normalized.StartLine != 4 || normalized.Line == nil || *normalized.Line != 5 {
+		t.Fatalf("same-side reverse normalization = %+v, %v", normalized, err)
+	}
+	crossStart, crossEnd := 5, 5
+	normalized, err = normalizeInlineDiff(diff, &crossStart, domain.DiffSideRight, &crossEnd, domain.DiffSideLeft)
+	if err != nil || normalized.StartLine == nil || *normalized.StartLine != 5 || normalized.StartSide != domain.DiffSideLeft || normalized.Line == nil || *normalized.Line != 5 || normalized.Side != domain.DiffSideRight {
+		t.Fatalf("cross-side reverse normalization = %+v, %v", normalized, err)
+	}
+	payload := buildReviewPayload(PublishPreview{HeadSHA: "head", Items: []PublishItem{{Kind: domain.CommentInline, Body: "replacement", Path: "file.go", StartLine: normalized.StartLine, StartSide: normalized.StartSide, Line: normalized.Line, Side: normalized.Side}}})
+	if !bytes.Contains(payload, []byte(`"start_line":5,"start_side":"LEFT","line":5,"side":"RIGHT"`)) {
+		t.Fatalf("normalized cross-side payload = %s", payload)
 	}
 }
 
@@ -198,15 +399,7 @@ func TestPublishRequiresMatchingConfirmationAndUsesFixtureBackedGitHubFlow(t *te
 		t.Fatal(err)
 	}
 	metadata := `{"number":7,"title":"Fixture PR","html_url":"https://github.com/acme/api/pull/7","updated_at":"2026-07-11T12:00:00Z","user":{"login":"author"},"base":{"ref":"main","sha":"` + baseSHA + `","repo":{"name":"api","clone_url":"https://github.com/acme/api.git","owner":{"login":"acme"}}},"head":{"ref":"feature","sha":"` + headSHA + `","repo":{"name":"api","clone_url":"https://github.com/acme/api.git","owner":{"login":"acme"}}}}`
-	runner := &appFixtureRunner{results: []proc.Result{
-		{Stdout: []byte(metadata)},
-		{Stdout: []byte(`[[]]`)},
-		{Stdout: []byte(`[[]]`)},
-		{Stdout: []byte(`[[]]`)},
-		{Stdout: []byte(`[[]]`)},
-		{Stdout: []byte(`[{"check_runs":[]}]`)},
-		{Stdout: []byte(`{"id":991,"html_url":"https://github.com/acme/api/pull/7#pullrequestreview-991"}`)},
-	}}
+	runner := &pullRequestFixtureRunner{metadata: []byte(metadata)}
 	app := &App{ctx: ctx, github: githubclient.New(runner), store: store, publish: map[string]pendingPublish{}}
 
 	preview, err := app.PreparePublish(session.ID, []string{draft.ID})
@@ -237,7 +430,13 @@ func TestPublishRequiresMatchingConfirmationAndUsesFixtureBackedGitHubFlow(t *te
 	if len(runner.commands) != 7 {
 		t.Fatalf("commands=%d, want detail metadata, commits, files, reviews, comments, checks, and publish", len(runner.commands))
 	}
-	publishCommand := runner.commands[6]
+	var publishCommand proc.Command
+	for _, command := range runner.commands {
+		if reflect.DeepEqual(command.Args, []string{"api", "--method", "POST", "repos/acme/api/pulls/7/reviews", "--input", "-"}) {
+			publishCommand = command
+			break
+		}
+	}
 	if publishCommand.Tool != proc.GH || !reflect.DeepEqual(publishCommand.Args, []string{"api", "--method", "POST", "repos/acme/api/pulls/7/reviews", "--input", "-"}) {
 		t.Fatalf("publish command=%+v", publishCommand)
 	}
@@ -271,5 +470,63 @@ func TestExpiredPublishPreviewIsRejectedWithoutGitHubCall(t *testing.T) {
 	}
 	if len(runner.commands) != 0 {
 		t.Fatalf("GitHub called for expired confirmation: %+v", runner.commands)
+	}
+}
+
+func TestThreadReplyRequiresConfirmationNormalizesRootAndPublishes(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	ref := domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}
+	baseSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	headSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	line := 16
+	root := domain.PullRequestReviewComment{ID: 101, Author: domain.GitHubUser{Login: "alice"}, Body: "Root", Path: "quota/limiter.go", Line: &line, Side: domain.DiffSideRight}
+	existingReply := domain.PullRequestReviewComment{ID: 102, ReplyToID: 101, Author: domain.GitHubUser{Login: "bob"}, Body: "Existing reply", Path: root.Path, Line: root.Line, Side: root.Side}
+	pr := domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: ref, Number: 7}, Title: "Fixture PR"}, BaseSHA: baseSHA, HeadSHA: headSHA, BaseRef: "main", HeadRef: "feature", HeadRepository: ref, ReviewComments: []domain.PullRequestReviewComment{root, existingReply}}
+	session := domain.ReviewSession{ID: "session-reply", PullRequest: pr, BaseSHA: baseSHA, HeadSHA: headSHA, Status: domain.SessionReady, AnalysisStatus: domain.AnalysisReady}
+	if err := store.SaveSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	metadata := `{"number":7,"title":"Fixture PR","html_url":"https://github.com/acme/api/pull/7","updated_at":"2026-07-13T04:00:00Z","user":{"login":"author"},"base":{"ref":"main","sha":"` + baseSHA + `","repo":{"name":"api","owner":{"login":"acme"}}},"head":{"ref":"feature","sha":"` + headSHA + `","repo":{"name":"api","owner":{"login":"acme"}}}}`
+	comments := []byte(`[[{"id":101,"pull_request_review_id":11,"user":{"login":"alice"},"body":"Root","path":"quota/limiter.go","line":16,"side":"RIGHT","commit_id":"` + headSHA + `","created_at":"2026-07-13T03:00:00Z","updated_at":"2026-07-13T03:00:00Z","html_url":"https://github.com/acme/api/pull/7#discussion_r101"}]]`)
+	runner := &pullRequestFixtureRunner{metadata: []byte(metadata), comments: comments}
+	app := &App{ctx: ctx, github: githubclient.New(runner), store: store, threadReplies: map[string]pendingThreadReply{}}
+
+	preview, err := app.PrepareThreadReply(session.ID, existingReply.ID, "Follow-up")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.RootCommentID != root.ID || preview.RootAuthor != "alice" || preview.Body != "Follow-up" {
+		t.Fatalf("preview=%+v", preview)
+	}
+	if _, err := app.ConfirmThreadReply(preview.Token, "wrong"); err == nil {
+		t.Fatal("reply accepted a mismatched confirmation digest")
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("GitHub called before valid confirmation: %+v", runner.commands)
+	}
+	preview, err = app.PrepareThreadReply(session.ID, root.ID, "Follow-up")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply, err := app.ConfirmThreadReply(preview.Token, preview.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.ID != 202 || reply.ReplyToID != root.ID || reply.Body != "Follow-up" {
+		t.Fatalf("reply=%+v", reply)
+	}
+	var publish proc.Command
+	for _, command := range runner.commands {
+		if reflect.DeepEqual(command.Args, []string{"api", "--method", "POST", "repos/acme/api/pulls/7/comments/101/replies", "--input", "-"}) {
+			publish = command
+		}
+	}
+	if publish.Tool != proc.GH || string(publish.Stdin) != `{"body":"Follow-up"}` {
+		t.Fatalf("publish=%+v", publish)
 	}
 }

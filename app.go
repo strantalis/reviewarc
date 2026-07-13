@@ -36,6 +36,22 @@ type SourceState struct {
 	Repositories  []domain.Repository      `json:"repositories"`
 	Selections    []domain.SourceSelection `json:"selections"`
 }
+type RepositoryPage struct {
+	Items       []domain.Repository `json:"items"`
+	TotalCount  int                 `json:"totalCount"`
+	EndCursor   string              `json:"endCursor,omitempty"`
+	HasNextPage bool                `json:"hasNextPage"`
+	Cached      bool                `json:"cached"`
+}
+type RepositoryPageInput struct {
+	Owner  string `json:"owner"`
+	Cursor string `json:"cursor"`
+}
+type SelectedRepositoryRefresh struct {
+	Repositories []domain.Repository `json:"repositories"`
+	ArchivedKeys []string            `json:"archivedKeys"`
+	Errors       map[string]string   `json:"errors"`
+}
 type InboxState struct {
 	Items   []domain.PullRequestSummary `json:"items"`
 	Errors  map[string]string           `json:"errors"`
@@ -62,16 +78,20 @@ type CommentInput struct {
 	Kind      domain.CommentKind `json:"kind"`
 	Body      string             `json:"body"`
 	Path      string             `json:"path"`
+	StartLine *int               `json:"startLine"`
+	StartSide domain.DiffSide    `json:"startSide"`
 	Line      *int               `json:"line"`
 	Side      domain.DiffSide    `json:"side"`
 }
 type PublishItem struct {
-	DraftID string             `json:"draftId"`
-	Kind    domain.CommentKind `json:"kind"`
-	Body    string             `json:"body"`
-	Path    string             `json:"path,omitempty"`
-	Line    *int               `json:"line,omitempty"`
-	Side    domain.DiffSide    `json:"side,omitempty"`
+	DraftID   string             `json:"draftId"`
+	Kind      domain.CommentKind `json:"kind"`
+	Body      string             `json:"body"`
+	Path      string             `json:"path,omitempty"`
+	StartLine *int               `json:"startLine,omitempty"`
+	StartSide domain.DiffSide    `json:"startSide,omitempty"`
+	Line      *int               `json:"line,omitempty"`
+	Side      domain.DiffSide    `json:"side,omitempty"`
 }
 type PublishPreview struct {
 	Token      string        `json:"token"`
@@ -83,6 +103,18 @@ type PublishPreview struct {
 	Event      string        `json:"event"`
 	ExpiresAt  time.Time     `json:"expiresAt"`
 }
+type ThreadReplyPreview struct {
+	Token         string    `json:"token"`
+	Digest        string    `json:"digest"`
+	Repository    string    `json:"repository"`
+	Number        int       `json:"number"`
+	HeadSHA       string    `json:"headSha"`
+	RootCommentID int64     `json:"rootCommentId"`
+	RootAuthor    string    `json:"rootAuthor"`
+	Path          string    `json:"path"`
+	Body          string    `json:"body"`
+	ExpiresAt     time.Time `json:"expiresAt"`
+}
 
 type preparedState struct {
 	repository gitcache.ManagedRepository
@@ -91,6 +123,11 @@ type preparedState struct {
 type pendingPublish struct {
 	preview PublishPreview
 	ref     domain.PullRequestRef
+}
+type pendingThreadReply struct {
+	preview   ThreadReplyPreview
+	ref       domain.PullRequestRef
+	sessionID string
 }
 
 type App struct {
@@ -106,6 +143,7 @@ type App struct {
 	active            map[string]context.CancelFunc
 	analysisBySession map[string]string
 	publish           map[string]pendingPublish
+	threadReplies     map[string]pendingThreadReply
 	gitProtocol       func() string
 }
 
@@ -125,7 +163,7 @@ func NewApp() (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	return &App{paths: paths, detector: dependencies.New(runner), github: githubclient.New(runner), store: store, repos: gitcache.NewManager(paths.Repositories, paths.Worktrees, runner, gitcache.Options{RemoteURL: remoteURL}), agent: codex.New(runner, codex.Config{}), prepared: map[string]preparedState{}, active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}, publish: map[string]pendingPublish{}, gitProtocol: gitProtocol}, nil
+	return &App{paths: paths, detector: dependencies.New(runner), github: githubclient.New(runner), store: store, repos: gitcache.NewManager(paths.Repositories, paths.Worktrees, runner, gitcache.Options{RemoteURL: remoteURL}), agent: codex.New(runner, codex.Config{}), prepared: map[string]preparedState{}, active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}, publish: map[string]pendingPublish{}, threadReplies: map[string]pendingThreadReply{}, gitProtocol: gitProtocol}, nil
 }
 
 func githubGitProtocol(runner proc.Runner) string {
@@ -163,6 +201,9 @@ func (a *App) appContext() context.Context {
 func (a *App) Bootstrap() domain.BootstrapState {
 	ctx := a.appContext()
 	selections, _ := a.store.ListSelections(ctx)
+	if repositories, err := a.store.ListRepositories(ctx); err == nil {
+		selections = activeSourceSelections(selections, repositories)
+	}
 	if selections == nil {
 		selections = []domain.SourceSelection{}
 	}
@@ -185,11 +226,12 @@ func (a *App) Bootstrap() domain.BootstrapState {
 		inbox = append(inbox, item)
 	}
 	sortInbox(inbox)
+	dependencyState := a.detector.Detect(ctx)
 	protocol := "https"
 	if a.gitProtocol != nil {
 		protocol = a.gitProtocol()
 	}
-	state := domain.BootstrapState{Dependencies: a.detector.Detect(ctx), Paths: a.paths, Selections: selections, Inbox: inbox, GitProtocol: protocol}
+	state := domain.BootstrapState{Dependencies: dependencyState, Paths: a.paths, Selections: selections, Inbox: inbox, GitProtocol: protocol}
 	if user, err := a.github.CurrentUser(ctx); err == nil {
 		state.Account = &user
 	}
@@ -212,16 +254,18 @@ func (a *App) ListSources() (SourceState, error) {
 	if err != nil {
 		return SourceState{}, err
 	}
-	repos, err := a.github.ListRepositories(ctx, githubclient.RepositoryQuery{})
+	for i := range orgs {
+		orgs[i].AccessStatus = githubclient.OrganizationAccessUnknown
+	}
+	selections, err := a.store.ListSelections(ctx)
 	if err != nil {
 		return SourceState{}, err
 	}
-	for _, repo := range repos {
-		if err := a.store.UpsertRepository(ctx, repo); err != nil {
-			return SourceState{}, err
-		}
+	cached, err := a.store.ListRepositories(ctx)
+	if err != nil {
+		return SourceState{}, err
 	}
-	selections, _ := a.store.ListSelections(ctx)
+	repos := explicitlySelectedRepositories(cached, selections)
 	if orgs == nil {
 		orgs = []domain.Organization{}
 	}
@@ -232,6 +276,41 @@ func (a *App) ListSources() (SourceState, error) {
 		selections = []domain.SourceSelection{}
 	}
 	return SourceState{Organizations: orgs, Repositories: repos, Selections: selections}, nil
+}
+func (a *App) RefreshSourceAccess(organizations []domain.Organization) []domain.Organization {
+	return a.github.CheckOrganizationAccess(a.appContext(), organizations)
+}
+func (a *App) RefreshSelectedRepositories() (SelectedRepositoryRefresh, error) {
+	ctx := a.appContext()
+	selections, err := a.store.ListSelections(ctx)
+	if err != nil {
+		return SelectedRepositoryRefresh{}, err
+	}
+	repositories, archived, refreshErrors := a.refreshExplicitRepositories(ctx, selections)
+	return SelectedRepositoryRefresh{Repositories: repositories, ArchivedKeys: archived, Errors: refreshErrors}, nil
+}
+func (a *App) ListCachedOwnerRepositories(owner string) (RepositoryPage, error) {
+	if !validSourceOwner(owner) {
+		return RepositoryPage{}, errors.New("invalid repository owner")
+	}
+	items, err := a.store.ListRepositoriesByOwner(a.appContext(), owner, 50)
+	if err != nil {
+		return RepositoryPage{}, err
+	}
+	if items == nil {
+		items = []domain.Repository{}
+	}
+	return RepositoryPage{Items: items, TotalCount: len(items), Cached: true}, nil
+}
+func (a *App) RefreshOwnerRepositories(input RepositoryPageInput) (RepositoryPage, error) {
+	page, err := a.github.ListOwnerRepositories(a.appContext(), githubclient.RepositoryPageQuery{Owner: input.Owner, Cursor: input.Cursor, PageSize: 50})
+	if err != nil {
+		return RepositoryPage{}, err
+	}
+	if err := a.store.UpsertRepositories(a.appContext(), page.Items); err != nil {
+		return RepositoryPage{}, err
+	}
+	return RepositoryPage{Items: page.Items, TotalCount: page.TotalCount, EndCursor: page.EndCursor, HasNextPage: page.HasNextPage}, nil
 }
 func (a *App) SaveSelections(selections []domain.SourceSelection) error {
 	for _, s := range selections {
@@ -250,20 +329,21 @@ func (a *App) RefreshInbox() (InboxState, error) {
 	if account.User == nil {
 		return InboxState{}, errors.New(account.Message)
 	}
-	repositories, err := a.store.ListRepositories(ctx)
-	if err != nil || len(repositories) == 0 {
-		sources, e := a.ListSources()
-		if e != nil {
-			return InboxState{}, e
-		}
-		repositories = sources.Repositories
-	}
 	selections, err := a.store.ListSelections(ctx)
 	if err != nil {
 		return InboxState{}, err
 	}
-	selected := selectedRepositories(repositories, selections)
-	result := a.github.ListPullRequests(ctx, githubclient.PullRequestQuery{Repositories: selected, CurrentLogin: account.User.Login})
+	selectedRepositories, _, repositoryErrors := a.refreshExplicitRepositories(ctx, selections)
+	selected := make([]domain.RepositoryRef, 0, len(selectedRepositories))
+	for _, repository := range selectedRepositories {
+		selected = append(selected, repository.Ref)
+	}
+	organizations := selectedOrganizations(selections)
+	result := a.github.ListPullRequests(ctx, githubclient.PullRequestQuery{Repositories: selected, Organizations: organizations, CurrentLogin: account.User.Login})
+	for key, message := range repositoryErrors {
+		result.Errors[key] = message
+		result.Partial = true
+	}
 	for i := range result.Items {
 		item := &result.Items[i]
 		if item.BaseSHA != "" && item.HeadSHA != "" {
@@ -282,6 +362,51 @@ func (a *App) RefreshInbox() (InboxState, error) {
 		}
 	}
 	return InboxState{Items: result.Items, Errors: result.Errors, Partial: result.Partial}, nil
+}
+
+func (a *App) refreshExplicitRepositories(ctx context.Context, selections []domain.SourceSelection) ([]domain.Repository, []string, map[string]string) {
+	repositories := []domain.Repository{}
+	archived := []string{}
+	refreshErrors := map[string]string{}
+	seen := map[string]bool{}
+	all := []domain.Repository{}
+	for _, selection := range selections {
+		if !selection.Enabled || selection.Kind != domain.SelectionRepository {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(selection.Key))
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		owner, name, found := strings.Cut(selection.Key, "/")
+		if !found || !validSourceOwner(owner) || !validSourceRepositoryName(name) {
+			refreshErrors["repository:"+selection.Key] = "Invalid repository selection"
+			continue
+		}
+		repository, err := a.github.GetRepository(ctx, domain.RepositoryRef{Host: "github.com", Owner: owner, Name: name})
+		if err != nil {
+			refreshErrors["repository:"+selection.Key] = safeMessage(err)
+			continue
+		}
+		all = append(all, repository)
+		if repository.IsArchived {
+			archived = append(archived, selection.Key)
+			continue
+		}
+		repositories = append(repositories, repository)
+	}
+	if len(all) > 0 {
+		if err := a.store.UpsertRepositories(ctx, all); err != nil {
+			refreshErrors["persistence"] = safeMessage(err)
+		}
+	}
+	if len(archived) > 0 {
+		if err := a.store.RemoveRepositorySelections(ctx, archived); err != nil {
+			refreshErrors["persistence"] = safeMessage(err)
+		}
+	}
+	return repositories, archived, refreshErrors
 }
 func (a *App) OpenPullRequest(ref domain.PullRequestRef) (domain.ReviewSession, error) {
 	ctx := a.appContext()
@@ -316,6 +441,7 @@ func (a *App) OpenPullRequest(ref domain.PullRequestRef) (domain.ReviewSession, 
 	}
 	_, _ = a.store.MarkStaleIfChanged(ctx, pr.Ref, pr.BaseSHA, pr.HeadSHA)
 	session, err := a.store.LatestSessionForPullRequest(ctx, pr.Ref)
+	revisionChanged := false
 	if err != nil {
 		now := time.Now().UTC()
 		session = domain.ReviewSession{ID: newID(), PullRequest: pr, BaseSHA: pr.BaseSHA, HeadSHA: pr.HeadSHA, Status: domain.SessionPreparing, AnalysisStatus: domain.AnalysisNotStarted, CreatedAt: now, UpdatedAt: now}
@@ -323,6 +449,7 @@ func (a *App) OpenPullRequest(ref domain.PullRequestRef) (domain.ReviewSession, 
 			return domain.ReviewSession{}, err
 		}
 	} else if session.HeadSHA != pr.HeadSHA || session.BaseSHA != pr.BaseSHA {
+		revisionChanged = true
 		session.PullRequest, session.BaseSHA, session.HeadSHA = pr, pr.BaseSHA, pr.HeadSHA
 		session.IsStale, session.AnalysisStatus, session.Status = true, domain.AnalysisStale, domain.SessionPreparing
 		session.StaleReason = "Pull request revisions changed; existing notes, drafts, and progress were preserved."
@@ -331,23 +458,20 @@ func (a *App) OpenPullRequest(ref domain.PullRequestRef) (domain.ReviewSession, 
 			return domain.ReviewSession{}, err
 		}
 	}
-	prepared, files, err := a.prepare(ctx, session)
-	if err != nil {
-		session.Status = domain.SessionFailed
-		session.UpdatedAt = time.Now().UTC()
-		_ = a.store.SaveSession(ctx, session)
-		return session, err
-	}
 	session.PullRequest = pr
-	session.Status = domain.SessionReady
 	session = normalizeSession(session)
 	session.UpdatedAt = time.Now().UTC()
-	if err := a.store.SaveSession(ctx, session); err != nil {
+	if revisionChanged {
+		a.mu.Lock()
+		if err := a.store.SaveSession(ctx, session); err != nil {
+			a.mu.Unlock()
+			return domain.ReviewSession{}, err
+		}
+		delete(a.prepared, session.ID)
+		a.mu.Unlock()
+	} else if err := a.store.SaveSession(ctx, session); err != nil {
 		return domain.ReviewSession{}, err
 	}
-	a.mu.Lock()
-	a.prepared[session.ID] = preparedState{prepared, files}
-	a.mu.Unlock()
 	return a.GetSession(session.ID)
 }
 func (a *App) GetSession(id string) (domain.ReviewSession, error) {
@@ -381,10 +505,6 @@ func (a *App) GetFile(sessionID, path string, revision domain.Revision) (domain.
 	return a.repos.ReadFile(a.appContext(), state.repository, revision, path)
 }
 func (a *App) StartAnalysis(sessionID string) (Operation, error) {
-	state, err := a.ensurePrepared(sessionID)
-	if err != nil {
-		return Operation{}, err
-	}
 	session, err := a.store.GetSession(a.appContext(), sessionID)
 	if err != nil {
 		return Operation{}, err
@@ -411,7 +531,7 @@ func (a *App) StartAnalysis(sessionID string) (Operation, error) {
 		return Operation{}, err
 	}
 	a.emitOperation(op)
-	go a.runAnalysis(ctx, op, session, state)
+	go a.prepareAndRunAnalysis(ctx, op, session)
 	return op, nil
 }
 func (a *App) CancelOperation(id string) error {
@@ -454,15 +574,17 @@ func (a *App) SaveDraftComment(input CommentInput) (domain.ReviewComment, error)
 		return domain.ReviewComment{}, errors.New("invalid comment kind")
 	}
 	if input.Kind == domain.CommentInline {
-		if err := a.validateInline(input.SessionID, input.Path, input.Line, input.Side); err != nil {
+		normalized, err := a.normalizeInline(input.SessionID, input.Path, input.StartLine, input.StartSide, input.Line, input.Side)
+		if err != nil {
 			return domain.ReviewComment{}, err
 		}
+		input.StartLine, input.StartSide, input.Line, input.Side = normalized.StartLine, normalized.StartSide, normalized.Line, normalized.Side
 	}
 	now := time.Now().UTC()
 	if input.ID == "" {
 		input.ID = newID()
 	}
-	comment := domain.ReviewComment{ID: input.ID, SessionID: input.SessionID, ChapterID: input.ChapterID, Kind: input.Kind, Body: input.Body, Path: input.Path, Line: input.Line, Side: input.Side, Status: domain.CommentDraft, CreatedAt: now, UpdatedAt: now}
+	comment := domain.ReviewComment{ID: input.ID, SessionID: input.SessionID, ChapterID: input.ChapterID, Kind: input.Kind, Body: input.Body, Path: input.Path, StartLine: input.StartLine, StartSide: input.StartSide, Line: input.Line, Side: input.Side, Status: domain.CommentDraft, CreatedAt: now, UpdatedAt: now}
 	if err := a.store.SaveComment(a.appContext(), comment); err != nil {
 		return domain.ReviewComment{}, err
 	}
@@ -491,11 +613,13 @@ func (a *App) PrepareReview(sessionID string, draftIDs []string, event string) (
 			continue
 		}
 		if draft.Kind == domain.CommentInline {
-			if err := a.validateInline(sessionID, draft.Path, draft.Line, draft.Side); err != nil {
+			normalized, err := a.normalizeInline(sessionID, draft.Path, draft.StartLine, draft.StartSide, draft.Line, draft.Side)
+			if err != nil {
 				return PublishPreview{}, err
 			}
+			draft.StartLine, draft.StartSide, draft.Line, draft.Side = normalized.StartLine, normalized.StartSide, normalized.Line, normalized.Side
 		}
-		items = append(items, PublishItem{draft.ID, draft.Kind, draft.Body, draft.Path, draft.Line, draft.Side})
+		items = append(items, PublishItem{DraftID: draft.ID, Kind: draft.Kind, Body: draft.Body, Path: draft.Path, StartLine: draft.StartLine, StartSide: draft.StartSide, Line: draft.Line, Side: draft.Side})
 	}
 	if len(items) != len(wanted) || (event == "COMMENT" && len(items) == 0) {
 		return PublishPreview{}, errors.New("one or more draft comments are unavailable")
@@ -559,9 +683,93 @@ func (a *App) ConfirmPublish(token, digest string) ([]domain.ReviewComment, erro
 		if err := a.store.SetCommentPublication(a.appContext(), item.DraftID, domain.CommentPublished, id, published.HTMLURL); err != nil {
 			return nil, err
 		}
-		out = append(out, domain.ReviewComment{ID: item.DraftID, Kind: item.Kind, Body: item.Body, Path: item.Path, Line: item.Line, Side: item.Side, Status: domain.CommentPublished, GitHubID: id, GitHubURL: published.HTMLURL})
+		out = append(out, domain.ReviewComment{ID: item.DraftID, Kind: item.Kind, Body: item.Body, Path: item.Path, StartLine: item.StartLine, StartSide: item.StartSide, Line: item.Line, Side: item.Side, Status: domain.CommentPublished, GitHubID: id, GitHubURL: published.HTMLURL})
 	}
 	return out, nil
+}
+
+func (a *App) PrepareThreadReply(sessionID string, targetCommentID int64, body string) (ThreadReplyPreview, error) {
+	if targetCommentID <= 0 || strings.TrimSpace(body) == "" || len(body) > 65536 {
+		return ThreadReplyPreview{}, errors.New("reply must contain 1 to 65,536 characters")
+	}
+	session, err := a.store.GetSession(a.appContext(), sessionID)
+	if err != nil {
+		return ThreadReplyPreview{}, err
+	}
+	var target *domain.PullRequestReviewComment
+	for i := range session.PullRequest.ReviewComments {
+		if session.PullRequest.ReviewComments[i].ID == targetCommentID {
+			target = &session.PullRequest.ReviewComments[i]
+			break
+		}
+	}
+	if target == nil {
+		return ThreadReplyPreview{}, errors.New("review thread is no longer available")
+	}
+	rootID := target.ID
+	if target.ReplyToID > 0 {
+		rootID = target.ReplyToID
+	}
+	var root *domain.PullRequestReviewComment
+	for i := range session.PullRequest.ReviewComments {
+		comment := &session.PullRequest.ReviewComments[i]
+		if comment.ID == rootID && comment.ReplyToID == 0 {
+			root = comment
+			break
+		}
+	}
+	if root == nil {
+		return ThreadReplyPreview{}, errors.New("review thread root is no longer available")
+	}
+	preview := ThreadReplyPreview{
+		Token: newID(), Repository: session.PullRequest.Ref.Repository.Owner + "/" + session.PullRequest.Ref.Repository.Name,
+		Number: session.PullRequest.Ref.Number, HeadSHA: session.HeadSHA, RootCommentID: root.ID, RootAuthor: root.Author.Login,
+		Path: root.Path, Body: body, ExpiresAt: time.Now().UTC().Add(5 * time.Minute),
+	}
+	payload, _ := json.Marshal(struct {
+		Repository    string
+		Number        int
+		HeadSHA       string
+		RootCommentID int64
+		Body          string
+	}{preview.Repository, preview.Number, preview.HeadSHA, preview.RootCommentID, preview.Body})
+	sum := sha256.Sum256(payload)
+	preview.Digest = hex.EncodeToString(sum[:])
+	a.mu.Lock()
+	if a.threadReplies == nil {
+		a.threadReplies = map[string]pendingThreadReply{}
+	}
+	a.threadReplies[preview.Token] = pendingThreadReply{preview: preview, ref: session.PullRequest.Ref, sessionID: session.ID}
+	a.mu.Unlock()
+	return preview, nil
+}
+
+func (a *App) ConfirmThreadReply(token, digest string) (domain.PullRequestReviewComment, error) {
+	a.mu.Lock()
+	pending, ok := a.threadReplies[token]
+	delete(a.threadReplies, token)
+	a.mu.Unlock()
+	if !ok || pending.preview.Digest != digest || time.Now().After(pending.preview.ExpiresAt) {
+		return domain.PullRequestReviewComment{}, errors.New("reply confirmation is invalid or expired")
+	}
+	current, err := a.github.GetPullRequest(a.appContext(), pending.ref)
+	if err != nil {
+		return domain.PullRequestReviewComment{}, err
+	}
+	if current.PullRequest.HeadSHA != pending.preview.HeadSHA {
+		return domain.PullRequestReviewComment{}, errors.New("pull request changed; refresh before replying")
+	}
+	found := false
+	for _, comment := range current.PullRequest.ReviewComments {
+		if comment.ID == pending.preview.RootCommentID && comment.ReplyToID == 0 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return domain.PullRequestReviewComment{}, errors.New("review thread is no longer available")
+	}
+	return a.github.ReplyToReviewComment(a.appContext(), pending.ref, pending.preview.RootCommentID, pending.preview.Body)
 }
 
 func (a *App) prepare(ctx context.Context, session domain.ReviewSession) (gitcache.ManagedRepository, []domain.ChangedFile, error) {
@@ -574,25 +782,74 @@ func (a *App) prepare(ctx context.Context, session domain.ReviewSession) (gitcac
 	return prepared, files, err
 }
 func (a *App) ensurePrepared(sessionID string) (preparedState, error) {
+	return a.ensurePreparedContext(a.appContext(), sessionID)
+}
+func (a *App) ensurePreparedContext(ctx context.Context, sessionID string) (preparedState, error) {
 	a.mu.RLock()
 	state, ok := a.prepared[sessionID]
 	a.mu.RUnlock()
 	if ok {
 		return state, nil
 	}
-	session, err := a.store.GetSession(a.appContext(), sessionID)
-	if err != nil {
-		return state, err
+	for attempt := 0; attempt < 2; attempt++ {
+		session, err := a.store.GetSession(ctx, sessionID)
+		if err != nil {
+			return state, err
+		}
+		repo, files, err := a.prepare(ctx, session)
+		if err != nil {
+			return state, err
+		}
+		state = preparedState{repo, files}
+		a.mu.Lock()
+		current, err := a.store.GetSession(ctx, sessionID)
+		if err != nil {
+			a.mu.Unlock()
+			return preparedState{}, err
+		}
+		if current.BaseSHA != session.BaseSHA || current.HeadSHA != session.HeadSHA {
+			a.mu.Unlock()
+			continue
+		}
+		current.Status = domain.SessionReady
+		current.UpdatedAt = time.Now().UTC()
+		if err := a.store.SaveSession(ctx, current); err != nil {
+			a.mu.Unlock()
+			return preparedState{}, err
+		}
+		a.prepared[sessionID] = state
+		a.mu.Unlock()
+		return state, nil
 	}
-	repo, files, err := a.prepare(a.appContext(), session)
+	return preparedState{}, errors.New("pull request revision changed while preparing the managed repository")
+}
+func (a *App) prepareAndRunAnalysis(ctx context.Context, op Operation, session domain.ReviewSession) {
+	op.Stage = "preparingSnapshot"
+	op.Message = "Preparing isolated repository snapshot"
+	a.emitOperation(op)
+	state, err := a.ensurePreparedContext(ctx, session.ID)
 	if err != nil {
-		return state, err
+		a.mu.Lock()
+		delete(a.active, op.ID)
+		delete(a.analysisBySession, session.ID)
+		a.mu.Unlock()
+		if analysisWasCancelled(ctx, err) {
+			a.cancelAnalysisOperation(op)
+		} else {
+			a.failOperation(op, err)
+		}
+		return
 	}
-	state = preparedState{repo, files}
-	a.mu.Lock()
-	a.prepared[sessionID] = state
-	a.mu.Unlock()
-	return state, nil
+	current, err := a.store.GetSession(ctx, session.ID)
+	if err != nil {
+		a.mu.Lock()
+		delete(a.active, op.ID)
+		delete(a.analysisBySession, session.ID)
+		a.mu.Unlock()
+		a.failOperation(op, err)
+		return
+	}
+	a.runAnalysis(ctx, op, current, state)
 }
 func (a *App) runAnalysis(ctx context.Context, op Operation, session domain.ReviewSession, state preparedState) {
 	defer func() { a.mu.Lock(); delete(a.active, op.ID); delete(a.analysisBySession, session.ID); a.mu.Unlock() }()
@@ -606,14 +863,16 @@ func (a *App) runAnalysis(ctx context.Context, op Operation, session domain.Revi
 		return
 	}
 	defer lease.Close()
-	var diff strings.Builder
-	for _, file := range state.files {
-		if parsed, e := a.repos.DiffFile(ctx, state.repository, file, 5); e == nil {
-			writeDiff(&diff, parsed)
-		} else if analysisWasCancelled(ctx, e) {
+	diff, err := collectAnalysisDiff(state.files, func(file domain.ChangedFile) (domain.DiffFile, error) {
+		return a.repos.DiffFile(ctx, state.repository, file, 5)
+	})
+	if err != nil {
+		if analysisWasCancelled(ctx, err) {
 			a.cancelAnalysisOperation(op)
 			return
 		}
+		a.failOperation(op, err)
+		return
 	}
 	repositoryContext, err := a.repos.RepositoryContext(ctx, state.repository, state.files, 512<<10)
 	if err != nil {
@@ -627,7 +886,7 @@ func (a *App) runAnalysis(ctx context.Context, op Operation, session domain.Revi
 	op.Stage = "runningCodex"
 	op.Message = "Running Codex in read-only mode"
 	a.emitOperation(op)
-	events, err := a.agent.AnalyzeChange(ctx, agent.AnalyzeInput{PullRequest: session.PullRequest, Workspace: lease.Path(), BaseSHA: session.BaseSHA, HeadSHA: session.HeadSHA, ChangedFiles: state.files, UnifiedDiff: diff.String(), RepositoryContext: repositoryContext, ExistingDiscussion: existingDiscussion(session.PullRequest)})
+	events, err := a.agent.AnalyzeChange(ctx, agent.AnalyzeInput{PullRequest: session.PullRequest, Workspace: lease.Path(), BaseSHA: session.BaseSHA, HeadSHA: session.HeadSHA, ChangedFiles: state.files, UnifiedDiff: diff, RepositoryContext: repositoryContext, ExistingDiscussion: existingDiscussion(session.PullRequest)})
 	if err != nil {
 		if analysisWasCancelled(ctx, err) {
 			a.cancelAnalysisOperation(op)
@@ -710,50 +969,188 @@ func (a *App) emitOperation(op Operation) {
 		runtime.EventsEmit(a.appContext(), "reviewarc:operation:v1", op)
 	}
 }
-func (a *App) validateInline(sessionID, path string, line *int, side domain.DiffSide) error {
-	if line == nil || *line < 1 || (side != domain.DiffSideLeft && side != domain.DiffSideRight) {
-		return errors.New("inline comment requires a valid diff line and side")
-	}
+
+type inlineRange struct {
+	StartLine *int
+	StartSide domain.DiffSide
+	Line      *int
+	Side      domain.DiffSide
+}
+
+func (a *App) normalizeInline(sessionID, path string, startLine *int, startSide domain.DiffSide, line *int, side domain.DiffSide) (inlineRange, error) {
 	diff, err := a.GetDiff(sessionID, path)
 	if err != nil {
-		return err
+		return inlineRange{}, err
 	}
-	for _, h := range diff.Hunks {
-		for _, candidate := range h.Lines {
-			if side == domain.DiffSideRight && candidate.NewLine != nil && *candidate.NewLine == *line || side == domain.DiffSideLeft && candidate.OldLine != nil && *candidate.OldLine == *line {
-				return nil
-			}
+	return normalizeInlineDiff(diff, startLine, startSide, line, side)
+}
+
+func normalizeInlineDiff(diff domain.DiffFile, startLine *int, startSide domain.DiffSide, line *int, side domain.DiffSide) (inlineRange, error) {
+	if line == nil || *line < 1 || (side != domain.DiffSideLeft && side != domain.DiffSideRight) {
+		return inlineRange{}, errors.New("inline comment requires a valid diff line and side")
+	}
+	if startLine != nil {
+		if *startLine < 1 || (startSide != domain.DiffSideLeft && startSide != domain.DiffSideRight) {
+			return inlineRange{}, errors.New("multi-line comment requires a valid start line and side")
 		}
 	}
-	return errors.New("inline comment line is not present in the pull request diff")
+	position := func(wanted int, wantedSide domain.DiffSide) (int, bool) {
+		position := 0
+		for _, h := range diff.Hunks {
+			for _, candidate := range h.Lines {
+				if wantedSide == domain.DiffSideRight && candidate.NewLine != nil && *candidate.NewLine == wanted || wantedSide == domain.DiffSideLeft && candidate.OldLine != nil && *candidate.OldLine == wanted {
+					return position, true
+				}
+				position++
+			}
+		}
+		return 0, false
+	}
+	endPosition, endPresent := position(*line, side)
+	if !endPresent {
+		return inlineRange{}, errors.New("inline comment line is not present in the pull request diff")
+	}
+	if startLine == nil {
+		return inlineRange{Line: line, Side: side}, nil
+	}
+	startPosition, startPresent := position(*startLine, startSide)
+	if !startPresent {
+		return inlineRange{}, errors.New("multi-line comment start is not present in the pull request diff")
+	}
+	if startPosition == endPosition {
+		return inlineRange{Line: line, Side: side}, nil
+	}
+	if startPosition > endPosition {
+		return inlineRange{StartLine: line, StartSide: side, Line: startLine, Side: startSide}, nil
+	}
+	return inlineRange{StartLine: startLine, StartSide: startSide, Line: line, Side: side}, nil
+}
+
+func validateInlineDiff(diff domain.DiffFile, startLine *int, startSide domain.DiffSide, line *int, side domain.DiffSide) error {
+	_, err := normalizeInlineDiff(diff, startLine, startSide, line, side)
+	return err
 }
 func selectedRepositories(repos []domain.Repository, selections []domain.SourceSelection) []domain.RepositoryRef {
-	repoKeys, orgKeys := map[string]bool{}, map[string]bool{}
+	repoKeys := map[string]bool{}
 	for _, s := range selections {
 		if !s.Enabled {
 			continue
 		}
-		if s.Kind == domain.SelectionOrganization {
-			orgKeys[strings.ToLower(s.Key)] = true
-		} else {
+		if s.Kind == domain.SelectionRepository {
 			repoKeys[strings.ToLower(s.Key)] = true
 		}
 	}
-	var out []domain.RepositoryRef
+	refs := map[string]domain.RepositoryRef{}
+	archived := map[string]bool{}
 	for _, repo := range repos {
 		name := strings.ToLower(repo.Ref.Owner + "/" + repo.Ref.Name)
-		if repoKeys[name] || orgKeys[strings.ToLower(repo.Ref.Owner)] {
-			out = append(out, repo.Ref)
+		if repo.IsArchived {
+			archived[name] = true
+			continue
+		}
+		if repoKeys[name] {
+			refs[name] = repo.Ref
 		}
 	}
+	for key := range repoKeys {
+		if _, ok := refs[key]; ok || archived[key] {
+			continue
+		}
+		owner, name, found := strings.Cut(key, "/")
+		if found {
+			refs[key] = domain.RepositoryRef{Host: "github.com", Owner: owner, Name: name, CloneURL: "https://github.com/" + owner + "/" + name + ".git"}
+		}
+	}
+	out := make([]domain.RepositoryRef, 0, len(refs))
+	for _, ref := range refs {
+		out = append(out, ref)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return strings.ToLower(out[i].Owner+"/"+out[i].Name) < strings.ToLower(out[j].Owner+"/"+out[j].Name)
+	})
 	return out
+}
+func selectedOrganizations(selections []domain.SourceSelection) []string {
+	seen := map[string]bool{}
+	organizations := make([]string, 0)
+	for _, selection := range selections {
+		if !selection.Enabled || selection.Kind != domain.SelectionOrganization {
+			continue
+		}
+		key := strings.ToLower(selection.Key)
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		organizations = append(organizations, selection.Key)
+	}
+	sort.Slice(organizations, func(i, j int) bool { return strings.ToLower(organizations[i]) < strings.ToLower(organizations[j]) })
+	return organizations
+}
+func explicitlySelectedRepositories(repositories []domain.Repository, selections []domain.SourceSelection) []domain.Repository {
+	selected := map[string]bool{}
+	for _, selection := range selections {
+		if selection.Enabled && selection.Kind == domain.SelectionRepository {
+			selected[strings.ToLower(selection.Key)] = true
+		}
+	}
+	items := make([]domain.Repository, 0, len(selected))
+	for _, repository := range repositories {
+		name := strings.ToLower(repository.Ref.Owner + "/" + repository.Ref.Name)
+		if selected[name] && !repository.IsArchived {
+			items = append(items, repository)
+		}
+	}
+	return items
+}
+func activeSourceSelections(selections []domain.SourceSelection, repositories []domain.Repository) []domain.SourceSelection {
+	archived := map[string]bool{}
+	for _, repository := range repositories {
+		if repository.IsArchived {
+			archived[strings.ToLower(repository.Ref.Owner+"/"+repository.Ref.Name)] = true
+		}
+	}
+	active := make([]domain.SourceSelection, 0, len(selections))
+	for _, selection := range selections {
+		if selection.Kind == domain.SelectionRepository && archived[strings.ToLower(selection.Key)] {
+			continue
+		}
+		active = append(active, selection)
+	}
+	return active
+}
+func validSourceOwner(owner string) bool {
+	if owner == "" || owner == "." || owner == ".." || len(owner) > 100 {
+		return false
+	}
+	for _, r := range owner {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || strings.ContainsRune("-_", r) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+func validSourceRepositoryName(name string) bool {
+	if name == "" || name == "." || name == ".." || len(name) > 100 {
+		return false
+	}
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || strings.ContainsRune("-_.", r) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 func buildReviewPayload(preview PublishPreview) []byte {
 	type inline struct {
-		Path string          `json:"path"`
-		Line int             `json:"line"`
-		Side domain.DiffSide `json:"side"`
-		Body string          `json:"body"`
+		Path      string          `json:"path"`
+		StartLine *int            `json:"start_line,omitempty"`
+		StartSide domain.DiffSide `json:"start_side,omitempty"`
+		Line      int             `json:"line"`
+		Side      domain.DiffSide `json:"side"`
+		Body      string          `json:"body"`
 	}
 	body := []string{}
 	comments := []inline{}
@@ -765,7 +1162,7 @@ func buildReviewPayload(preview PublishPreview) []byte {
 		if item.Kind == domain.CommentGeneral {
 			body = append(body, item.Body)
 		} else if item.Line != nil {
-			comments = append(comments, inline{item.Path, *item.Line, item.Side, item.Body})
+			comments = append(comments, inline{item.Path, item.StartLine, item.StartSide, *item.Line, item.Side, item.Body})
 		}
 	}
 	payload, _ := json.Marshal(struct {
@@ -792,6 +1189,18 @@ func writeDiff(builder *strings.Builder, file domain.DiffFile) {
 			builder.WriteString(prefix + line.Content + "\n")
 		}
 	}
+}
+
+func collectAnalysisDiff(files []domain.ChangedFile, load func(domain.ChangedFile) (domain.DiffFile, error)) (string, error) {
+	var builder strings.Builder
+	for _, file := range files {
+		parsed, err := load(file)
+		if err != nil {
+			return "", fmt.Errorf("load analysis diff for %s: %w", file.Path, err)
+		}
+		writeDiff(&builder, parsed)
+	}
+	return builder.String(), nil
 }
 
 func existingDiscussion(pr domain.PullRequest) string {

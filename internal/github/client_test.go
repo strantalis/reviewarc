@@ -6,6 +6,8 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +19,21 @@ type fakeRunner struct {
 	responses []proc.Result
 	errors    []error
 	commands  []proc.Command
+}
+
+type organizationAccessRunner struct {
+	mu       sync.Mutex
+	results  map[string]proc.Result
+	errors   map[string]error
+	commands []proc.Command
+}
+
+func (f *organizationAccessRunner) Run(_ context.Context, command proc.Command) (proc.Result, error) {
+	endpoint := command.Args[len(command.Args)-1]
+	f.mu.Lock()
+	f.commands = append(f.commands, command)
+	f.mu.Unlock()
+	return f.results[endpoint], f.errors[endpoint]
 }
 
 func (f *fakeRunner) Run(_ context.Context, c proc.Command) (proc.Result, error) {
@@ -100,6 +117,72 @@ func TestListOrganizationsFlattensPagesDeduplicatesAndSorts(t *testing.T) {
 	}
 }
 
+func TestCheckOrganizationAccessClassifiesSSODeniedAndUnknown(t *testing.T) {
+	ssoURL := "https://github.com/orgs/locked/sso?authorization_request=temporary"
+	f := &organizationAccessRunner{
+		results: map[string]proc.Result{
+			"orgs/open/repos?type=all&per_page=1":    {Stdout: []byte("HTTP/2.0 200 OK\r\n\r\n")},
+			"orgs/locked/repos?type=all&per_page=1":  {Stdout: []byte("HTTP/2.0 403 Forbidden\r\nX-GitHub-SSO: required; url=" + ssoURL + "\r\n\r\n"), ExitCode: 1},
+			"orgs/denied/repos?type=all&per_page=1":  {Stdout: []byte("HTTP/2.0 403 Forbidden\r\n\r\n"), ExitCode: 1},
+			"orgs/unknown/repos?type=all&per_page=1": {Stderr: []byte("network unavailable"), ExitCode: 1},
+		},
+		errors: map[string]error{
+			"orgs/locked/repos?type=all&per_page=1":  errors.New("exit 1"),
+			"orgs/denied/repos?type=all&per_page=1":  errors.New("exit 1"),
+			"orgs/unknown/repos?type=all&per_page=1": errors.New("exit 1"),
+		},
+	}
+	organizations := []domain.Organization{{Login: "open"}, {Login: "locked"}, {Login: "denied"}, {Login: "unknown"}, {Login: "../invalid"}}
+	got := New(f).CheckOrganizationAccess(context.Background(), organizations)
+	if got[0].AccessStatus != OrganizationAccessAvailable || got[1].AccessStatus != OrganizationAccessSSORequired || got[1].SSOURL != ssoURL || got[2].AccessStatus != OrganizationAccessDenied || got[3].AccessStatus != OrganizationAccessUnknown || got[4].AccessStatus != OrganizationAccessUnknown {
+		t.Fatalf("access=%+v", got)
+	}
+	if len(f.commands) != 4 {
+		t.Fatalf("invalid organization reached gh; commands=%d", len(f.commands))
+	}
+	want := []string{"api", "-i", "--silent", "orgs/locked/repos?type=all&per_page=1"}
+	found := false
+	for _, command := range f.commands {
+		found = found || reflect.DeepEqual(command.Args, want)
+	}
+	if !found {
+		t.Fatalf("SSO probe missing from commands=%v", f.commands)
+	}
+}
+
+func TestGetRepositoryReturnsArchivedStatusFromStructuredOutput(t *testing.T) {
+	f := &fakeRunner{responses: []proc.Result{{Stdout: []byte(`{"id":"R_1","name":"old","nameWithOwner":"acme/old","description":"Archived","updatedAt":"2026-07-12T00:00:00Z","isPrivate":true,"isArchived":true,"owner":{"login":"acme"}}`)}}}
+	repository, err := New(f).GetRepository(context.Background(), domain.RepositoryRef{Owner: "acme", Name: "old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !repository.IsArchived || repository.Ref.Owner != "acme" || repository.Ref.Name != "old" {
+		t.Fatalf("repository=%+v", repository)
+	}
+	want := []string{"repo", "view", "acme/old", "--json", "id,name,nameWithOwner,description,updatedAt,isPrivate,isArchived,owner"}
+	if !reflect.DeepEqual(f.commands[0].Args, want) {
+		t.Fatalf("command=%v", f.commands[0].Args)
+	}
+}
+
+func TestSSOAuthorizationURLRejectsUntrustedDestinations(t *testing.T) {
+	valid := []byte("HTTP/2.0 403 Forbidden\r\nX-GitHub-SSO: required; url=https://github.com/orgs/acme/sso?authorization_request=temporary\r\n")
+	if got := parseSSOAuthorizationURL(valid, "acme"); got == "" {
+		t.Fatal("valid GitHub SSO URL was rejected")
+	}
+	for _, raw := range []string{
+		"https://evil.example/orgs/acme/sso?authorization_request=temporary",
+		"https://github.com/orgs/other/sso?authorization_request=temporary",
+		"http://github.com/orgs/acme/sso?authorization_request=temporary",
+		"https://github.com/orgs/acme/sso",
+	} {
+		response := []byte("HTTP/2.0 403 Forbidden\nX-GitHub-SSO: required; url=" + raw + "\n")
+		if got := parseSSOAuthorizationURL(response, "acme"); got != "" {
+			t.Fatalf("untrusted SSO URL accepted: %q", got)
+		}
+	}
+}
+
 func TestRepositoryAndInboxParsing(t *testing.T) {
 	repos := `[{"data":{"viewer":{"repositories":{"nodes":[{"id":"R1","name":"api","nameWithOwner":"acme/api","description":"backend","updatedAt":"2026-07-11T10:00:00Z","isPrivate":true,"isArchived":false,"owner":{"login":"acme"}}]}}}}]`
 	prs := `[{"number":7,"title":"Fix races","url":"https://github.com/acme/api/pull/7","author":{"login":"sean"},"updatedAt":"2026-07-11T11:00:00Z","isDraft":false,"additions":12,"deletions":3,"changedFiles":2,"assignees":[{"login":"sean"}],"reviewRequests":[],"labels":[{"name":"bug"}],"reviewDecision":"CHANGES_REQUESTED"}]`
@@ -124,6 +207,91 @@ func TestRepositoryAndInboxParsing(t *testing.T) {
 	}
 	if inbox.Items[0].ReviewDecision != "CHANGES_REQUESTED" {
 		t.Fatalf("review decision=%q", inbox.Items[0].ReviewDecision)
+	}
+	if !reflect.DeepEqual(inbox.Items[0].Labels, []string{"bug"}) {
+		t.Fatalf("labels=%v", inbox.Items[0].Labels)
+	}
+}
+
+func TestListRepositoriesIncludesOrganizationRepositoriesAndDeduplicates(t *testing.T) {
+	viewer := `[{"data":{"viewer":{"repositories":{"nodes":[{"id":"R1","name":"personal","nameWithOwner":"sean/personal","updatedAt":"2026-07-11T10:00:00Z","owner":{"login":"sean"}},{"id":"R2","name":"shared","nameWithOwner":"acme/shared","updatedAt":"2026-07-11T10:00:00Z","owner":{"login":"acme"}}]}}}}]`
+	organization := `[{"data":{"organization":{"repositories":{"nodes":[{"id":"R2","name":"shared","nameWithOwner":"acme/shared","updatedAt":"2026-07-11T10:00:00Z","owner":{"login":"acme"}},{"id":"R3","name":"private-api","nameWithOwner":"acme/private-api","isPrivate":true,"updatedAt":"2026-07-12T10:00:00Z","owner":{"login":"acme"}},{"id":"R4","name":"archive","nameWithOwner":"acme/archive","isArchived":true,"updatedAt":"2026-07-10T10:00:00Z","owner":{"login":"acme"}}]}}}}]`
+	f := &fakeRunner{responses: []proc.Result{{Stdout: []byte(viewer)}, {Stdout: []byte(organization)}}}
+
+	got, err := New(f).ListRepositories(context.Background(), RepositoryQuery{Organizations: []string{"acme", "ACME"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || got[0].Ref.Owner != "acme" || got[0].Ref.Name != "private-api" || got[1].Ref.Name != "shared" || got[2].Ref.Owner != "sean" {
+		t.Fatalf("repositories=%+v", got)
+	}
+	if len(f.commands) != 2 {
+		t.Fatalf("commands=%d, want viewer plus one deduplicated organization query", len(f.commands))
+	}
+	wantPrefix := []string{"api", "graphql", "--paginate", "--slurp", "-F", "login=acme"}
+	if !reflect.DeepEqual(f.commands[1].Args[:len(wantPrefix)], wantPrefix) {
+		t.Fatalf("organization command=%v", f.commands[1].Args)
+	}
+}
+
+func TestListRepositoriesRejectsInvalidOrganizationBeforeRunningIt(t *testing.T) {
+	f := &fakeRunner{responses: []proc.Result{{Stdout: []byte(`[]`)}}}
+	_, err := New(f).ListRepositories(context.Background(), RepositoryQuery{Organizations: []string{"../escape"}})
+	if err == nil || len(f.commands) != 1 {
+		t.Fatalf("error=%v commands=%d", err, len(f.commands))
+	}
+}
+
+func TestListOwnerRepositoriesReturnsOneActiveCursorPage(t *testing.T) {
+	body := `{"data":{"repositoryOwner":{"repositories":{"totalCount":52,"nodes":[{"id":"R1","name":"active","nameWithOwner":"acme/active","owner":{"login":"acme"}},{"id":"R2","name":"archive","nameWithOwner":"acme/archive","isArchived":true,"owner":{"login":"acme"}}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"}}}}}`
+	f := &fakeRunner{responses: []proc.Result{{Stdout: []byte(body)}}}
+	page, err := New(f).ListOwnerRepositories(context.Background(), RepositoryPageQuery{Owner: "acme"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.TotalCount != 52 || !page.HasNextPage || page.EndCursor != "cursor-1" || len(page.Items) != 1 || page.Items[0].Ref.Name != "active" {
+		t.Fatalf("page=%+v", page)
+	}
+	args := f.commands[0].Args
+	if containsString(args, "--paginate") || containsString(args, "--slurp") || !containsString(args, "first=50") || !strings.Contains(args[len(args)-1], "isArchived:false") || !strings.Contains(args[len(args)-1], "ownerAffiliations:[OWNER]") {
+		t.Fatalf("owner page command=%v", args)
+	}
+}
+
+func TestListOwnerRepositoriesPassesCursorAndRejectsInvalidOwner(t *testing.T) {
+	body := `{"data":{"repositoryOwner":{"repositories":{"totalCount":1,"nodes":[],"pageInfo":{}}}}}`
+	f := &fakeRunner{responses: []proc.Result{{Stdout: []byte(body)}}}
+	if _, err := New(f).ListOwnerRepositories(context.Background(), RepositoryPageQuery{Owner: "acme", Cursor: "cursor-1", PageSize: 500}); err != nil {
+		t.Fatal(err)
+	}
+	if !containsString(f.commands[0].Args, "after=cursor-1") || !containsString(f.commands[0].Args, "first=100") {
+		t.Fatalf("owner page command=%v", f.commands[0].Args)
+	}
+	if _, err := New(&fakeRunner{}).ListOwnerRepositories(context.Background(), RepositoryPageQuery{Owner: "../escape"}); err == nil {
+		t.Fatal("invalid owner reached repository paging")
+	}
+	if _, err := New(&fakeRunner{}).ListOwnerRepositories(context.Background(), RepositoryPageQuery{Owner: "acme", Cursor: strings.Repeat("x", 4097)}); err == nil {
+		t.Fatal("oversized cursor reached repository paging")
+	}
+}
+
+func TestOrganizationPullRequestSearchAvoidsRepositoryFanoutAndPreservesRelationships(t *testing.T) {
+	organization := `[{"data":{"search":{"issueCount":1,"nodes":[{"number":7,"title":"Org change","url":"https://github.com/acme/api/pull/7","author":{"login":"dev"},"updatedAt":"2026-07-12T10:00:00Z","additions":4,"deletions":2,"changedFiles":1,"assignees":{"nodes":[{"login":"sean"}]},"reviewRequests":{"nodes":[{"requestedReviewer":{"login":"sean"}}]},"labels":{"nodes":[{"name":"security"}]},"headRefOid":"head","baseRefOid":"base","repository":{"id":"R1","name":"api","nameWithOwner":"acme/api","isPrivate":true,"owner":{"login":"acme"}}}],"pageInfo":{"hasNextPage":false}}}}]`
+	explicitDuplicate := `[{"number":7,"title":"Org change","url":"https://github.com/acme/api/pull/7","author":{"login":"dev"},"updatedAt":"2026-07-12T10:00:00Z"}]`
+	f := &fakeRunner{responses: []proc.Result{{Stdout: []byte(organization)}, {Stdout: []byte(explicitDuplicate)}}}
+	query := PullRequestQuery{Organizations: []string{"acme", "ACME"}, Repositories: []domain.RepositoryRef{{Owner: "acme", Name: "api"}}, CurrentLogin: "sean"}
+	got := New(f).ListPullRequests(context.Background(), query)
+	if got.Partial || len(got.Items) != 1 || len(f.commands) != 2 {
+		t.Fatalf("inbox=%+v commands=%d", got, len(f.commands))
+	}
+	if !contains(got.Items[0].Relationships, domain.RelationshipAssigned) || !contains(got.Items[0].Relationships, domain.RelationshipReviewRequested) || got.Items[0].Ref.Repository.DatabaseID != "R1" {
+		t.Fatalf("item=%+v", got.Items[0])
+	}
+	if !reflect.DeepEqual(got.Items[0].Labels, []string{"security"}) {
+		t.Fatalf("labels=%v", got.Items[0].Labels)
+	}
+	if args := f.commands[0].Args; !containsString(args, "search=org:acme is:pr is:open archived:false sort:updated-desc") || !containsString(args, "--paginate") {
+		t.Fatalf("organization search command=%v", args)
 	}
 }
 
@@ -201,7 +369,7 @@ func TestPullRequestContextParsesFixtureBackedReviewsCommentsAndChecks(t *testin
 	if len(pr.Reviews) != 2 || pr.Reviews[0].ID != 11 || pr.Reviews[1].State != "APPROVED" || pr.Reviews[0].Author.Login != "alice" {
 		t.Fatalf("reviews=%+v", pr.Reviews)
 	}
-	if len(pr.ReviewComments) != 2 || pr.ReviewComments[0].ID != 101 || pr.ReviewComments[0].Line != nil || pr.ReviewComments[0].OriginalLine == nil || *pr.ReviewComments[0].OriginalLine != 40 || pr.ReviewComments[1].ReplyToID != 101 || pr.ReviewComments[1].Side != domain.DiffSideRight {
+	if len(pr.ReviewComments) != 2 || pr.ReviewComments[0].ID != 101 || pr.ReviewComments[0].Line != nil || pr.ReviewComments[0].OriginalStartLine == nil || *pr.ReviewComments[0].OriginalStartLine != 38 || pr.ReviewComments[0].OriginalLine == nil || *pr.ReviewComments[0].OriginalLine != 40 || pr.ReviewComments[0].StartSide != domain.DiffSideLeft || pr.ReviewComments[1].ReplyToID != 101 || pr.ReviewComments[1].Side != domain.DiffSideRight {
 		t.Fatalf("comments=%+v", pr.ReviewComments)
 	}
 	if len(pr.CheckRuns) != 2 || pr.CheckRuns[0].Name != "Lint" || pr.CheckRuns[1].AppName != "GitHub Actions" || pr.CheckRuns[1].Conclusion != "success" {
@@ -231,10 +399,15 @@ func TestPullRequestContextRejectsMalformedPagination(t *testing.T) {
 func TestGetPullRequestLoadsContextFromFixedEndpoints(t *testing.T) {
 	sha := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	metadata := `{"number":4,"base":{"ref":"main","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","repo":{"name":"api","owner":{"login":"acme"}}},"head":{"ref":"topic","sha":"` + sha + `","repo":{"name":"api","owner":{"login":"fork"}}}}`
-	f := &fakeRunner{responses: []proc.Result{
-		{Stdout: []byte(metadata)}, {Stdout: []byte(`[[]]`)}, {Stdout: []byte(`[[]]`)},
-		{Stdout: []byte(`[[]]`)}, {Stdout: []byte(`[[]]`)}, {Stdout: []byte(`[{"check_runs":[]}]`)},
-	}}
+	root := "repos/acme/api/pulls/4"
+	f := &organizationAccessRunner{results: map[string]proc.Result{
+		root:                            {Stdout: []byte(metadata)},
+		root + "/commits?per_page=100":  {Stdout: []byte(`[[]]`)},
+		root + "/files?per_page=100":    {Stdout: []byte(`[[]]`)},
+		root + "/reviews?per_page=100":  {Stdout: []byte(`[[]]`)},
+		root + "/comments?per_page=100": {Stdout: []byte(`[[]]`)},
+		"repos/acme/api/commits/" + sha + "/check-runs?per_page=100": {Stdout: []byte(`[{"check_runs":[]}]`)},
+	}, errors: map[string]error{}}
 	ref := domain.PullRequestRef{Repository: domain.RepositoryRef{Owner: "acme", Name: "api"}, Number: 4}
 	detail, err := New(f).GetPullRequest(context.Background(), ref)
 	if err != nil {
@@ -254,11 +427,41 @@ func TestGetPullRequestLoadsContextFromFixedEndpoints(t *testing.T) {
 	if len(f.commands) != len(wantEndpoints) {
 		t.Fatalf("commands=%d", len(f.commands))
 	}
-	for i, want := range wantEndpoints {
-		got := f.commands[i].Args[len(f.commands[i].Args)-1]
-		if got != want {
-			t.Fatalf("command %d endpoint=%q want %q", i, got, want)
+	gotEndpoints := map[string]bool{}
+	for _, command := range f.commands {
+		gotEndpoints[command.Args[len(command.Args)-1]] = true
+	}
+	for _, want := range wantEndpoints {
+		if !gotEndpoints[want] {
+			t.Fatalf("missing endpoint=%q from commands=%v", want, f.commands)
 		}
+	}
+}
+
+func TestReplyToReviewCommentUsesRootReplyEndpointAndStructuredInput(t *testing.T) {
+	f := &fakeRunner{responses: []proc.Result{{Stdout: []byte(`{"id":202,"pull_request_review_id":11,"in_reply_to_id":101,"user":{"login":"sean"},"body":"Follow-up","path":"quota/limiter.go","line":16,"side":"RIGHT","commit_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","created_at":"2026-07-13T04:00:00Z","updated_at":"2026-07-13T04:00:00Z","html_url":"https://github.com/acme/api/pull/7#discussion_r202"}`)}}}
+	ref := domain.PullRequestRef{Repository: domain.RepositoryRef{Owner: "acme", Name: "api"}, Number: 7}
+	reply, err := New(f).ReplyToReviewComment(context.Background(), ref, 101, "Follow-up")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.ID != 202 || reply.ReplyToID != 101 || reply.Author.Login != "sean" || reply.Body != "Follow-up" {
+		t.Fatalf("reply=%+v", reply)
+	}
+	want := []string{"api", "--method", "POST", "repos/acme/api/pulls/7/comments/101/replies", "--input", "-"}
+	if !reflect.DeepEqual(f.commands[0].Args, want) || string(f.commands[0].Stdin) != `{"body":"Follow-up"}` {
+		t.Fatalf("command=%+v", f.commands[0])
+	}
+}
+
+func TestReplyToReviewCommentRejectsInvalidInputBeforeGitHub(t *testing.T) {
+	f := &fakeRunner{}
+	ref := domain.PullRequestRef{Repository: domain.RepositoryRef{Owner: "../acme", Name: "api"}, Number: 7}
+	if _, err := New(f).ReplyToReviewComment(context.Background(), ref, 0, " "); err == nil {
+		t.Fatal("invalid reply was accepted")
+	}
+	if len(f.commands) != 0 {
+		t.Fatalf("GitHub called for invalid reply: %+v", f.commands)
 	}
 }
 
@@ -294,6 +497,15 @@ func TestPublishReviewUsesStructuredInputAndFixedEndpoint(t *testing.T) {
 func contains(items []domain.Relationship, want domain.Relationship) bool {
 	for _, v := range items {
 		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
 			return true
 		}
 	}
