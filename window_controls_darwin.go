@@ -6,52 +6,44 @@ package main
 #cgo CFLAGS: -x objective-c -fblocks
 #cgo LDFLAGS: -framework Cocoa
 
-#import <Cocoa/Cocoa.h>
-
-static NSWindow *reviewArcWindow(void) {
-	NSWindow *window = [NSApp keyWindow];
-	if (window != nil) {
-		return window;
-	}
-	for (NSWindow *candidate in [NSApp windows]) {
-		if ([candidate isVisible]) {
-			return candidate;
-		}
-	}
-	return nil;
-}
-
-static void configureReviewArcNativeWindowChromeOnMain(void) {
-	NSWindow *window = reviewArcWindow();
-	if (window == nil) {
-		return;
-	}
-	NSArray<NSNumber *> *buttonTypes = @[
-		@(NSWindowCloseButton),
-		@(NSWindowMiniaturizeButton),
-		@(NSWindowZoomButton)
-	];
-	for (NSNumber *buttonType in buttonTypes) {
-		NSButton *button = [window standardWindowButton:(NSWindowButton)[buttonType integerValue]];
-		[button setEnabled:NO];
-		[button setHidden:YES];
-	}
-}
-
-static void configureReviewArcNativeWindowChrome(void) {
-	if ([NSThread isMainThread]) {
-		configureReviewArcNativeWindowChromeOnMain();
-		return;
-	}
-	dispatch_async(dispatch_get_main_queue(), ^{
-		configureReviewArcNativeWindowChromeOnMain();
-	});
-}
+void configureReviewArcNativeWindowChrome(void);
+void configureReviewArcApplicationMenu(void);
 */
 import "C"
 
-import "context"
+import (
+	"context"
+	"sync"
+
+	"github.com/wailsapp/wails/v2/pkg/runtime"
+)
+
+var (
+	nativeUpdateMenuMu      sync.RWMutex
+	nativeUpdateMenuHandler func()
+)
 
 func configureNativeWindowChrome(context.Context) {
 	C.configureReviewArcNativeWindowChrome()
+}
+
+func configureNativeApplicationMenu(ctx context.Context) {
+	nativeUpdateMenuMu.Lock()
+	nativeUpdateMenuHandler = func() {
+		runtime.WindowShow(ctx)
+		runtime.WindowUnminimise(ctx)
+		runtime.EventsEmit(ctx, "reviewarc:check-for-updates:v1")
+	}
+	nativeUpdateMenuMu.Unlock()
+	C.configureReviewArcApplicationMenu()
+}
+
+//export reviewArcCheckForUpdates
+func reviewArcCheckForUpdates() {
+	nativeUpdateMenuMu.RLock()
+	handler := nativeUpdateMenuHandler
+	nativeUpdateMenuMu.RUnlock()
+	if handler != nil {
+		go handler()
+	}
 }

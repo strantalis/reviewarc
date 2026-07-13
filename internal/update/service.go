@@ -258,7 +258,7 @@ func (s *Service) Check(ctx context.Context, mode CheckMode) error {
 	return nil
 }
 
-// InstallAndRestart installs the release already downloaded by the adapter.
+// InstallAndRestart starts or resumes installation of the eligible release.
 // The method never silently terminates the app; callers should invoke it only
 // in response to an explicit user action.
 func (s *Service) InstallAndRestart(ctx context.Context) error {
@@ -271,11 +271,15 @@ func (s *Service) InstallAndRestart(ctx context.Context) error {
 		s.mu.Unlock()
 		return ErrUnsupported
 	}
-	if s.status.State != StateReady {
+	if s.status.State != StateAvailable && s.status.State != StateReady {
 		s.mu.Unlock()
 		return ErrNotReady
 	}
-	s.status.State = StateInstalling
+	if s.status.State == StateAvailable {
+		s.status.State = StateDownloading
+	} else {
+		s.status.State = StateInstalling
+	}
 	s.status.Error = ""
 	s.status.ErrorVisible = false
 	status := cloneStatus(s.status)

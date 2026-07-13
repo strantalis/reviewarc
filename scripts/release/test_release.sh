@@ -54,8 +54,8 @@ plutil -create xml1 "$plist"
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$plist")" == AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= ]]
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :SUFeedURL' "$plist")" == https://www.reviewarc.dev/api/appcast.xml ]]
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :SUEnableAutomaticChecks' "$plist")" == false ]]
-[[ "$(/usr/libexec/PlistBuddy -c 'Print :SUAllowsAutomaticUpdates' "$plist")" == true ]]
-[[ "$(/usr/libexec/PlistBuddy -c 'Print :SUAutomaticallyUpdate' "$plist")" == true ]]
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :SUAllowsAutomaticUpdates' "$plist")" == false ]]
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :SUAutomaticallyUpdate' "$plist")" == false ]]
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :SUVerifyUpdateBeforeExtraction' "$plist")" == true ]]
 
 printf 'notarized-dmg-fixture' > "$tmp/ReviewArc-0.3.0-beta.2-macOS-universal.dmg"

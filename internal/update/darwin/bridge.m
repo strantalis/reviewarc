@@ -11,6 +11,7 @@ static NSString *const RAStateIdle = @"idle";
 static NSString *const RAStateAvailable = @"available";
 static NSString *const RAStateDownloading = @"downloading";
 static NSString *const RAStateReady = @"ready";
+static NSString *const RAStateInstalling = @"installing";
 static NSString *const RAStateFailed = @"failed";
 
 @interface RAUpdaterBridge : NSObject <SPUUpdaterDelegate, SPUUserDriver>
@@ -27,6 +28,7 @@ static NSString *const RAStateFailed = @"failed";
 @property(nonatomic) uint64_t totalBytes;
 @property(nonatomic) uint64_t revision;
 @property(nonatomic, copy) void (^readyReply)(SPUUserUpdateChoice);
+@property(nonatomic) SPUUserUpdateStage pendingStage;
 @property(nonatomic, copy) void (^installOnQuit)(void);
 
 - (BOOL)start:(NSError **)error;
@@ -66,11 +68,11 @@ static NSString *const RAStateFailed = @"failed";
         return NO;
     }
 
-    // ReviewArc owns update scheduling and UI. Sparkle performs the requested
-    // background downloads, while the retained installation handler below
-    // keeps relaunch an explicit user action.
+    // ReviewArc owns update scheduling and UI. Checks may run in the
+    // background, but downloading and installation begin only after an
+    // explicit user choice in ReviewArc.
     self.updater.automaticallyChecksForUpdates = NO;
-    self.updater.automaticallyDownloadsUpdates = YES;
+    self.updater.automaticallyDownloadsUpdates = NO;
     self.updater.sendsSystemProfile = NO;
     return YES;
 }
@@ -84,6 +86,8 @@ static NSString *const RAStateFailed = @"failed";
 }
 
 - (void)recordNoUpdate {
+    self.readyReply = nil;
+    self.installOnQuit = nil;
     self.version = @"";
     self.build = @"";
     self.releaseNotesURL = @"";
@@ -119,8 +123,9 @@ static NSString *const RAStateFailed = @"failed";
 - (BOOL)installAndRestart:(NSError **)error {
     if (self.readyReply != nil) {
         void (^reply)(SPUUserUpdateChoice) = self.readyReply;
+        SPUUserUpdateStage stage = self.pendingStage;
         self.readyReply = nil;
-        [self recordState:RAStateIdle];
+        [self recordState:stage == SPUUserUpdateStageInstalling ? RAStateInstalling : RAStateDownloading];
         reply(SPUUserUpdateChoiceInstall);
         return YES;
     }
@@ -160,7 +165,6 @@ static NSString *const RAStateFailed = @"failed";
 - (void)updater:(SPUUpdater *)updater didFindValidUpdate:(SUAppcastItem *)item {
     (void)updater;
     [self recordRelease:item];
-    [self recordState:RAStateAvailable];
 }
 
 - (void)updaterDidNotFindUpdate:(SPUUpdater *)updater error:(NSError *)error {
@@ -234,14 +238,9 @@ static NSString *const RAStateFailed = @"failed";
         return;
     }
 
-    if (state.stage == SPUUserUpdateStageInstalling) {
-        self.readyReply = reply;
-        [self recordState:RAStateReady];
-        return;
-    }
-
-    [self recordState:RAStateDownloading];
-    reply(SPUUserUpdateChoiceInstall);
+    self.readyReply = reply;
+    self.pendingStage = state.stage;
+    [self recordState:state.stage == SPUUserUpdateStageNotDownloaded ? RAStateAvailable : RAStateReady];
 }
 
 - (void)showUpdateReleaseNotesWithDownloadData:(SPUDownloadData *)downloadData {
@@ -297,6 +296,7 @@ static NSString *const RAStateFailed = @"failed";
 
 - (void)showReadyToInstallAndRelaunch:(void (^)(SPUUserUpdateChoice))reply {
     self.readyReply = reply;
+    self.pendingStage = SPUUserUpdateStageInstalling;
     [self recordState:RAStateReady];
 }
 
@@ -312,6 +312,7 @@ static NSString *const RAStateFailed = @"failed";
 }
 
 - (void)dismissUpdateInstallation {
+    self.readyReply = nil;
     if (![self.state isEqualToString:RAStateReady]) {
         [self recordState:RAStateIdle];
     }

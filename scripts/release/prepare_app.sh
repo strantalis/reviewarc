@@ -37,6 +37,6 @@ set_plist_value() {
 set_plist_value SUPublicEDKey string "$sparkle_public_key"
 set_plist_value SUFeedURL string "$sparkle_feed_url"
 set_plist_value SUEnableAutomaticChecks bool false
-set_plist_value SUAllowsAutomaticUpdates bool true
-set_plist_value SUAutomaticallyUpdate bool true
+set_plist_value SUAllowsAutomaticUpdates bool false
+set_plist_value SUAutomaticallyUpdate bool false
 set_plist_value SUVerifyUpdateBeforeExtraction bool true

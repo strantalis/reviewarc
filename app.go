@@ -195,6 +195,7 @@ func preferredGitHubRemote(runner proc.Runner) func(domain.RepositoryRef) string
 func (a *App) startup(ctx context.Context) { a.mu.Lock(); a.ctx = ctx; a.mu.Unlock() }
 func (a *App) domReady(ctx context.Context) {
 	configureNativeWindowChrome(ctx)
+	configureNativeApplicationMenu(ctx)
 	if a.updater == nil {
 		return
 	}

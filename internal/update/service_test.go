@@ -430,7 +430,7 @@ func TestSetChannelDoesNotTriggerWhenUnchanged(t *testing.T) {
 	}
 }
 
-func TestInstallRequiresReadyAndIsExplicit(t *testing.T) {
+func TestInstallRequiresAvailableOrReadyAndIsExplicit(t *testing.T) {
 	adapter := newFakeAdapter()
 	service, _ := startService(t, adapter, nil, nil, Options{CheckInterval: -1})
 	if err := service.InstallAndRestart(context.Background()); !errors.Is(err, ErrNotReady) {
@@ -443,11 +443,18 @@ func TestInstallRequiresReadyAndIsExplicit(t *testing.T) {
 	if err := service.Check(context.Background(), CheckScheduled); err != nil {
 		t.Fatal(err)
 	}
+	adapter.emit(AdapterEvent{State: StateAvailable, Release: &Release{Version: "2.0.0", Build: "200"}})
+	if err := service.InstallAndRestart(context.Background()); err != nil {
+		t.Fatalf("InstallAndRestart() available error = %v", err)
+	}
+	if adapter.installs != 1 || service.Status().State != StateDownloading {
+		t.Fatalf("available installs=%d status=%#v", adapter.installs, service.Status())
+	}
 	adapter.emit(AdapterEvent{State: StateReady, Release: &Release{Version: "2.0.0", Build: "200"}})
 	if err := service.InstallAndRestart(context.Background()); err != nil {
-		t.Fatalf("InstallAndRestart() error = %v", err)
+		t.Fatalf("InstallAndRestart() ready error = %v", err)
 	}
-	if adapter.installs != 1 || service.Status().State != StateInstalling {
+	if adapter.installs != 2 || service.Status().State != StateInstalling {
 		t.Fatalf("installs=%d status=%#v", adapter.installs, service.Status())
 	}
 	adapter.emit(AdapterEvent{State: StateIdle})

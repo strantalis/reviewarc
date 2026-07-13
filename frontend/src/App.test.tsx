@@ -11,6 +11,8 @@ function installBackend(state: BootstrapState, account: unknown = {status: 'auth
   window.go = {main: {App: {
     Bootstrap: vi.fn().mockResolvedValue(state),
     GetUpdateStatus: vi.fn().mockResolvedValue(idleUpdate),
+    CheckForUpdates: vi.fn().mockResolvedValue({...idleUpdate, state: 'checking'}),
+    InstallUpdate: vi.fn().mockResolvedValue(undefined),
     RefreshAccount: vi.fn().mockResolvedValue(account),
     RefreshInbox: vi.fn().mockResolvedValue({items: [], errors: {}, partial: false}),
   }}}
@@ -58,6 +60,34 @@ describe('App startup', () => {
     expect(await screen.findByText('Pull request inbox')).toBeInTheDocument()
     await waitFor(() => expect(window.go?.main?.App?.RefreshInbox).toHaveBeenCalled())
 	expect(screen.getByText('Your review queue is clear')).toBeInTheDocument()
+  })
+
+  it('opens Settings and checks from the native application menu event', async () => {
+    const handlers: Record<string, (value: unknown) => void> = {}
+    const state: BootstrapState = {dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: []}
+    installBackend(state)
+    window.runtime = {EventsOn: vi.fn((name: string, handler: (value: unknown) => void) => { handlers[name] = handler; return () => {} })}
+    render(<App/>)
+    expect(await screen.findByText('Pull request inbox')).toBeInTheDocument()
+    handlers['reviewarc:check-for-updates:v1'](undefined)
+    expect(await screen.findByRole('heading', {name: 'Settings'})).toBeInTheDocument()
+    await waitFor(() => expect(window.go?.main?.App?.CheckForUpdates).toHaveBeenCalledOnce())
+  })
+
+  it('asks before installing and explains possible macOS authorization', async () => {
+    const state: BootstrapState = {dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: []}
+    const available: SoftwareUpdateStatus = {currentVersion: '0.1.0-beta.6', currentBuild: '6', state: 'available', channel: 'beta', release: {version: '0.1.0-beta.7', build: '7'}}
+    installBackend(state)
+    window.go!.main!.App!.GetUpdateStatus = vi.fn().mockResolvedValue(available)
+    render(<App/>)
+    fireEvent.click(await screen.findByRole('button', {name: 'Install update…'}))
+    expect(screen.getByRole('dialog', {name: 'Install ReviewArc 0.1.0-beta.7?'})).toBeInTheDocument()
+    expect(screen.getByText(/administrator username and password/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Cancel'}))
+    expect(window.go?.main?.App?.InstallUpdate).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', {name: 'Install update…'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Install update'}))
+    await waitFor(() => expect(window.go?.main?.App?.InstallUpdate).toHaveBeenCalledOnce())
   })
 
   it('filters the inbox by GitHub label', async () => {
@@ -109,8 +139,17 @@ describe('Settings', () => {
     expect(onSetChannel).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', {name: 'Release notes'}))
     expect(openURL).toHaveBeenCalledWith('https://www.reviewarc.dev/releases/v0.2.0-beta.4')
-    fireEvent.click(screen.getByRole('button', {name: 'Restart to update'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Install and restart…'}))
     expect(onInstall).toHaveBeenCalledOnce()
+  })
+
+  it('offers an explicit install action before an available update downloads', () => {
+    const onInstall = vi.fn()
+    const update: SoftwareUpdateStatus = {currentVersion: '0.2.0-beta.3', currentBuild: '42', state: 'available', channel: 'beta', release: {version: '0.2.0-beta.4', build: '45'}}
+    render(<SettingsScreen state={{dependencies: [], paths, selections: [], inbox: []}} update={update} onInstallUpdate={onInstall} onSources={vi.fn()}/>)
+    fireEvent.click(screen.getByRole('button', {name: 'Install update…'}))
+    expect(onInstall).toHaveBeenCalledOnce()
+    expect(screen.getByRole('button', {name: 'Stable'})).toBeDisabled()
   })
 
   it('allows switching channels while the updater is idle', () => {

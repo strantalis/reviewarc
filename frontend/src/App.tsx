@@ -68,6 +68,7 @@ export function App() {
   const [softwareUpdate, setSoftwareUpdate] = useState<SoftwareUpdateStatus>()
   const [updateBusy, setUpdateBusy] = useState(false)
   const [dismissedUpdateBuild, setDismissedUpdateBuild] = useState('')
+  const [installUpdateOpen, setInstallUpdateOpen] = useState(false)
   const openRequest = useRef(0)
 
   const load = async () => {
@@ -120,8 +121,23 @@ export function App() {
   const installUpdate = async () => {
     setUpdateBusy(true)
     try { await backend.installUpdate() }
-    catch (err) { setError(errorText(err)); setUpdateBusy(false) }
+    catch (err) { setError(errorText(err)) }
+    finally { setUpdateBusy(false) }
   }
+
+  useEffect(() => backend.on('reviewarc:check-for-updates:v1', () => {
+    setScreen('settings')
+    setError('')
+    void (async () => {
+      setUpdateBusy(true)
+      try {
+        const status = await backend.getUpdateStatus()
+        setSoftwareUpdate(status)
+        if (status.state === 'idle' || status.state === 'failed') setSoftwareUpdate(await backend.checkForUpdates())
+      } catch (err) { setError(errorText(err)) }
+      finally { setUpdateBusy(false) }
+    })()
+  }), [])
 
   if (loading && !bootstrap) return <StartupLoading />
   if (!bootstrap) return <main className="startup"><WindowControls/><Logo/><ErrorBanner message={error || 'ReviewArc could not load its local state.'} onRetry={load}/></main>
@@ -131,10 +147,10 @@ export function App() {
 
   return <div className="app-shell">
     <AppHeader state={bootstrap} screen={screen} onNavigate={(next) => { setScreen(next); if (next === 'inbox') { openRequest.current++; setSession(undefined); setOpeningPR(undefined) } }}/>
-    {softwareUpdate?.state === 'ready' && softwareUpdate.release && softwareUpdate.release.build !== dismissedUpdateBuild && <UpdateReadyBanner update={softwareUpdate} busy={updateBusy} onLater={() => setDismissedUpdateBuild(softwareUpdate.release!.build)} onInstall={installUpdate}/>}
+    {(softwareUpdate?.state === 'available' || softwareUpdate?.state === 'ready') && softwareUpdate.release && softwareUpdate.release.build !== dismissedUpdateBuild && <UpdateBanner update={softwareUpdate} busy={updateBusy} onLater={() => setDismissedUpdateBuild(softwareUpdate.release!.build)} onInstall={() => setInstallUpdateOpen(true)}/>}
     {error && <div className="global-error"><ErrorBanner message={error} onRetry={() => setError('')} actionLabel="Dismiss"/></div>}
     {screen === 'sources' && <SourceSelector state={bootstrap} onDone={async () => { const next = await backend.bootstrap(); setBootstrap({...next, account: bootstrap.account}); setScreen('inbox') }} />}
-    {screen === 'settings' && <SettingsScreen state={bootstrap} update={softwareUpdate} updateBusy={updateBusy} onCheckUpdate={checkForUpdates} onSetUpdateChannel={setUpdateChannel} onInstallUpdate={installUpdate} onSources={() => setScreen('sources')}/>}
+    {screen === 'settings' && <SettingsScreen state={bootstrap} update={softwareUpdate} updateBusy={updateBusy} onCheckUpdate={checkForUpdates} onSetUpdateChannel={setUpdateChannel} onInstallUpdate={() => setInstallUpdateOpen(true)} onSources={() => setScreen('sources')}/>}
     {screen === 'inbox' && <InboxScreen state={bootstrap} onUpdate={(inbox) => setBootstrap({...bootstrap, inbox})} onOpen={openPR}/>}
     {openingPR && screen === 'overview' && <OpeningPullRequest pr={openingPR} onBack={() => { openRequest.current++; setOpeningPR(undefined); setScreen('inbox') }}/>}
     {session && screen === 'overview' && (
@@ -144,6 +160,7 @@ export function App() {
       <ReviewWorkspace session={session} initialChapterId={reviewChapterId} onSession={setSession} onBack={() => setScreen('overview')}/>
     )}
     {commandOpen && <CommandPalette items={bootstrap.inbox} onClose={() => setCommandOpen(false)} onOpen={(pr) => { setCommandOpen(false); void openPR(pr) }}/>}
+    {installUpdateOpen && softwareUpdate?.release && <UpdateInstallConfirmation update={softwareUpdate} busy={updateBusy} onCancel={() => setInstallUpdateOpen(false)} onConfirm={() => { setInstallUpdateOpen(false); void installUpdate() }}/>}
   </div>
 }
 
@@ -573,16 +590,24 @@ function updateStatusCopy(update: SoftwareUpdateStatus): {headline: string; deta
   return {headline: 'ReviewArc checks for updates in the background while the app is running.'}
 }
 
-function UpdateReadyBanner({update, busy, onLater, onInstall}: {update: SoftwareUpdateStatus; busy: boolean; onLater: () => void; onInstall: () => void}) {
-  return <aside className="update-ready-banner" aria-live="polite"><span><Download size={17}/></span><div><strong>ReviewArc {update.release?.version} is ready</strong><small>Restart ReviewArc to finish updating. Your local review state is preserved.</small></div>{update.release?.releaseNotesUrl && <button className="button text small" onClick={() => backend.openReleaseNotesURL(update.release!.releaseNotesUrl!)}>Release notes<ExternalLink size={12}/></button>}<button className="button secondary small" disabled={busy} onClick={onLater}>Later</button><button className="button primary small" disabled={busy} onClick={onInstall}>{busy ? <LoaderCircle className="spin" size={14}/> : <RefreshCw size={14}/>}Restart to update</button></aside>
+function UpdateBanner({update, busy, onLater, onInstall}: {update: SoftwareUpdateStatus; busy: boolean; onLater: () => void; onInstall: () => void}) {
+  const ready = update.state === 'ready'
+  return <aside className="update-ready-banner" aria-live="polite"><span><Download size={17}/></span><div><strong>ReviewArc {update.release?.version} is {ready ? 'ready' : 'available'}</strong><small>{ready ? 'Restart ReviewArc to finish updating.' : 'Install when you are ready.'} Your local review state is preserved.</small></div>{update.release?.releaseNotesUrl && <button className="button text small" onClick={() => backend.openReleaseNotesURL(update.release!.releaseNotesUrl!)}>Release notes<ExternalLink size={12}/></button>}<button className="button secondary small" disabled={busy} onClick={onLater}>Later</button><button className="button primary small" disabled={busy} onClick={onInstall}>{busy ? <LoaderCircle className="spin" size={14}/> : <RefreshCw size={14}/>} {ready ? 'Install and restart…' : 'Install update…'}</button></aside>
 }
 
 function SoftwareUpdateSettings({update, busy, onCheck, onSetChannel, onInstall}: {update: SoftwareUpdateStatus; busy: boolean; onCheck: () => void; onSetChannel: (channel: UpdateChannel) => void; onInstall: () => void}) {
   const progress = update.totalBytes ? Math.min(100, Math.round(((update.downloadedBytes ?? 0) / update.totalBytes) * 100)) : undefined
-  const unavailable = update.state === 'unsupported' || update.state === 'installing' || update.state === 'ready'
+  const unavailable = update.state !== 'idle' && update.state !== 'failed'
   const copy = updateStatusCopy(update)
   const showSuccess = update.state === 'idle' && update.lastCheckedAt
-  return <section className="software-update-settings"><div className="settings-section-heading"><div><h2>Software updates</h2><p>ReviewArc updates forward within your selected release channel. It never installs an older build.</p></div><code>v{update.currentVersion} · build {update.currentBuild}</code></div><div className="update-channel-control"><div><strong>Release channel</strong><small>{update.channel === 'beta' ? 'Beta includes early builds and all newer GA releases.' : 'Stable receives generally available releases only.'}</small></div><div role="group" aria-label="Release channel"><button type="button" aria-pressed={update.channel === 'stable'} disabled={busy || unavailable} onClick={() => onSetChannel('stable')}>Stable</button><button type="button" aria-pressed={update.channel === 'beta'} disabled={busy || unavailable} onClick={() => onSetChannel('beta')}>Beta</button></div></div>{update.channel === 'beta' && <p className="beta-channel-note"><AlertTriangle size={14}/>Beta builds may be less stable. Returning to Stable does not downgrade the installed app.</p>}<div className={`update-status-row state-${update.state}${showSuccess ? ' success' : ''}`} role="status"><span>{update.state === 'checking' || update.state === 'downloading' || update.state === 'installing' ? <LoaderCircle className="spin" size={15}/> : update.state === 'failed' ? <AlertTriangle size={15}/> : update.state === 'ready' || showSuccess ? <Check size={15}/> : <RefreshCw size={15}/>}</span><div><strong>{copy.headline}</strong>{copy.detail && <small>{copy.detail}</small>}{progress != null && <div className="update-download-progress" aria-label={`Download ${progress}% complete`}><i style={{width: `${progress}%`}}/></div>}</div><div className="update-actions">{update.release?.releaseNotesUrl && <button className="button text small" onClick={() => backend.openReleaseNotesURL(update.release!.releaseNotesUrl!)}>Release notes<ExternalLink size={12}/></button>}{update.state === 'ready' ? <button className="button primary small" disabled={busy} onClick={onInstall}>Restart to update</button> : <button className="button secondary small" disabled={busy || unavailable || update.state === 'checking' || update.state === 'downloading'} onClick={onCheck}>{busy || update.state === 'checking' ? <LoaderCircle className="spin" size={13}/> : <RefreshCw size={13}/>} {update.state === 'failed' ? 'Try again' : 'Check now'}</button>}</div></div></section>
+  const installable = update.state === 'available' || update.state === 'ready'
+  return <section className="software-update-settings"><div className="settings-section-heading"><div><h2>Software updates</h2><p>ReviewArc updates forward within your selected release channel. It never installs an older build.</p></div><code>v{update.currentVersion} · build {update.currentBuild}</code></div><div className="update-channel-control"><div><strong>Release channel</strong><small>{update.channel === 'beta' ? 'Beta includes early builds and all newer GA releases.' : 'Stable receives generally available releases only.'}</small></div><div role="group" aria-label="Release channel"><button type="button" aria-pressed={update.channel === 'stable'} disabled={busy || unavailable} onClick={() => onSetChannel('stable')}>Stable</button><button type="button" aria-pressed={update.channel === 'beta'} disabled={busy || unavailable} onClick={() => onSetChannel('beta')}>Beta</button></div></div>{update.channel === 'beta' && <p className="beta-channel-note"><AlertTriangle size={14}/>Beta builds may be less stable. Returning to Stable does not downgrade the installed app.</p>}<div className={`update-status-row state-${update.state}${showSuccess ? ' success' : ''}`} role="status"><span>{update.state === 'checking' || update.state === 'downloading' || update.state === 'installing' ? <LoaderCircle className="spin" size={15}/> : update.state === 'failed' ? <AlertTriangle size={15}/> : installable || showSuccess ? <Check size={15}/> : <RefreshCw size={15}/>}</span><div><strong>{copy.headline}</strong>{copy.detail && <small>{copy.detail}</small>}{progress != null && <div className="update-download-progress" aria-label={`Download ${progress}% complete`}><i style={{width: `${progress}%`}}/></div>}</div><div className="update-actions">{update.release?.releaseNotesUrl && <button className="button text small" onClick={() => backend.openReleaseNotesURL(update.release!.releaseNotesUrl!)}>Release notes<ExternalLink size={12}/></button>}{installable ? <button className="button primary small" disabled={busy} onClick={onInstall}>{update.state === 'ready' ? 'Install and restart…' : 'Install update…'}</button> : <button className="button secondary small" disabled={busy || unavailable} onClick={onCheck}>{busy || update.state === 'checking' ? <LoaderCircle className="spin" size={13}/> : <RefreshCw size={13}/>} {update.state === 'failed' ? 'Try again' : 'Check now'}</button>}</div></div></section>
+}
+
+function UpdateInstallConfirmation({update, busy, onCancel, onConfirm}: {update: SoftwareUpdateStatus; busy: boolean; onCancel: () => void; onConfirm: () => void}) {
+  useDialogFocus(onCancel)
+  const ready = update.state === 'ready'
+  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel() }}><section className="publish-modal" role="dialog" aria-modal="true" aria-labelledby="update-install-title"><header><div><span><Download size={17}/></span><div><h2 id="update-install-title">Install ReviewArc {update.release?.version}?</h2><p>{ready ? 'The update is downloaded and ready.' : 'ReviewArc will download the signed update.'}</p></div></div><button className="icon-button" aria-label="Close" disabled={busy} onClick={onCancel}><X size={17}/></button></header><div className="publish-comments"><article><p>ReviewArc will close and reopen to finish the update. macOS may ask for an administrator username and password to replace the app in Applications.</p></article></div><footer><button className="button secondary" disabled={busy} onClick={onCancel}>Cancel</button><button className="button primary" disabled={busy} onClick={onConfirm}>{busy ? <LoaderCircle className="spin" size={15}/> : <Download size={15}/>} {ready ? 'Install and restart' : 'Install update'}</button></footer></section></div>
 }
 
 export function SettingsScreen({state, update, updateBusy = false, onCheckUpdate = () => {}, onSetUpdateChannel = () => {}, onInstallUpdate = () => {}, onSources}: {state: BootstrapState; update?: SoftwareUpdateStatus; updateBusy?: boolean; onCheckUpdate?: () => void; onSetUpdateChannel?: (channel: UpdateChannel) => void; onInstallUpdate?: () => void; onSources: () => void}) {

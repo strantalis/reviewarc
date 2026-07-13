@@ -112,7 +112,7 @@ var (
 	ErrNotStarted       = errors.New("update service is not started")
 	ErrAlreadyStarted   = errors.New("update service is already started")
 	ErrBusy             = errors.New("an update operation is already in progress")
-	ErrNotReady         = errors.New("no update is ready to install")
+	ErrNotReady         = errors.New("no update is available to install")
 	ErrInvalidChannel   = errors.New("invalid update channel")
 	ErrInvalidCheckMode = errors.New("invalid update check mode")
 	ErrInvalidEvent     = errors.New("invalid platform update event")
