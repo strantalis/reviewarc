@@ -81,4 +81,5 @@ printf 'notarized-dmg-fixture' > "$tmp/ReviewArc-0.3.0-beta.2-macOS-universal.dm
 )
 
 node "$script_dir/test_channel_policy.mjs"
+node "$script_dir/test_blob_consistency.mjs"
 echo "release script tests passed"

@@ -3,6 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import { get, put } from "@vercel/blob";
+import { waitForMatchingArtifact } from "./blob_consistency.mjs";
 
 const [dmgPath, manifestPath] = process.argv.slice(2);
 if (!dmgPath || !manifestPath) throw new Error("DMG and manifest paths are required");
@@ -36,14 +37,6 @@ async function readBlob(pathname, collect = false) {
   };
 }
 
-async function verifyArtifact(existing) {
-  if (!existing || existing.size !== manifest.macOS.sizeBytes || existing.sha256 !== manifest.macOS.sha256) {
-    throw new Error("Existing immutable DMG does not match this notarized release");
-  }
-  if (!existing.downloadUrl?.startsWith("https://")) throw new Error("Blob download URL is not secure");
-  return existing;
-}
-
 let artifact = await readBlob(artifactPath);
 if (!artifact) {
   try {
@@ -61,7 +54,14 @@ if (!artifact) {
   }
   artifact = artifact ?? await readBlob(artifactPath);
 }
-artifact = await verifyArtifact(artifact);
+artifact = await waitForMatchingArtifact({
+  pathname: artifactPath,
+  initialArtifact: artifact,
+  expectedSize: manifest.macOS.sizeBytes,
+  expectedSha256: manifest.macOS.sha256,
+  readArtifact: readBlob,
+});
+if (!artifact.downloadUrl?.startsWith("https://")) throw new Error("Blob download URL is not secure");
 
 manifest.macOS.downloadUrl = artifact.downloadUrl;
 let manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
