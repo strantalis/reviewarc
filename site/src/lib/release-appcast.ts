@@ -1,4 +1,4 @@
-import type { SparkleReleaseManifest } from "./release-manifest";
+import { releaseNotesUrlFor, type SparkleReleaseManifest } from "./release-manifest";
 
 const appcastTitle = "ReviewArc updates";
 const appcastLink = "https://www.reviewarc.dev";
@@ -23,7 +23,7 @@ function renderItem(manifest: SparkleReleaseManifest): string {
       <sparkle:shortVersionString>${escapeXml(manifest.version)}</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>${escapeXml(manifest.macOS.minimumVersion)}</sparkle:minimumSystemVersion>
       <pubDate>${escapeXml(new Date(manifest.publishedAt).toUTCString())}</pubDate>
-      <sparkle:releaseNotesLink>${escapeXml(manifest.releaseNotesUrl)}</sparkle:releaseNotesLink>
+      <sparkle:releaseNotesLink>${escapeXml(releaseNotesUrlFor(manifest.version))}</sparkle:releaseNotesLink>
       <enclosure url="${escapeXml(manifest.macOS.downloadUrl)}" sparkle:edSignature="${escapeXml(manifest.macOS.sparkle.edSignature)}" length="${manifest.macOS.sizeBytes}" type="${manifest.macOS.sparkle.contentType}" />
     </item>`;
 }

@@ -7,6 +7,15 @@ const ed25519SignaturePattern = /^[A-Za-z0-9+/]{86}==$/;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const safeFilenamePattern = /^ReviewArc-[0-9A-Za-z.-]+-macOS-universal\.dmg$/;
 
+export function releaseChannelForVersion(version: string): "beta" | "stable" | null {
+  if (!semverPattern.test(version)) return null;
+  return version.includes("-") ? "beta" : "stable";
+}
+
+export function releaseNotesUrlFor(version: string): string {
+  return `https://www.reviewarc.dev/releases/v${version}`;
+}
+
 const releaseManifestSchema = z.strictObject({
   schemaVersion: z.literal(1),
   product: z.literal("ReviewArc"),
@@ -64,8 +73,9 @@ const releaseManifestSchema = z.strictObject({
     // The URL schema issue is already reported by Zod.
   }
 
-  const expectedNotes = `https://github.com/strantalis/reviewarc/releases/tag/v${manifest.version}`;
-  if (manifest.releaseNotesUrl !== expectedNotes) {
+  const expectedNotes = releaseNotesUrlFor(manifest.version);
+  const legacyNotes = `https://github.com/strantalis/reviewarc/releases/tag/v${manifest.version}`;
+  if (manifest.releaseNotesUrl !== expectedNotes && manifest.releaseNotesUrl !== legacyNotes) {
     context.addIssue({ code: "custom", message: "Release notes URL does not match version", path: ["releaseNotesUrl"] });
   }
 });

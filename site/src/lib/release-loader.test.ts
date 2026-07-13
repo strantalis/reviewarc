@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GetBlobResult } from "@vercel/blob";
-import { loadAppcastReleases, loadPreferredRelease, NoReleaseError, ReleaseSourceError, type BlobGetter } from "./release-loader";
-import { parseReleaseManifest } from "./release-manifest";
+import { loadAppcastReleases, loadPreferredRelease, loadReleaseVersion, NoReleaseError, ReleaseSourceError, type BlobGetter } from "./release-loader";
+import { parseReleaseManifest, releaseNotesUrlFor } from "./release-manifest";
 
 const versionFor = (channel: "stable" | "beta") => channel === "stable" ? "1.2.3" : "1.2.3-beta.1";
 
@@ -61,6 +61,12 @@ const blobResult = (body: unknown, overrides: Partial<GetBlobResult> = {}): GetB
 describe("release manifest validation", () => {
   it("accepts a complete stable release", () => {
     expect(parseReleaseManifest(manifestFor("stable"), "stable").version).toBe("1.2.3");
+  });
+
+  it("accepts canonical public release notes", () => {
+    const manifest = manifestFor("stable");
+    manifest.releaseNotesUrl = releaseNotesUrlFor(manifest.version);
+    expect(parseReleaseManifest(manifest, "stable").releaseNotesUrl).toBe("https://www.reviewarc.dev/releases/v1.2.3");
   });
 
   it("keeps the download endpoint compatible with manifests published before Sparkle", () => {
@@ -227,5 +233,25 @@ describe("preferred release loading", () => {
       },
     } satisfies GetBlobResult;
     await expect(loadPreferredRelease(vi.fn<BlobGetter>().mockResolvedValue(notModified))).rejects.toBeInstanceOf(ReleaseSourceError);
+  });
+});
+
+describe("versioned release loading", () => {
+  it("loads the immutable manifest for an exact beta version", async () => {
+    const getter = vi.fn<BlobGetter>().mockResolvedValue(blobResult(manifestFor("beta")));
+    const result = await loadReleaseVersion("1.2.3-beta.1", getter);
+    expect(result.manifest.version).toBe("1.2.3-beta.1");
+    expect(getter).toHaveBeenCalledWith(
+      "releases/beta/v1.2.3-beta.1/manifest.json",
+      expect.objectContaining({ access: "public", useCache: false }),
+    );
+  });
+
+  it("rejects unsafe or missing versions without falling through to another release", async () => {
+    const getter = vi.fn<BlobGetter>().mockResolvedValue(null);
+    await expect(loadReleaseVersion("../latest", getter)).rejects.toBeInstanceOf(NoReleaseError);
+    expect(getter).not.toHaveBeenCalled();
+    await expect(loadReleaseVersion("1.2.3", getter)).rejects.toBeInstanceOf(NoReleaseError);
+    expect(getter).toHaveBeenCalledTimes(1);
   });
 });

@@ -86,6 +86,8 @@ The Blob store is public because the DMG is a public download. Configure Vercel 
 
 ## Publishing
 
+Before creating a version tag, add user-facing notes for that version to `site/src/lib/release-notes.ts` and let the `main` deployment complete. Every release manifest points to `https://www.reviewarc.dev/releases/v<version>`, where the site reads the immutable signed release metadata and combines it with those notes. The appcast canonicalizes older GitHub release links to the public ReviewArc page during the migration away from private repository URLs.
+
 After all environment protection and credentials are configured, create a signed version tag on a commit already present on `origin/main`. Use a prerelease suffix for beta builds and omit it for stable releases:
 
 ```sh

@@ -1,5 +1,5 @@
 import { get, type GetBlobResult, type GetCommandOptions } from "@vercel/blob";
-import { parseReleaseManifest, type ReleaseManifest, type SparkleReleaseManifest } from "./release-manifest";
+import { parseReleaseManifest, releaseChannelForVersion, type ReleaseManifest, type SparkleReleaseManifest } from "./release-manifest";
 
 const MAX_MANIFEST_BYTES = 32 * 1024;
 const MAX_POLICY_BYTES = 4 * 1024;
@@ -35,9 +35,13 @@ async function readStream(stream: ReadableStream<Uint8Array>, maxBytes = MAX_MAN
 }
 
 async function readChannel(channel: Channel, getBlob: BlobGetter): Promise<{ manifest: ReleaseManifest; sourceEtag: string } | null> {
+  return readReleaseManifest(`channels/${channel}/latest.json`, channel, getBlob);
+}
+
+async function readReleaseManifest(pathname: string, channel: Channel, getBlob: BlobGetter): Promise<{ manifest: ReleaseManifest; sourceEtag: string } | null> {
   let result: GetBlobResult | null;
   try {
-    result = await getBlob(`channels/${channel}/latest.json`, {
+    result = await getBlob(pathname, {
       access: "public",
       useCache: false,
       abortSignal: AbortSignal.timeout(5_000),
@@ -120,6 +124,14 @@ export async function loadPreferredRelease(getBlob: BlobGetter = get): Promise<{
   const beta = await readChannel("beta", getBlob);
   if (beta) return beta;
   throw new NoReleaseError("No release manifest is available");
+}
+
+export async function loadReleaseVersion(version: string, getBlob: BlobGetter = get): Promise<{ manifest: ReleaseManifest; sourceEtag: string }> {
+  const channel = releaseChannelForVersion(version);
+  if (!channel) throw new NoReleaseError("Invalid release version");
+  const release = await readReleaseManifest(`releases/${channel}/v${version}/manifest.json`, channel, getBlob);
+  if (!release) throw new NoReleaseError("Release manifest is not available");
+  return release;
 }
 
 export async function loadAppcastReleases(getBlob: BlobGetter = get): Promise<{ manifests: SparkleReleaseManifest[]; sourceEtag: string }> {

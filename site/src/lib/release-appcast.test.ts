@@ -45,13 +45,14 @@ describe("Sparkle appcast", () => {
     expect(xml.match(/<sparkle:channel>beta<\/sparkle:channel>/g)).toHaveLength(1);
     expect(xml).toContain(`sparkle:edSignature="${"A".repeat(86)}=="`);
     expect(xml).toContain('type="application/x-apple-diskimage"');
+    expect(xml).toContain("<sparkle:releaseNotesLink>https://www.reviewarc.dev/releases/v1.3.0-beta.1</sparkle:releaseNotesLink>");
     expect(xml.indexOf("<sparkle:version>43")).toBeLessThan(xml.indexOf("<sparkle:version>42"));
   });
 
-  it("escapes manifest text before inserting it into XML", () => {
+  it("replaces legacy private-repository notes links with the public release page", () => {
     const manifest = manifestFor("stable", "42");
-    manifest.releaseNotesUrl = "https://example.com/releases?one=1&two=2";
-    expect(renderSparkleAppcast([manifest])).toContain("one=1&amp;two=2");
+    expect(manifest.releaseNotesUrl).toContain("github.com");
+    expect(renderSparkleAppcast([manifest])).toContain("https://www.reviewarc.dev/releases/v1.2.3");
   });
 });
 

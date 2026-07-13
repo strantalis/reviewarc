@@ -71,4 +71,10 @@ export const backend = {
     if (!window.runtime?.BrowserOpenURL) throw new BridgeUnavailableError('BrowserOpenURL')
     window.runtime.BrowserOpenURL(url.toString())
   },
+  openReleaseNotesURL: (rawUrl: string) => {
+    const url = new URL(rawUrl)
+    if (url.origin !== 'https://www.reviewarc.dev' || !/^\/releases\/v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9a-z.-]+)?$/i.test(url.pathname) || url.search || url.hash) throw new Error('ReviewArc returned an invalid release notes link.')
+    if (!window.runtime?.BrowserOpenURL) throw new BridgeUnavailableError('BrowserOpenURL')
+    window.runtime.BrowserOpenURL(url.toString())
+  },
 }

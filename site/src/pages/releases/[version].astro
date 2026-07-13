@@ -1,0 +1,123 @@
+---
+import "../../styles/landing.css";
+import "../../styles/release.css";
+import reviewArcMark from "../../assets/reviewarc-mark.svg";
+import { loadReleaseVersion, NoReleaseError } from "../../lib/release-loader";
+import { releaseNotesFor } from "../../lib/release-notes";
+import type { ReleaseManifest } from "../../lib/release-manifest";
+
+export const prerender = false;
+
+const pathVersion = Astro.params.version ?? "";
+const version = pathVersion.startsWith("v") ? pathVersion.slice(1) : "";
+let manifest: ReleaseManifest | null = null;
+let loadFailed = false;
+
+try {
+  manifest = version ? (await loadReleaseVersion(version)).manifest : null;
+  if (!manifest) Astro.response.status = 404;
+} catch (error) {
+  Astro.response.status = error instanceof NoReleaseError ? 404 : 503;
+  loadFailed = !(error instanceof NoReleaseError);
+}
+
+Astro.response.headers.set("Cache-Control", manifest ? "public, max-age=0, s-maxage=300" : "no-store");
+
+const notes = manifest ? releaseNotesFor(manifest.version) : null;
+const published = manifest
+  ? new Intl.DateTimeFormat("en-US", { dateStyle: "long", timeZone: "UTC" }).format(new Date(manifest.publishedAt))
+  : "";
+const size = manifest ? `${(manifest.macOS.sizeBytes / 1024 / 1024).toFixed(1)} MB` : "";
+const pageTitle = manifest ? `ReviewArc ${manifest.version} release notes` : "ReviewArc release unavailable";
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#f3f5f8" />
+    <meta name="description" content={manifest ? `Release notes and signed download details for ReviewArc ${manifest.version}.` : "ReviewArc release information."} />
+    <title>{pageTitle}</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&amp;family=Newsreader:opsz,wght@6..72,500;6..72,600&amp;display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to main content</a>
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="ReviewArc home">
+        <img class="brand-mark" src={reviewArcMark.src} alt="" width="31" height="25" />
+        <span>ReviewArc</span>
+      </a>
+      <nav aria-label="Primary navigation">
+        <a href="/docs/">Docs</a>
+        <a href="/">Download</a>
+      </nav>
+    </header>
+
+    <main id="main-content" class="release-page">
+      {manifest ? (
+        <article>
+          <header class="release-heading">
+            <a class="back-link" href="/">← ReviewArc</a>
+            <p class="eyebrow"><span class="status-dot"></span>{manifest.channel === "beta" ? "Beta release" : "General release"}</p>
+            <h1>ReviewArc <em>{manifest.version}</em></h1>
+            <p class="release-summary">{notes?.summary ?? "Signed publication details for this ReviewArc release."}</p>
+            <div class="release-actions">
+              <a class="download-button" href={manifest.macOS.downloadUrl}>
+                <span>Download for macOS</span>
+                <small>Universal build · {size}</small>
+              </a>
+              <span>Published {published}</span>
+            </div>
+          </header>
+
+          <div class="release-body">
+            <section aria-labelledby="changes-title">
+              <p class="section-kicker">What changed</p>
+              <h2 id="changes-title">Built for a more dependable review workflow.</h2>
+              {notes ? (
+                <ul class="change-list">
+                  {notes.changes.map((change) => <li>{change}</li>)}
+                </ul>
+              ) : (
+                <p class="muted-copy">Detailed notes were not published for this build. The signed artifact information remains available below.</p>
+              )}
+            </section>
+
+            <aside class="release-details" aria-labelledby="details-title">
+              <p class="section-kicker" id="details-title">Release details</p>
+              <dl>
+                <div><dt>Version</dt><dd>{manifest.version}</dd></div>
+                <div><dt>Build</dt><dd>{manifest.buildNumber}</dd></div>
+                <div><dt>Channel</dt><dd>{manifest.channel === "beta" ? "Beta" : "Stable"}</dd></div>
+                <div><dt>macOS</dt><dd>{manifest.macOS.minimumVersion} or newer</dd></div>
+                <div><dt>Architectures</dt><dd>Apple Silicon and Intel</dd></div>
+                <div><dt>Notarization</dt><dd>Accepted by Apple</dd></div>
+              </dl>
+              <div class="checksum">
+                <span>SHA-256</span>
+                <code>{manifest.macOS.sha256}</code>
+              </div>
+            </aside>
+          </div>
+        </article>
+      ) : (
+        <section class="release-unavailable">
+          <p class="eyebrow">Release information</p>
+          <h1>{loadFailed ? "Temporarily unavailable." : "Release not found."}</h1>
+          <p>{loadFailed ? "ReviewArc could not load the signed release details. Try again shortly." : "This version does not have a published ReviewArc release."}</p>
+          <a class="quiet-link" href="/">Return to ReviewArc →</a>
+        </section>
+      )}
+    </main>
+
+    <footer>
+      <span>ReviewArc</span>
+      <span>Built for careful reviewers.</span>
+      <a href="/docs/security-and-local-data/">Security and privacy</a>
+    </footer>
+  </body>
+</html>

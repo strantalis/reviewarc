@@ -99,12 +99,16 @@ describe('Settings', () => {
   it('locks the release channel while an update is ready and surfaces restart', () => {
     const onSetChannel = vi.fn()
     const onInstall = vi.fn()
-    const update: SoftwareUpdateStatus = {currentVersion: '0.2.0-beta.3', currentBuild: '42', state: 'ready', channel: 'beta', release: {version: '0.2.0-beta.4', build: '45', releaseNotesUrl: 'https://github.com/strantalis/reviewarc/releases/tag/v0.2.0-beta.4'}}
+    const openURL = vi.fn()
+    window.runtime = {BrowserOpenURL: openURL}
+    const update: SoftwareUpdateStatus = {currentVersion: '0.2.0-beta.3', currentBuild: '42', state: 'ready', channel: 'beta', release: {version: '0.2.0-beta.4', build: '45', releaseNotesUrl: 'https://www.reviewarc.dev/releases/v0.2.0-beta.4'}}
     render(<SettingsScreen state={{dependencies: [], paths, selections: [], inbox: []}} update={update} onSetUpdateChannel={onSetChannel} onInstallUpdate={onInstall} onSources={vi.fn()}/>)
     expect(screen.getByText('v0.2.0-beta.3 · build 42')).toBeInTheDocument()
     expect(screen.getByText(/Returning to Stable does not downgrade/)).toBeInTheDocument()
     expect(screen.getByRole('button', {name: 'Stable'})).toBeDisabled()
     expect(onSetChannel).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', {name: 'Release notes'}))
+    expect(openURL).toHaveBeenCalledWith('https://www.reviewarc.dev/releases/v0.2.0-beta.4')
     fireEvent.click(screen.getByRole('button', {name: 'Restart to update'}))
     expect(onInstall).toHaveBeenCalledOnce()
   })
@@ -144,6 +148,10 @@ describe('Repository sources', () => {
     expect(screen.getByText('2 sources included')).toBeInTheDocument()
     expect(screen.getByText('Every active repository in this organization')).toBeInTheDocument()
     expect(screen.getByText('sean/reviewarc')).toBeInTheDocument()
+    const search = screen.getByPlaceholderText('Search included repositories')
+    expect(search).toHaveAttribute('autocapitalize', 'none')
+    expect(search).toHaveAttribute('autocorrect', 'off')
+    expect(search).toHaveAttribute('spellcheck', 'false')
   })
 
   it('loads owner repositories in bounded pages and appends without duplicates', async () => {

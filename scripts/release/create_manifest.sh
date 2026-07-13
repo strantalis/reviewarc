@@ -60,5 +60,5 @@ jq -n \
       notarization: {status: "accepted", submissionId: $notarizationSubmissionId},
       ticketStapled: true
     },
-    releaseNotesUrl: ("https://github.com/strantalis/reviewarc/releases/tag/" + $gitTag)
+    releaseNotesUrl: ("https://www.reviewarc.dev/releases/" + $gitTag)
   }' > dist/release.json

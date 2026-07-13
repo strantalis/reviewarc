@@ -76,7 +76,8 @@ printf 'notarized-dmg-fixture' > "$tmp/ReviewArc-0.3.0-beta.2-macOS-universal.dm
     .macOS.sparkle.edSignature == "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==" and
     .macOS.sparkle.contentType == "application/x-apple-diskimage" and
     (.macOS.sha256 | test("^[a-f0-9]{64}$")) and
-    .macOS.downloadUrl == null
+    .macOS.downloadUrl == null and
+    .releaseNotesUrl == "https://www.reviewarc.dev/releases/v0.3.0-beta.2"
   ' dist/release.json >/dev/null
 )
 
