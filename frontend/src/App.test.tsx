@@ -115,6 +115,24 @@ describe('Settings', () => {
     fireEvent.click(screen.getByRole('button', {name: 'Beta'}))
     expect(onSetChannel).toHaveBeenCalledWith('beta')
   })
+
+  it('shows a completed no-update check instead of an indefinite checking state', () => {
+    const update = {...idleUpdate, lastCheckedAt: new Date().toISOString()}
+    render(<SettingsScreen state={{dependencies: [], paths, selections: [], inbox: []}} update={update} onSources={vi.fn()}/>)
+    expect(screen.getByText('You’re up to date.')).toBeInTheDocument()
+    expect(screen.getByText('Last checked just now.')).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: 'Check now'})).toBeEnabled()
+  })
+
+  it('keeps a failed update check actionable', () => {
+    const onCheck = vi.fn()
+    const update: SoftwareUpdateStatus = {...idleUpdate, state: 'failed', error: 'The update feed could not be loaded.'}
+    render(<SettingsScreen state={{dependencies: [], paths, selections: [], inbox: []}} update={update} onCheckUpdate={onCheck} onSources={vi.fn()}/>)
+    expect(screen.getByText('ReviewArc could not check for updates.')).toBeInTheDocument()
+    expect(screen.getByText('The update feed could not be loaded.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Try again'}))
+    expect(onCheck).toHaveBeenCalledOnce()
+  })
 })
 
 describe('Repository sources', () => {

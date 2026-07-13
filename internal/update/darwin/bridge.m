@@ -31,6 +31,7 @@ static NSString *const RAStateFailed = @"failed";
 
 - (BOOL)start:(NSError **)error;
 - (void)recordState:(NSString *)state;
+- (void)recordNoUpdate;
 - (void)recordFailure:(NSError *)error;
 - (void)recordRelease:(SUAppcastItem *)item;
 - (NSDictionary<NSString *, id> *)status;
@@ -80,6 +81,15 @@ static NSString *const RAStateFailed = @"failed";
         self.failure = @"";
     }
     self.revision += 1;
+}
+
+- (void)recordNoUpdate {
+    self.version = @"";
+    self.build = @"";
+    self.releaseNotesURL = @"";
+    self.receivedBytes = 0;
+    self.totalBytes = 0;
+    [self recordState:RAStateIdle];
 }
 
 - (void)recordFailure:(NSError *)error {
@@ -156,10 +166,7 @@ static NSString *const RAStateFailed = @"failed";
 - (void)updaterDidNotFindUpdate:(SPUUpdater *)updater error:(NSError *)error {
     (void)updater;
     (void)error;
-    self.version = @"";
-    self.build = @"";
-    self.releaseNotesURL = @"";
-    [self recordState:RAStateIdle];
+    [self recordNoUpdate];
 }
 
 - (BOOL)updater:(SPUUpdater *)updater
@@ -175,10 +182,33 @@ static NSString *const RAStateFailed = @"failed";
 - (void)updater:(SPUUpdater *)updater didAbortWithError:(NSError *)error {
     (void)updater;
     if (error.code == SUNoUpdateError) {
-        [self recordState:RAStateIdle];
+        [self recordNoUpdate];
     } else {
         [self recordFailure:error];
     }
+}
+
+- (void)updater:(SPUUpdater *)updater
+    didFinishUpdateCycleForUpdateCheck:(SPUUpdateCheck)updateCheck
+                                 error:(NSError *)error {
+    (void)updater;
+    (void)updateCheck;
+
+    // This is Sparkle's definitive end-of-cycle callback. Keep the more
+    // specific callbacks above for immediate progress, but use completion as
+    // a safety net so a successful no-update check still reports a terminal
+    // state when an earlier presentation callback is skipped.
+    if ([self.state isEqualToString:RAStateAvailable] ||
+        [self.state isEqualToString:RAStateDownloading] ||
+        [self.state isEqualToString:RAStateReady] ||
+        [self.state isEqualToString:RAStateFailed]) {
+        return;
+    }
+    if (error != nil && error.code != SUNoUpdateError) {
+        [self recordFailure:error];
+        return;
+    }
+    [self recordNoUpdate];
 }
 
 #pragma mark - SPUUserDriver
@@ -225,7 +255,7 @@ static NSString *const RAStateFailed = @"failed";
 - (void)showUpdateNotFoundWithError:(NSError *)error
                     acknowledgement:(void (^)(void))acknowledgement {
     (void)error;
-    [self recordState:RAStateIdle];
+    [self recordNoUpdate];
     acknowledgement();
 }
 
