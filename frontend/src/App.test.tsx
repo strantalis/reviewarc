@@ -87,6 +87,30 @@ describe('App startup', () => {
     await waitFor(() => expect(window.go?.main?.App?.CheckForUpdates).toHaveBeenCalledOnce())
   })
 
+  it('uses the authenticated account control as the Settings entry point', async () => {
+    const state: BootstrapState = {dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: []}
+    installBackend(state)
+    render(<App/>)
+
+    const accountControl = await screen.findByRole('button', {name: 'Open settings for Sean (@sean)'})
+    expect(screen.queryByRole('button', {name: 'Settings'})).not.toBeInTheDocument()
+    fireEvent.click(accountControl)
+
+    expect(await screen.findByRole('heading', {name: 'Settings'})).toBeInTheDocument()
+    expect(accountControl).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('presents the inbox result count as passive status text', async () => {
+    const pullRequest = reviewSession().pullRequest
+    installBackend({dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: [pullRequest]})
+    render(<App/>)
+
+    const resultCount = await screen.findByRole('status', {name: 'Inbox result count'})
+    expect(resultCount).toHaveTextContent('Showing 1 open pull request')
+    expect(resultCount.closest('button')).toBeNull()
+    expect(resultCount.querySelector('svg')).toBeNull()
+  })
+
   it('asks before installing and explains possible macOS authorization', async () => {
     const state: BootstrapState = {dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: []}
     const available: SoftwareUpdateStatus = {currentVersion: '0.1.0-beta.6', currentBuild: '6', state: 'available', channel: 'beta', release: {version: '0.1.0-beta.7', build: '7'}}
@@ -115,6 +139,19 @@ describe('App startup', () => {
     fireEvent.click(await screen.findByRole('option', {name: 'security'}))
     expect(screen.getByText('Security change')).toBeInTheDocument()
     expect(screen.queryByText('Documentation change')).not.toBeInTheDocument()
+    const search = screen.getByPlaceholderText('Search title, repository, author, PR number, or label')
+    fireEvent.change(search, {target: {value: 'Security'}})
+    const walkthroughReady = screen.getByRole('button', {name: 'Walkthrough ready'})
+    fireEvent.click(walkthroughReady)
+    const allOpen = screen.getByRole('button', {name: 'All open'})
+    expect(allOpen).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(allOpen)
+    expect(search).toHaveValue('')
+    expect(select).toHaveTextContent('All labels')
+    expect(walkthroughReady).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByText('Security change')).toBeInTheDocument()
+    expect(screen.getByText('Documentation change')).toBeInTheDocument()
+    expect(allOpen).toHaveAttribute('aria-pressed', 'true')
   })
 
   it('transitions immediately when pull request hydration is still running', async () => {
@@ -206,10 +243,26 @@ describe('Repository sources', () => {
     expect(screen.getByText('2 sources included')).toBeInTheDocument()
     expect(screen.getByText('Every active repository in this organization')).toBeInTheDocument()
     expect(screen.getByText('sean/reviewarc')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Remove sean/reviewarc repository from included sources'}))
+    expect(screen.queryByText('sean/reviewarc')).not.toBeInTheDocument()
+    expect(screen.getByText('1 source included')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Remove acme organization from included sources'}))
+    expect(screen.getByText('0 sources included')).toBeInTheDocument()
+    expect(screen.getByText('Select a repository or include an organization to build your review inbox.')).toBeInTheDocument()
     const search = screen.getByPlaceholderText('Search included repositories')
     expect(search).toHaveAttribute('autocapitalize', 'none')
     expect(search).toHaveAttribute('autocorrect', 'off')
     expect(search).toHaveAttribute('spellcheck', 'false')
+  })
+
+  it('keeps loaded included repositories removable instead of rendering selection checkboxes', async () => {
+    const state: BootstrapState = {dependencies: [], paths, account: {login: 'sean', name: 'Sean', avatarUrl: ''}, selections: [{kind: 'repository', key: 'sean/reviewarc', enabled: true}], inbox: []}
+    window.go = {main: {App: {ListSources: vi.fn().mockResolvedValue({organizations: [], repositories: [{ref: {host: 'github.com', owner: 'sean', name: 'reviewarc', cloneUrl: '', databaseId: '1'}, description: 'Local-first pull request review', isPrivate: true, isArchived: false, updatedAt: '2026-07-12T00:00:00Z'}], selections: state.selections})}}}
+    render(<SourceSelector state={state} onDone={vi.fn()}/>)
+    const remove = await screen.findByRole('button', {name: 'Remove sean/reviewarc repository from included sources'})
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+    fireEvent.click(remove)
+    expect(screen.queryByText('sean/reviewarc')).not.toBeInTheDocument()
   })
 
   it('searches all owner repository pages without requiring manual pagination', async () => {
@@ -433,6 +486,12 @@ describe('Review brief and chapter reader', () => {
     fireEvent.click(fullDiff)
     await waitFor(() => expect(getDiff).toHaveBeenCalledWith(session.id, 'src/limiter.ts'))
     expect(await screen.findByRole('button', {name: 'Back to chapter'})).toBeInTheDocument()
+    const unified = screen.getByRole('button', {name: 'Unified diff'})
+    const split = screen.getByRole('button', {name: 'Split diff'})
+    expect(unified).toHaveAttribute('aria-pressed', 'true')
+    expect(split).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(split)
+    expect(split).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('heading', {name: 'No textual changes'})).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', {name: 'Back to chapter'}))
     expect(screen.getByRole('region', {name: 'Chapter 1: Decision recording'})).toBeInTheDocument()
@@ -489,7 +548,13 @@ describe('Review brief and chapter reader', () => {
     expect(tools).toHaveAttribute('aria-expanded', 'true')
     expect(document.getElementById('review-tools-panel')).toHaveClass('panel-open')
     expect(screen.getByRole('dialog', {name: 'Review tools'})).toContainElement(document.activeElement as HTMLElement)
-    fireEvent.click(screen.getByRole('button', {name: 'Notes'}))
+    const evidence = screen.getByRole('tab', {name: 'Evidence'})
+    const notes = screen.getByRole('tab', {name: 'Notes'})
+    expect(evidence).toHaveAttribute('aria-selected', 'true')
+    expect(notes).toHaveAttribute('aria-selected', 'false')
+    fireEvent.click(notes)
+    expect(notes).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tabpanel')).toHaveAccessibleName('Notes')
     expect(screen.getByRole('heading', {name: 'Private notes'})).toBeInTheDocument()
     fireEvent.keyDown(window, {key: 'Escape'})
     expect(tools).toHaveAttribute('aria-expanded', 'false')
