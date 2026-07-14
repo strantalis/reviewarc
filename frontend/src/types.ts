@@ -70,6 +70,7 @@ export interface ReviewSession {
 }
 export interface DependencyStatus { name: DependencyName; state: DependencyState; path?: string; version?: string; message?: string }
 export interface AppPaths { root: string; repositories: string; worktrees: string; database: string; logs: string; cache: string }
+export interface EnvironmentState { dependencies: DependencyStatus[]; account?: GitHubUser; gitProtocol: 'ssh' | 'https'; refreshedAt: string }
 export type UpdateChannel = 'stable' | 'beta'
 export type UpdateState = 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'installing' | 'failed' | 'unsupported'
 export interface UpdateRelease { version: string; build: string; releaseNotesUrl?: string }
@@ -77,7 +78,7 @@ export interface SoftwareUpdateStatus {
   currentVersion: string; currentBuild: string; state: UpdateState; channel: UpdateChannel; release?: UpdateRelease
   downloadedBytes?: number; totalBytes?: number; lastCheckedAt?: string; checkMode?: 'manual' | 'scheduled'; error?: string; errorVisible?: boolean
 }
-export interface BootstrapState { dependencies: DependencyStatus[]; paths: AppPaths; account?: GitHubUser; gitProtocol?: 'ssh' | 'https'; selections: SourceSelection[]; inbox: PullRequestSummary[] }
+export interface BootstrapState { dependencies: DependencyStatus[]; paths: AppPaths; account?: GitHubUser; gitProtocol?: 'ssh' | 'https'; selections: SourceSelection[]; inbox: PullRequestSummary[]; environmentCached?: boolean }
 export interface SourceCatalog { organizations: Organization[]; repositories: Repository[]; selections?: SourceSelection[] }
 export interface SessionDetail { session: ReviewSession; files: ChangedFile[]; diffs?: DiffFile[] }
 export interface OperationEvent { stage: string; message: string; progress?: number; status?: 'running' | 'complete' | 'failed' }

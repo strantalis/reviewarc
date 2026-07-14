@@ -10,7 +10,7 @@ import { AnalysisBadge, DependencyPills, EmptyState, ErrorBanner, Logo, Markdown
 import { WindowToggleMaximise } from '../wailsjs/runtime/runtime'
 import { analysisLabel, chapterStatusLabel, filterInbox, normalizeProgress, primaryRelationship, relationshipLabel, relativeTime, repoName } from './lib'
 import type {
-  AnalysisStatus, BootstrapState, ChangedFile, ChapterStatus, CommentRange, DependencyStatus, DiffFile, EvidenceReference, FileContent, Operation,
+  AnalysisStatus, BootstrapState, ChangedFile, ChapterStatus, CommentRange, DependencyStatus, DiffFile, EnvironmentState, EvidenceReference, FileContent, Operation,
   OperationEvent, PublishPreview, PullRequestRef, PullRequestReviewComment, PullRequestSummary, Relationship, ReviewChapter, ReviewRisk,
   Repository, RepositoryPage, ReviewComment, ReviewSession, SoftwareUpdateStatus, SourceSelection, SourceState, UpdateChannel, Organization,
   ThreadReplyPreview,
@@ -57,6 +57,10 @@ function savedInboxFilters() {
   try { return JSON.parse(window.localStorage?.getItem?.('reviewarc:inbox-view') ?? '{}') as {relationship?: Relationship | 'all'; label?: string; analysis?: AnalysisStatus | 'all'} } catch { return {} }
 }
 
+function withEnvironment(state: BootstrapState, environment: EnvironmentState): BootstrapState {
+  return {...state, dependencies: environment.dependencies, account: environment.account, gitProtocol: environment.gitProtocol, environmentCached: false}
+}
+
 export function App() {
   const [bootstrap, setBootstrap] = useState<BootstrapState>()
   const [screen, setScreen] = useState<Screen>('inbox')
@@ -71,6 +75,23 @@ export function App() {
   const [dismissedUpdateBuild, setDismissedUpdateBuild] = useState('')
   const [installUpdateOpen, setInstallUpdateOpen] = useState(false)
   const openRequest = useRef(0)
+  const environmentRequest = useRef(0)
+
+  const refreshEnvironment = async (foreground = false, sourceState = bootstrap) => {
+    const request = ++environmentRequest.current
+    if (foreground) { setLoading(true); setError('') }
+    try {
+      const environment = await backend.refreshEnvironment()
+      if (environmentRequest.current === request) {
+        setBootstrap((current) => current ? withEnvironment(current, environment) : current)
+        if (environment.account && sourceState && !sourceState.selections.some((selection) => selection.enabled)) setScreen('sources')
+      }
+    } catch (err) {
+      if (foreground && environmentRequest.current === request) setError(errorText(err))
+    } finally {
+      if (foreground && environmentRequest.current === request) setLoading(false)
+    }
+  }
 
   const load = async () => {
     setLoading(true); setError('')
@@ -81,6 +102,7 @@ export function App() {
       state.selections ??= []
       state.inbox ??= []
       if (state.account && !state.selections.some((s) => s.enabled)) setScreen('sources')
+      if (state.environmentCached) void refreshEnvironment(false, state)
     } catch (err) { setError(errorText(err)) }
     finally { setLoading(false) }
   }
@@ -148,7 +170,7 @@ export function App() {
   if (!bootstrap) return <main className="startup"><WindowControls/><Logo/><ErrorBanner message={error || 'ReviewArc could not load its local state.'} onRetry={load}/></main>
 
   const missingRequired = bootstrap.dependencies.filter((dep) => dep.name !== 'codex' && dep.state !== 'available')
-  if (missingRequired.length || !bootstrap.account) return <DependencyGate state={bootstrap} onRefresh={load} refreshing={loading} error={error}/>
+  if (missingRequired.length || !bootstrap.account) return <DependencyGate state={bootstrap} onRefresh={() => void refreshEnvironment(true)} refreshing={loading} error={error}/>
 
   return <div className="app-shell">
     <AppHeader state={bootstrap} screen={screen} onNavigate={(next) => { setScreen(next); if (next === 'inbox') { openRequest.current++; setSession(undefined); setOpeningPR(undefined) } }}/>

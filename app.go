@@ -137,9 +137,12 @@ type pendingThreadReply struct {
 	sessionID string
 }
 
+const environmentSnapshotSetting = "environment_snapshot_v1"
+
 type App struct {
 	ctx               context.Context
 	mu                sync.RWMutex
+	environmentMu     sync.Mutex
 	paths             domain.AppPaths
 	detector          *dependencies.Detector
 	github            *githubclient.Client
@@ -263,6 +266,62 @@ func (a *App) Bootstrap() domain.BootstrapState {
 		}
 	}
 	sortInbox(inbox)
+	environment, cached := a.cachedEnvironment(ctx)
+	if !cached {
+		environment = a.refreshEnvironment(ctx)
+		_ = a.store.SetSetting(ctx, environmentSnapshotSetting, environment)
+	}
+	return domain.BootstrapState{
+		Dependencies:      environment.Dependencies,
+		Paths:             a.paths,
+		Selections:        selections,
+		Inbox:             inbox,
+		GitProtocol:       environment.GitProtocol,
+		Account:           environment.Account,
+		EnvironmentCached: cached,
+	}
+}
+
+func (a *App) cachedEnvironment(ctx context.Context) (domain.EnvironmentState, bool) {
+	var state domain.EnvironmentState
+	if err := a.store.GetSetting(ctx, environmentSnapshotSetting, &state); err != nil || !validEnvironmentState(state) {
+		return domain.EnvironmentState{}, false
+	}
+	return state, true
+}
+
+func validEnvironmentState(state domain.EnvironmentState) bool {
+	if state.RefreshedAt.IsZero() || (state.GitProtocol != "https" && state.GitProtocol != "ssh") || len(state.Dependencies) != 3 {
+		return false
+	}
+	want := map[domain.DependencyName]bool{domain.DependencyGit: true, domain.DependencyGH: true, domain.DependencyCodex: true}
+	seen := map[domain.DependencyName]bool{}
+	for _, dependency := range state.Dependencies {
+		if !want[dependency.Name] || seen[dependency.Name] {
+			return false
+		}
+		switch dependency.State {
+		case domain.DependencyAvailable, domain.DependencyMissing, domain.DependencyBroken:
+		default:
+			return false
+		}
+		seen[dependency.Name] = true
+	}
+	return state.Account == nil || strings.TrimSpace(state.Account.Login) != ""
+}
+
+func (a *App) RefreshEnvironment() (domain.EnvironmentState, error) {
+	a.environmentMu.Lock()
+	defer a.environmentMu.Unlock()
+	ctx := a.appContext()
+	state := a.refreshEnvironment(ctx)
+	if err := a.store.SetSetting(ctx, environmentSnapshotSetting, state); err != nil {
+		return domain.EnvironmentState{}, fmt.Errorf("save environment snapshot: %w", err)
+	}
+	return state, nil
+}
+
+func (a *App) refreshEnvironment(ctx context.Context) domain.EnvironmentState {
 	a.detector.RefreshPaths()
 	var dependencyState []domain.DependencyStatus
 	protocol := "https"
@@ -286,8 +345,7 @@ func (a *App) Bootstrap() domain.BootstrapState {
 		}
 	}()
 	environment.Wait()
-	state := domain.BootstrapState{Dependencies: dependencyState, Paths: a.paths, Selections: selections, Inbox: inbox, GitProtocol: protocol, Account: account}
-	return state
+	return domain.EnvironmentState{Dependencies: dependencyState, GitProtocol: protocol, Account: account, RefreshedAt: time.Now().UTC()}
 }
 
 func (a *App) RefreshAccount() AccountState {

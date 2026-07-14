@@ -85,8 +85,9 @@ type protocolRunner struct{ protocol string }
 type bootstrapRefreshRunner struct{ refreshed bool }
 
 type bootstrapConcurrentRunner struct {
-	started chan string
-	release chan struct{}
+	started      chan string
+	release      chan struct{}
+	accountLogin string
 }
 
 func (r *bootstrapConcurrentRunner) RefreshPaths() {}
@@ -101,7 +102,7 @@ func (r *bootstrapConcurrentRunner) Run(_ context.Context, command proc.Command)
 	r.started <- name
 	<-r.release
 	if name == "account" {
-		return proc.Result{Stdout: []byte(`{"login":"strantalis","name":"Sean","avatar_url":""}`)}, nil
+		return proc.Result{Stdout: []byte(fmt.Sprintf(`{"login":%q,"name":"Sean","avatar_url":""}`, r.accountLogin))}, nil
 	}
 	return proc.Result{Stdout: []byte(name + " version fixture\n")}, nil
 }
@@ -320,7 +321,7 @@ func TestBootstrapOverlapsIndependentEnvironmentChecks(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	runner := &bootstrapConcurrentRunner{started: make(chan string, 5), release: make(chan struct{})}
+	runner := &bootstrapConcurrentRunner{started: make(chan string, 5), release: make(chan struct{}), accountLogin: "strantalis"}
 	app := &App{
 		detector: dependencies.New(runner),
 		github:   githubclient.New(runner),
@@ -351,6 +352,75 @@ func TestBootstrapOverlapsIndependentEnvironmentChecks(t *testing.T) {
 		}
 	}
 	if len(state.Dependencies) != 3 || state.Account == nil || state.Account.Login != "strantalis" || state.GitProtocol != "ssh" {
+		t.Fatalf("bootstrap=%+v", state)
+	}
+	if state.EnvironmentCached {
+		t.Fatal("first bootstrap unexpectedly reported cached environment")
+	}
+	warm := app.Bootstrap()
+	if !warm.EnvironmentCached || warm.Account == nil || warm.Account.Login != "strantalis" || len(runner.started) != 0 {
+		t.Fatalf("warm bootstrap invoked environment checks or lost snapshot: state=%+v pending=%d", warm, len(runner.started))
+	}
+
+	runner.accountLogin = "updated"
+	runner.release = make(chan struct{})
+	refreshed := make(chan domain.EnvironmentState, 1)
+	refreshErrors := make(chan error, 1)
+	go func() {
+		state, err := app.RefreshEnvironment()
+		refreshed <- state
+		refreshErrors <- err
+	}()
+	for range 5 {
+		select {
+		case <-runner.started:
+		case <-time.After(time.Second):
+			close(runner.release)
+			t.Fatal("background environment refresh did not run every check")
+		}
+	}
+	close(runner.release)
+	next := <-refreshed
+	if err := <-refreshErrors; err != nil {
+		t.Fatal(err)
+	}
+	if next.Account == nil || next.Account.Login != "updated" {
+		t.Fatalf("refreshed environment=%+v", next)
+	}
+	updated := app.Bootstrap()
+	if !updated.EnvironmentCached || updated.Account == nil || updated.Account.Login != "updated" || len(runner.started) != 0 {
+		t.Fatalf("updated snapshot was not reused: state=%+v pending=%d", updated, len(runner.started))
+	}
+}
+
+type panicRunner struct{}
+
+func (panicRunner) Run(context.Context, proc.Command) (proc.Result, error) {
+	panic("cached bootstrap invoked a process")
+}
+
+func TestBootstrapAcceptsCachedMissingDependenciesWithoutRunningTools(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	snapshot := domain.EnvironmentState{
+		Dependencies: []domain.DependencyStatus{
+			{Name: domain.DependencyGit, State: domain.DependencyAvailable},
+			{Name: domain.DependencyGH, State: domain.DependencyMissing, Message: "Not installed in a supported location"},
+			{Name: domain.DependencyCodex, State: domain.DependencyBroken, Message: "Found but could not run"},
+		},
+		GitProtocol: "https",
+		RefreshedAt: time.Now().UTC(),
+	}
+	if err := store.SetSetting(context.Background(), environmentSnapshotSetting, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	runner := panicRunner{}
+	app := &App{detector: dependencies.New(runner), github: githubclient.New(runner), store: store, gitProtocol: func() string { panic("cached bootstrap read protocol") }}
+	state := app.Bootstrap()
+	if !state.EnvironmentCached || state.Account != nil || state.Dependencies[1].State != domain.DependencyMissing || state.Dependencies[2].State != domain.DependencyBroken {
 		t.Fatalf("bootstrap=%+v", state)
 	}
 }

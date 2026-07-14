@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { App, DiffView, FileContextView, OverviewScreen, ReviewWorkspace, SettingsScreen, SourceSelector, SplitDiffView } from './App'
 import { Markdown, WindowControls } from './components'
-import type { BootstrapState, RepositoryPage, ReviewSession, SoftwareUpdateStatus } from './types'
+import type { BootstrapState, EnvironmentState, RepositoryPage, ReviewSession, SoftwareUpdateStatus } from './types'
 
 const paths = {root: '/tmp/reviewarc', repositories: '/tmp/reviewarc/repos', worktrees: '/tmp/reviewarc/worktrees', database: '/tmp/reviewarc/db.sqlite', logs: '/tmp/reviewarc/logs', cache: '/tmp/reviewarc/cache'}
 const idleUpdate: SoftwareUpdateStatus = {currentVersion: '0.1.0', currentBuild: '7', state: 'idle', channel: 'stable'}
@@ -22,8 +22,10 @@ function reviewSession(): ReviewSession {
 
 function installBackend(state: BootstrapState) {
 	const bootstrapState = {...state, account: state.account ?? {login: 'sean', name: 'Sean', avatarUrl: ''}}
+  const environment: EnvironmentState = {dependencies: bootstrapState.dependencies, account: bootstrapState.account, gitProtocol: bootstrapState.gitProtocol ?? 'https', refreshedAt: '2026-07-14T12:00:00Z'}
   window.go = {main: {App: {
     Bootstrap: vi.fn().mockResolvedValue(bootstrapState),
+    RefreshEnvironment: vi.fn().mockResolvedValue(environment),
     GetUpdateStatus: vi.fn().mockResolvedValue(idleUpdate),
     CheckForUpdates: vi.fn().mockResolvedValue({...idleUpdate, state: 'checking'}),
     InstallUpdate: vi.fn().mockResolvedValue(undefined),
@@ -61,11 +63,25 @@ describe('App startup', () => {
     const missing: BootstrapState = {dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'missing'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: []}
     const ready: BootstrapState = {...missing, account: {login: 'sean', name: 'Sean', avatarUrl: ''}, dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}]}
     installBackend(missing)
-    window.go!.main!.App!.Bootstrap = vi.fn().mockResolvedValueOnce(missing).mockResolvedValueOnce(ready)
+    window.go!.main!.App!.RefreshEnvironment = vi.fn().mockResolvedValue({dependencies: ready.dependencies, account: ready.account, gitProtocol: 'https', refreshedAt: '2026-07-14T12:00:00Z'})
     render(<App/>)
     fireEvent.click(await screen.findByRole('button', {name: 'Check again'}))
     expect(await screen.findByText('Pull request inbox')).toBeInTheDocument()
-    expect(window.go?.main?.App?.Bootstrap).toHaveBeenCalledTimes(2)
+    expect(window.go?.main?.App?.Bootstrap).toHaveBeenCalledOnce()
+    expect(window.go?.main?.App?.RefreshEnvironment).toHaveBeenCalledOnce()
+  })
+
+  it('renders a warm cached gate immediately and repairs it in the background', async () => {
+    const cached: BootstrapState = {environmentCached: true, dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'missing'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: []}
+    installBackend(cached)
+    let finishRefresh!: (state: EnvironmentState) => void
+    window.go!.main!.App!.RefreshEnvironment = vi.fn(() => new Promise((resolve) => { finishRefresh = resolve }))
+    render(<App/>)
+    expect(await screen.findByText('Connect your review workspace')).toBeInTheDocument()
+    finishRefresh({dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], account: {login: 'sean', name: 'Sean', avatarUrl: ''}, gitProtocol: 'ssh', refreshedAt: '2026-07-14T12:00:00Z'})
+    expect(await screen.findByText('Pull request inbox')).toBeInTheDocument()
+    expect(window.go?.main?.App?.Bootstrap).toHaveBeenCalledOnce()
+    expect(window.go?.main?.App?.RefreshEnvironment).toHaveBeenCalledOnce()
   })
 
   it('opens the real-data inbox for an authenticated configured account', async () => {
@@ -74,6 +90,7 @@ describe('App startup', () => {
     expect(await screen.findByText('Pull request inbox')).toBeInTheDocument()
     await waitFor(() => expect(window.go?.main?.App?.RefreshInbox).toHaveBeenCalled())
 	expect(window.go?.main?.App?.RefreshAccount).not.toHaveBeenCalled()
+	expect(window.go?.main?.App?.RefreshEnvironment).not.toHaveBeenCalled()
 	expect(screen.getByText('Your review queue is clear')).toBeInTheDocument()
   })
 

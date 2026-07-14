@@ -82,6 +82,10 @@ export function RefreshAccount() {
   return window['go']['main']['App']['RefreshAccount']();
 }
 
+export function RefreshEnvironment() {
+  return window['go']['main']['App']['RefreshEnvironment']();
+}
+
 export function RefreshInbox() {
   return window['go']['main']['App']['RefreshInbox']();
 }
