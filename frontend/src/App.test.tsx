@@ -20,13 +20,14 @@ function reviewSession(): ReviewSession {
   }
 }
 
-function installBackend(state: BootstrapState, account: unknown = {status: 'authenticated', user: {login: 'sean', name: 'Sean', avatarUrl: ''}}) {
+function installBackend(state: BootstrapState) {
+	const bootstrapState = {...state, account: state.account ?? {login: 'sean', name: 'Sean', avatarUrl: ''}}
   window.go = {main: {App: {
-    Bootstrap: vi.fn().mockResolvedValue(state),
+    Bootstrap: vi.fn().mockResolvedValue(bootstrapState),
     GetUpdateStatus: vi.fn().mockResolvedValue(idleUpdate),
     CheckForUpdates: vi.fn().mockResolvedValue({...idleUpdate, state: 'checking'}),
     InstallUpdate: vi.fn().mockResolvedValue(undefined),
-    RefreshAccount: vi.fn().mockResolvedValue(account),
+    RefreshAccount: vi.fn(),
     RefreshInbox: vi.fn().mockResolvedValue({items: [], errors: {}, partial: false}),
   }}}
 }
@@ -58,7 +59,7 @@ describe('App startup', () => {
 
   it('checks dependencies again and leaves onboarding when the environment is repaired', async () => {
     const missing: BootstrapState = {dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'missing'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: []}
-    const ready: BootstrapState = {...missing, dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}]}
+    const ready: BootstrapState = {...missing, account: {login: 'sean', name: 'Sean', avatarUrl: ''}, dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}]}
     installBackend(missing)
     window.go!.main!.App!.Bootstrap = vi.fn().mockResolvedValueOnce(missing).mockResolvedValueOnce(ready)
     render(<App/>)
@@ -72,6 +73,7 @@ describe('App startup', () => {
     render(<App/>)
     expect(await screen.findByText('Pull request inbox')).toBeInTheDocument()
     await waitFor(() => expect(window.go?.main?.App?.RefreshInbox).toHaveBeenCalled())
+	expect(window.go?.main?.App?.RefreshAccount).not.toHaveBeenCalled()
 	expect(screen.getByText('Your review queue is clear')).toBeInTheDocument()
   })
 

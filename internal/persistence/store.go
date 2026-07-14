@@ -238,6 +238,33 @@ func (s *Store) ListRepositories(ctx context.Context) ([]domain.Repository, erro
 	return out, rows.Err()
 }
 
+// ListSelectedRepositories loads only repository rows referenced by explicit
+// source selections. Organization selections do not need repository metadata
+// during bootstrap.
+func (s *Store) ListSelectedRepositories(ctx context.Context) ([]domain.Repository, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT r.repository_json
+		FROM repositories r
+		JOIN selections s ON s.kind=? AND r.repo_key=('github.com/' || lower(s.selection_key))
+		ORDER BY r.repo_key`, domain.SelectionRepository)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Repository
+	for rows.Next() {
+		var b []byte
+		if err := rows.Scan(&b); err != nil {
+			return nil, err
+		}
+		var repository domain.Repository
+		if json.Unmarshal(b, &repository) == nil {
+			out = append(out, repository)
+		}
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) ListRepositoriesByOwner(ctx context.Context, owner string, limit int) ([]domain.Repository, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50
@@ -287,6 +314,68 @@ func (s *Store) ListPullRequests(ctx context.Context) ([]domain.PullRequest, err
 		if json.Unmarshal(b, &v) == nil {
 			out = append(out, v)
 		}
+	}
+	return out, rows.Err()
+}
+
+// ListPullRequestSummaries returns the bootstrap inbox in one database query.
+// It deliberately avoids hydrating notes, comments, chapters, and full review
+// sessions for every cached pull request.
+func (s *Store) ListPullRequestSummaries(ctx context.Context) ([]domain.PullRequestSummary, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT p.pull_request_json,
+		       COALESCE(s.analysis_status, ''),
+		       CASE
+		         WHEN a.analysis_json IS NULL THEN -1
+		         WHEN NOT json_valid(a.analysis_json) THEN -2
+		         ELSE COALESCE((
+		           SELECT MAX(CASE json_extract(r.value, '$.level')
+		             WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 WHEN 'critical' THEN 4 ELSE 0 END)
+		           FROM json_each(a.analysis_json, '$.risks') r
+		         ), 0)
+		       END,
+		       COALESCE((SELECT COUNT(*) FROM chapter_progress cp WHERE cp.session_id=s.id), 0),
+		       COALESCE((SELECT COUNT(*) FROM chapter_progress cp WHERE cp.session_id=s.id AND cp.status=?), 0),
+		       COALESCE((SELECT COUNT(*) FROM chapter_progress cp WHERE cp.session_id=s.id AND cp.status=?), 0),
+		       COALESCE((SELECT COUNT(*) FROM chapter_progress cp WHERE cp.session_id=s.id AND cp.status=?), 0)
+		FROM pull_requests p
+		LEFT JOIN review_sessions s ON s.id=(
+			SELECT latest.id FROM review_sessions latest
+			WHERE latest.repo_key=p.repo_key AND latest.pr_number=p.number
+			ORDER BY latest.updated_at DESC LIMIT 1
+		)
+		LEFT JOIN analyses a ON a.session_id=s.id
+		ORDER BY p.updated_at DESC`, domain.ChapterReviewed, domain.ChapterBlocked, domain.ChapterNeedsClarification)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]domain.PullRequestSummary, 0)
+	for rows.Next() {
+		var pullRequestJSON []byte
+		var analysisStatus domain.AnalysisStatus
+		var riskRank, total, reviewed, blocked, clarify int
+		if err := rows.Scan(&pullRequestJSON, &analysisStatus, &riskRank, &total, &reviewed, &blocked, &clarify); err != nil {
+			return nil, err
+		}
+		var pullRequest domain.PullRequest
+		if json.Unmarshal(pullRequestJSON, &pullRequest) != nil {
+			continue
+		}
+		item := pullRequest.PullRequestSummary
+		if analysisStatus != "" {
+			item.AnalysisStatus = analysisStatus
+		}
+		item.Progress = domain.ReviewProgress{Total: total, Reviewed: reviewed, Blocked: blocked, Clarify: clarify}
+		if total > 0 {
+			item.Progress.Percent = reviewed * 100 / total
+		}
+		if riskRank == -2 {
+			item.AnalysisStatus = domain.AnalysisFailed
+		} else if riskRank >= 0 {
+			item.RiskLevel = []domain.RiskLevel{domain.RiskUnknown, domain.RiskLow, domain.RiskMedium, domain.RiskHigh, domain.RiskCritical}[riskRank]
+		}
+		out = append(out, item)
 	}
 	return out, rows.Err()
 }

@@ -66,6 +66,28 @@ type protocolRunner struct{ protocol string }
 
 type bootstrapRefreshRunner struct{ refreshed bool }
 
+type bootstrapConcurrentRunner struct {
+	started chan string
+	release chan struct{}
+}
+
+func (r *bootstrapConcurrentRunner) RefreshPaths() {}
+func (r *bootstrapConcurrentRunner) ResolvedPath(tool proc.Tool) (string, error) {
+	return "/fixture/bin/" + string(tool), nil
+}
+func (r *bootstrapConcurrentRunner) Run(_ context.Context, command proc.Command) (proc.Result, error) {
+	name := string(command.Tool)
+	if len(command.Args) > 0 && command.Args[0] == "api" {
+		name = "account"
+	}
+	r.started <- name
+	<-r.release
+	if name == "account" {
+		return proc.Result{Stdout: []byte(`{"login":"strantalis","name":"Sean","avatar_url":""}`)}, nil
+	}
+	return proc.Result{Stdout: []byte(name + " version fixture\n")}, nil
+}
+
 func (r *bootstrapRefreshRunner) RefreshPaths() { r.refreshed = true }
 func (r *bootstrapRefreshRunner) ResolvedPath(tool proc.Tool) (string, error) {
 	return "/fixture/bin/" + string(tool), nil
@@ -220,6 +242,47 @@ func TestBootstrapRefreshesDependenciesBeforeReadingGitProtocol(t *testing.T) {
 	state := app.Bootstrap()
 	if !runner.refreshed || state.GitProtocol != "ssh" {
 		t.Fatalf("refreshed=%v protocol=%q, want refreshed SSH state", runner.refreshed, state.GitProtocol)
+	}
+}
+
+func TestBootstrapOverlapsIndependentEnvironmentChecks(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	runner := &bootstrapConcurrentRunner{started: make(chan string, 5), release: make(chan struct{})}
+	app := &App{
+		detector: dependencies.New(runner),
+		github:   githubclient.New(runner),
+		store:    store,
+		gitProtocol: func() string {
+			runner.started <- "protocol"
+			<-runner.release
+			return "ssh"
+		},
+	}
+	done := make(chan domain.BootstrapState, 1)
+	go func() { done <- app.Bootstrap() }()
+	seen := map[string]bool{}
+	for range 5 {
+		select {
+		case name := <-runner.started:
+			seen[name] = true
+		case <-time.After(time.Second):
+			close(runner.release)
+			t.Fatalf("environment checks did not overlap; started=%v", seen)
+		}
+	}
+	close(runner.release)
+	state := <-done
+	for _, name := range []string{"git", "gh", "codex", "account", "protocol"} {
+		if !seen[name] {
+			t.Fatalf("missing concurrent check %q; started=%v", name, seen)
+		}
+	}
+	if len(state.Dependencies) != 3 || state.Account == nil || state.Account.Login != "strantalis" || state.GitProtocol != "ssh" {
+		t.Fatalf("bootstrap=%+v", state)
 	}
 }
 

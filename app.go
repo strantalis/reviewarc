@@ -240,42 +240,50 @@ func (a *App) appContext() context.Context {
 func (a *App) Bootstrap() domain.BootstrapState {
 	ctx := a.appContext()
 	selections, _ := a.store.ListSelections(ctx)
-	if repositories, err := a.store.ListRepositories(ctx); err == nil {
+	if repositories, err := a.store.ListSelectedRepositories(ctx); err == nil {
 		selections = activeSourceSelections(selections, repositories)
 	}
 	if selections == nil {
 		selections = []domain.SourceSelection{}
 	}
-	stored, _ := a.store.ListPullRequests(ctx)
-	inbox := make([]domain.PullRequestSummary, 0, len(stored))
-	for _, pr := range stored {
-		item := pr.PullRequestSummary
+	inbox, _ := a.store.ListPullRequestSummaries(ctx)
+	for i := range inbox {
+		item := &inbox[i]
 		if item.Relationships == nil {
 			item.Relationships = []domain.Relationship{}
 		}
 		if item.Labels == nil {
 			item.Labels = []string{}
 		}
-		if s, err := a.store.LatestSessionForPullRequest(ctx, pr.Ref); err == nil {
-			item.AnalysisStatus, item.Progress = s.AnalysisStatus, s.Progress
-			if s.Analysis != nil {
-				item.RiskLevel = highestRisk(s.Analysis.Risks)
-			}
-		}
-		inbox = append(inbox, item)
 	}
 	sortInbox(inbox)
-	dependencyState := a.detector.Detect(ctx)
+	a.detector.RefreshPaths()
+	var dependencyState []domain.DependencyStatus
 	protocol := "https"
-	if a.gitProtocol != nil {
-		protocol = a.gitProtocol()
-	}
-	state := domain.BootstrapState{Dependencies: dependencyState, Paths: a.paths, Selections: selections, Inbox: inbox, GitProtocol: protocol}
-	if user, err := a.github.CurrentUser(ctx); err == nil {
-		state.Account = &user
-	}
+	var account *domain.GitHubUser
+	var environment sync.WaitGroup
+	environment.Add(3)
+	go func() {
+		defer environment.Done()
+		dependencyState = a.detector.DetectCurrent(ctx)
+	}()
+	go func() {
+		defer environment.Done()
+		if a.gitProtocol != nil {
+			protocol = a.gitProtocol()
+		}
+	}()
+	go func() {
+		defer environment.Done()
+		if user, err := a.github.CurrentUser(ctx); err == nil {
+			account = &user
+		}
+	}()
+	environment.Wait()
+	state := domain.BootstrapState{Dependencies: dependencyState, Paths: a.paths, Selections: selections, Inbox: inbox, GitProtocol: protocol, Account: account}
 	return state
 }
+
 func (a *App) RefreshAccount() AccountState {
 	u, err := a.github.CurrentUser(a.appContext())
 	if err != nil {

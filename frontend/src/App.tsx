@@ -76,11 +76,6 @@ export function App() {
     setLoading(true); setError('')
     try {
       const [state, updateStatus] = await Promise.all([backend.bootstrap(), backend.getUpdateStatus()])
-      const gh = state.dependencies.find((dep) => dep.name === 'gh')
-      if (gh?.state === 'available') {
-        const account = await backend.refreshAccount()
-        if (account.user) state.account = account.user
-      }
       setBootstrap(state)
       setSoftwareUpdate(updateStatus)
       state.selections ??= []
