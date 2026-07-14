@@ -7,6 +7,19 @@ import type { BootstrapState, ReviewSession, SoftwareUpdateStatus } from './type
 const paths = {root: '/tmp/reviewarc', repositories: '/tmp/reviewarc/repos', worktrees: '/tmp/reviewarc/worktrees', database: '/tmp/reviewarc/db.sqlite', logs: '/tmp/reviewarc/logs', cache: '/tmp/reviewarc/cache'}
 const idleUpdate: SoftwareUpdateStatus = {currentVersion: '0.1.0', currentBuild: '7', state: 'idle', channel: 'stable'}
 
+function reviewSession(): ReviewSession {
+  const evidence = {id: 'evidence-1', path: 'src/limiter.ts', revision: 'head' as const, startLine: 10, endLine: 13, validationStatus: 'valid' as const}
+  return {
+    id: 'review-session', baseSha: 'base', headSha: 'head', status: 'ready', analysisStatus: 'ready', isStale: false,
+    createdAt: '2026-07-12T00:00:00Z', updatedAt: '2026-07-12T00:00:00Z',
+    notes: [{id: 'note-1', sessionId: 'review-session', chapterId: 'chapter-1', body: 'Private note', createdAt: '2026-07-12T00:00:00Z', updatedAt: '2026-07-12T00:00:00Z'}],
+    comments: [{id: 'draft-1', sessionId: 'review-session', chapterId: 'chapter-1', kind: 'general', body: 'Draft question', status: 'draft', createdAt: '2026-07-12T00:00:00Z', updatedAt: '2026-07-12T00:00:00Z'}],
+    chapters: [{chapterId: 'chapter-1', status: 'inProgress', updatedAt: '2026-07-12T00:00:00Z'}], progress: {total: 1, reviewed: 0, blocked: 0, clarify: 0, percent: 0},
+    pullRequest: {ref: {repository: {host: 'github.com', owner: 'acme', name: 'api', cloneUrl: '', databaseId: '1'}, number: 1}, title: 'Record quota decisions', url: 'https://github.com/acme/api/pull/1', author: {login: 'sean', name: 'Sean', avatarUrl: ''}, updatedAt: '2026-07-12T00:00:00Z', isDraft: false, additions: 36, deletions: 6, changedFiles: 1, relationships: ['authored'], labels: ['audit'], analysisStatus: 'ready', progress: {total: 1, reviewed: 0, blocked: 0, clarify: 0, percent: 0}, riskLevel: 'high', body: '## Motivation\nIntroduce audit recording.\n\nA long implementation appendix that belongs in author context.', baseRef: 'main', headRef: 'feature/audit', baseSha: 'base', headSha: 'head', headRepository: {host: 'github.com', owner: 'acme', name: 'api', cloneUrl: '', databaseId: '1'}, commits: [], requestedReviewers: [], assignees: [], reviews: [], reviewComments: [], checkRuns: [], reviewState: ''},
+    analysis: {schemaVersion: 1, baseSha: 'base', headSha: 'head', summary: 'Adds an optional quota-decision recorder and emits decisions from the limiter.', summaryEvidence: [evidence], summaryValidation: 'valid', affectedAreas: [{name: 'Quota decisions', description: 'Changes the decision path.', evidence: [evidence]}], behavioralChanges: [], risks: [{id: 'risk-1', title: 'Callback runs while locked', description: 'A slow or reentrant recorder can block callers.', level: 'high', evidence: [evidence]}], facts: [], inferences: [], unknowns: [{id: 'unknown-1', kind: 'unknown', text: 'Whether reentrant recorders are supported is unspecified.', evidence: [evidence], validationStatus: 'valid'}], createdAt: '2026-07-12T00:00:00Z', validationIssues: [], chapters: [{id: 'chapter-1', order: 1, title: 'Decision recording', description: 'Follow the recorder from configuration to emission.', purpose: 'Understand when callbacks run and what state they observe.', status: 'inProgress', evidence: [evidence], files: [{path: 'src/limiter.ts', description: 'Limiter implementation'}], symbols: [{path: 'src/limiter.ts', name: 'Limiter.record', evidence: [evidence]}], behavioralChanges: [{id: 'change-1', summary: 'Decisions are now observable.', before: 'Allow returned a result without retaining an event.', after: 'Allow sends the result to an optional recorder.', evidence: [evidence]}], risks: [{id: 'risk-1', title: 'Callback runs while locked', description: 'A slow or reentrant recorder can block callers.', level: 'high', evidence: [evidence]}], facts: [{id: 'fact-1', kind: 'fact', text: 'The recorder receives allowed and rejected decisions.', evidence: [evidence], validationStatus: 'valid'}], inferences: [{id: 'inference-1', kind: 'inference', text: 'Configuration is expected before concurrent use.', evidence: [evidence], validationStatus: 'valid'}], unknowns: [{id: 'unknown-1', kind: 'unknown', text: 'Whether reentrant recorders are supported is unspecified.', evidence: [evidence], validationStatus: 'valid'}], relatedTests: [{id: 'test-1', path: 'src/limiter.test.ts', description: 'Covers one allowed and one rejected decision.', evidence: [evidence], relationship: 'valid'}], suggestedQuestions: [{id: 'question-1', text: 'Should Recorder run after releasing the lock?', rationale: 'The callback is application-controlled.', evidence: [evidence]}]}]},
+  }
+}
+
 function installBackend(state: BootstrapState, account: unknown = {status: 'authenticated', user: {login: 'sean', name: 'Sean', avatarUrl: ''}}) {
   window.go = {main: {App: {
     Bootstrap: vi.fn().mockResolvedValue(state),
@@ -124,6 +137,12 @@ describe('Settings', () => {
     expect(screen.getByText('Git operations: SSH')).toBeInTheDocument()
     expect(screen.getByText(/follow your/)).toHaveTextContent('Managed repository fetches follow your gh protocol setting.')
     expect(screen.getByTitle('/opt/homebrew/bin/gh')).toHaveTextContent('/opt/homebrew/bin/gh')
+    expect(screen.getByText('Analysis worktrees')).toBeInTheDocument()
+    expect(screen.getByText(paths.worktrees)).toBeInTheDocument()
+    expect(screen.getByText('Temporary cache')).toBeInTheDocument()
+    expect(screen.getByText(paths.cache)).toBeInTheDocument()
+    expect(screen.getByText(/PR analysis uses the repository cache/)).toHaveTextContent('ReviewArc also invokes your installed git, gh, and codex tools, which may read their own configuration and credentials.')
+    expect(screen.queryByText(/operates only in these managed locations/)).not.toBeInTheDocument()
   })
 
   it('locks the release channel while an update is ready and surfaces restart', () => {
@@ -283,6 +302,24 @@ describe('Repository sources', () => {
 })
 
 describe('Reanalysis state', () => {
+  it('gives stale analysis one primary recovery action without hiding the old walkthrough', async () => {
+    const current = reviewSession()
+    const session: ReviewSession = {...current, headSha: 'old-head', isStale: true, staleReason: '', pullRequest: {...current.pullRequest, headSha: 'new-head'}}
+    const start = vi.fn().mockResolvedValue({id: 'operation-1', sessionId: session.id, kind: 'analysis', stage: 'preparingSnapshot', message: 'Preparing isolated repository snapshot', state: 'running'})
+    const onReview = vi.fn()
+    window.go = {main: {App: {StartAnalysis: start}}}
+    window.runtime = {EventsOn: vi.fn(() => () => {})}
+    render(<OverviewScreen session={session} onBack={vi.fn()} onSession={vi.fn()} onReview={onReview}/>)
+
+    expect(screen.getByText('Analysis covers an older revision')).toBeInTheDocument()
+    expect(screen.getByText(/old-head.*new-head/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', {name: 'Run again'})).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Continue stale review'}))
+    expect(onReview).toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', {name: 'Reanalyze current revision'}))
+    await waitFor(() => expect(start).toHaveBeenCalledWith(session.id))
+  })
+
   it('shows progress, preserves the previous walkthrough, and prevents concurrent review actions', async () => {
     const session: ReviewSession = {
       id: 'session-1', baseSha: 'base', headSha: 'head', status: 'ready', analysisStatus: 'ready', isStale: false,
@@ -311,10 +348,163 @@ describe('Reanalysis state', () => {
   })
 })
 
+describe('Review brief and chapter reader', () => {
+  it('puts the ReviewArc brief before collapsed author context', () => {
+    const session = reviewSession()
+    window.runtime = {EventsOn: vi.fn(() => () => {})}
+    render(<OverviewScreen session={session} onBack={vi.fn()} onSession={vi.fn()} onReview={vi.fn()}/>)
+
+    const brief = screen.getByRole('region', {name: 'Pull request review overview'})
+    expect(brief).toHaveTextContent('Adds an optional quota-decision recorder')
+    const areaDetails = screen.getByText('Area details').closest('details')!
+    expect(areaDetails).not.toHaveAttribute('open')
+    fireEvent.click(screen.getByText('Area details'))
+    expect(areaDetails).toHaveAttribute('open')
+    expect(areaDetails).toHaveTextContent('Changes the decision path.')
+    expect(brief).toHaveTextContent('Callback runs while locked')
+    expect(brief).toHaveTextContent('Whether reentrant recorders are supported is unspecified')
+    const disclosure = screen.getByText('Author context').closest('details')!
+    expect(disclosure).not.toHaveAttribute('open')
+    expect(brief.compareDocumentPosition(disclosure) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    fireEvent.click(screen.getByText('Author context'))
+    expect(disclosure).toHaveAttribute('open')
+    expect(screen.getByText('A long implementation appendix that belongs in author context.')).toBeInTheDocument()
+  })
+
+  it('turns the highest risk into a concrete starting chapter inside the unified brief', () => {
+    const base = reviewSession()
+    const originalChapter = base.analysis!.chapters[0]
+    const chapterRisk = originalChapter.risks[0]
+    const extraEvidence = {...chapterRisk.evidence[0], id: 'secondary-evidence', startLine: 1, endLine: 2}
+    const session: ReviewSession = {...base, analysis: {...base.analysis!, risks: [{...base.analysis!.risks[0], id: 'overview-risk'}], chapters: [
+      {...originalChapter, id: 'chapter-1', title: 'Recorder setup', risks: [{...chapterRisk, id: 'broad-chapter-risk', title: 'Broad lock concern', evidence: [...chapterRisk.evidence, extraEvidence]}]},
+      {...originalChapter, id: 'chapter-2', order: 2, title: 'Decision path', risks: [{...chapterRisk, id: 'chapter-risk', title: 'Specific callback concern'}]},
+    ]}}
+    const onReview = vi.fn()
+    window.runtime = {EventsOn: vi.fn(() => () => {})}
+    render(<OverviewScreen session={session} onBack={vi.fn()} onSession={vi.fn()} onReview={onReview}/>)
+
+    const brief = screen.getByRole('region', {name: 'Pull request review overview'})
+    expect(brief).toHaveTextContent('#1 Record quota decisions')
+    expect(brief).toHaveTextContent('Callback runs while locked')
+    expect(brief).toHaveTextContent('Review path')
+    fireEvent.click(screen.getByRole('button', {name: 'Start with chapter 2'}))
+    expect(onReview).toHaveBeenCalledWith('chapter-2')
+  })
+
+  it('does not turn an unsupported risk into an authoritative starting chapter', () => {
+    const base = reviewSession()
+    const session: ReviewSession = {...base, analysis: {...base.analysis!, risks: [{...base.analysis!.risks[0], evidence: []}], chapters: base.analysis!.chapters.map((chapter) => ({...chapter, risks: []}))}}
+    const onReview = vi.fn()
+    window.runtime = {EventsOn: vi.fn(() => () => {})}
+    render(<OverviewScreen session={session} onBack={vi.fn()} onSession={vi.fn()} onReview={onReview}/>)
+
+    expect(screen.getByText('Concern to verify')).toBeInTheDocument()
+    expect(screen.getByText('Unverified')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Open guided review'}))
+    expect(onReview).toHaveBeenCalledWith()
+  })
+
+  it('opens chapters as a narrative and keeps the full diff one click away', async () => {
+    const session = reviewSession()
+    const getDiff = vi.fn().mockResolvedValue({file: {path: 'src/limiter.ts', previousPath: '', status: 'modified', additions: 1, deletions: 0, isBinary: false}, patch: '', hunks: []})
+    window.go = {main: {App: {
+      GetChangedFiles: vi.fn().mockResolvedValue([{path: 'src/limiter.ts', previousPath: '', status: 'modified', additions: 1, deletions: 0, isBinary: false}]),
+      GetDiff: getDiff,
+    }}}
+    render(<ReviewWorkspace session={session} onSession={vi.fn()} onBack={vi.fn()}/>)
+
+    const reader = screen.getByRole('region', {name: 'Chapter 1: Decision recording'})
+    expect(reader).toHaveTextContent('Behavioral change')
+    expect(reader).toHaveTextContent('Allow returned a result without retaining an event.')
+    expect(reader).toHaveTextContent('Callback runs while locked')
+    expect(reader).toHaveTextContent('Test posture')
+    const chapterContext = screen.getByText('Chapter context').closest('details')!
+    expect(chapterContext).not.toHaveAttribute('open')
+    expect(screen.getByText('Review closely').compareDocumentPosition(screen.getByText('Behavioral change')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByText('1 unique reference in this chapter')).toBeInTheDocument()
+    expect(screen.queryByRole('region', {name: /diff for/i})).not.toBeInTheDocument()
+    expect(getDiff).not.toHaveBeenCalled()
+    expect(screen.getByRole('combobox', {name: 'Chapter progress'})).toHaveTextContent('In progress')
+
+    const fullDiff = screen.getByRole('button', {name: 'Open full diff'})
+    expect(fullDiff.closest('.review-header')).toBeInTheDocument()
+    expect(reader).not.toContainElement(fullDiff)
+    fireEvent.click(fullDiff)
+    await waitFor(() => expect(getDiff).toHaveBeenCalledWith(session.id, 'src/limiter.ts'))
+    expect(await screen.findByRole('button', {name: 'Back to chapter'})).toBeInTheDocument()
+    expect(screen.getByRole('heading', {name: 'No textual changes'})).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Back to chapter'}))
+    expect(screen.getByRole('region', {name: 'Chapter 1: Decision recording'})).toBeInTheDocument()
+    expect(screen.getByRole('combobox', {name: 'Chapter progress'})).toHaveTextContent('In progress')
+  })
+
+  it('expands validated code evidence inline before offering deeper context', async () => {
+    const session = reviewSession()
+    const getFile = vi.fn().mockResolvedValue({path: 'src/limiter.ts', revision: 'head', sha: 'head', content: Array.from({length: 15}, (_, index) => index === 9 ? 'const answer = 42' : `line ${index + 1}`).join('\n'), isBinary: false, lineCount: 15})
+    const getDiff = vi.fn()
+    window.go = {main: {App: {
+      GetChangedFiles: vi.fn().mockResolvedValue([{path: 'src/limiter.ts', previousPath: '', status: 'modified', additions: 1, deletions: 0, isBinary: false}]),
+      GetDiff: getDiff,
+      GetFile: getFile,
+    }}}
+    render(<ReviewWorkspace session={session} onSession={vi.fn()} onBack={vi.fn()}/>)
+
+    fireEvent.click(screen.getAllByRole('button', {name: 'Show code for src/limiter.ts L10–13'})[0])
+    await waitFor(() => expect(getFile).toHaveBeenCalledWith(session.id, 'src/limiter.ts', 'head'))
+    const excerpt = await screen.findByLabelText('Code excerpt from src/limiter.ts')
+    expect(excerpt).toHaveTextContent('const answer = 42')
+    expect(excerpt).toHaveTextContent('line 13')
+    expect(excerpt.querySelector('[style*="color"]')).toBeTruthy()
+    expect(screen.getByRole('region', {name: 'Chapter 1: Decision recording'})).toBeInTheDocument()
+    expect(screen.queryByRole('button', {name: 'Back to chapter'})).not.toBeInTheDocument()
+    expect(getDiff).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', {name: 'Full context'}))
+    expect(await screen.findByRole('region', {name: 'head file context for src/limiter.ts'})).toBeInTheDocument()
+    expect(getDiff).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', {name: 'Back to chapter'}))
+    expect(screen.getByRole('region', {name: 'Chapter 1: Decision recording'})).toBeInTheDocument()
+  })
+
+  it('keeps chapters, evidence, notes, and drafts reachable through responsive panel triggers', async () => {
+    const session = reviewSession()
+    window.go = {main: {App: {GetChangedFiles: vi.fn().mockResolvedValue([])}}}
+    render(<ReviewWorkspace session={session} onSession={vi.fn()} onBack={vi.fn()}/>)
+
+    const chapters = screen.getByRole('button', {name: 'Chapters'})
+    const tools = screen.getByRole('button', {name: 'Review tools'})
+    expect(chapters).toHaveAttribute('aria-expanded', 'false')
+    expect(tools).toHaveAttribute('aria-expanded', 'false')
+
+    fireEvent.click(chapters)
+    expect(chapters).toHaveAttribute('aria-expanded', 'true')
+    expect(document.getElementById('review-chapters-panel')).toHaveClass('panel-open')
+    expect(screen.getByRole('dialog', {name: 'Review chapters'})).toContainElement(document.activeElement as HTMLElement)
+    fireEvent.click(screen.getByRole('button', {name: 'Close review panels'}))
+    expect(chapters).toHaveAttribute('aria-expanded', 'false')
+    expect(chapters).toHaveFocus()
+
+    fireEvent.click(tools)
+    expect(tools).toHaveAttribute('aria-expanded', 'true')
+    expect(document.getElementById('review-tools-panel')).toHaveClass('panel-open')
+    expect(screen.getByRole('dialog', {name: 'Review tools'})).toContainElement(document.activeElement as HTMLElement)
+    fireEvent.click(screen.getByRole('button', {name: 'Notes'}))
+    expect(screen.getByRole('heading', {name: 'Private notes'})).toBeInTheDocument()
+    fireEvent.keyDown(window, {key: 'Escape'})
+    expect(tools).toHaveAttribute('aria-expanded', 'false')
+    expect(tools).toHaveFocus()
+  })
+})
+
 describe('Diff review interactions', () => {
   const renderedDiffRoot = async () => {
 	await waitFor(() => expect(document.querySelector('diffs-container')?.shadowRoot?.querySelector('[data-column-number]')).toBeTruthy())
 	return document.querySelector('diffs-container')!.shadowRoot!
+  }
+  const renderedFileRoot = async () => {
+	await waitFor(() => expect(document.querySelector('.evidence-file-renderer [data-column-number]')).toBeTruthy())
+	return document.querySelector<HTMLElement>('.evidence-file-renderer')!
   }
 
   it('navigates validated evidence and targets both diff sides', async () => {
@@ -383,20 +573,33 @@ describe('Diff review interactions', () => {
   it('shows evidence outside diff hunks in full-file context', async () => {
 	const onCommentRange = vi.fn()
 	render(<FileContextView file={{path: 'src/greet.ts', revision: 'base', sha: 'base', content: 'one\ntwo\nthree\n', isBinary: false, lineCount: 3}} focus={{id: 'outside-hunk', path: 'src/greet.ts', revision: 'base', startLine: 2, endLine: 2, validationStatus: 'valid'}} onCommentRange={onCommentRange}/>)
-	const root = await renderedDiffRoot()
+	const root = await renderedFileRoot()
 	expect(root.querySelector('[data-line="2"]')).toHaveTextContent('two')
 	fireEvent.click(root.querySelector<HTMLElement>('[data-column-number="2"]')!)
 	expect(onCommentRange).toHaveBeenCalledWith({startLine: 2, startSide: 'LEFT', endLine: 2, endSide: 'LEFT'})
   })
 
+  it('selects a multi-line range in full-file evidence context', async () => {
+	const onCommentRange = vi.fn()
+	render(<FileContextView file={{path: 'src/greet.ts', revision: 'head', sha: 'head', content: 'one\ntwo\nthree\n', isBinary: false, lineCount: 3}} focus={{id: 'outside-hunk', path: 'src/greet.ts', revision: 'head', startLine: 1, endLine: 1, validationStatus: 'valid'}} onCommentRange={onCommentRange}/>)
+	const root = await renderedFileRoot()
+	const first = root.querySelector<HTMLElement>('[data-column-number="1"]')!
+	const third = root.querySelector<HTMLElement>('[data-column-number="3"]')!
+	fireEvent.pointerDown(first, {pointerType: 'mouse', button: 0, pointerId: 1})
+	fireEvent.pointerEnter(third, {pointerType: 'mouse', buttons: 1, pointerId: 1})
+	fireEvent.pointerUp(window, {pointerType: 'mouse', button: 0, pointerId: 1})
+	expect(onCommentRange).toHaveBeenCalledWith({startLine: 1, startSide: 'RIGHT', endLine: 3, endSide: 'RIGHT'})
+	expect(root.querySelectorAll('[data-selected-line]')).toHaveLength(3)
+  })
+
   it('does not reuse full-file contents between paths at the same revision', async () => {
 	const focus = {id: 'line', path: 'src/first.ts', revision: 'head' as const, startLine: 1, endLine: 1, validationStatus: 'valid' as const}
 	const {rerender} = render(<FileContextView file={{path: 'src/first.ts', revision: 'head', sha: 'shared-head', content: 'first file\n', isBinary: false, lineCount: 1}} focus={focus} onCommentRange={vi.fn()}/>)
-	let root = await renderedDiffRoot()
+	let root = await renderedFileRoot()
 	expect(root.querySelector('[data-line="1"]')).toHaveTextContent('first file')
 	rerender(<FileContextView file={{path: 'src/second.ts', revision: 'head', sha: 'shared-head', content: 'second file\n', isBinary: false, lineCount: 1}} focus={{...focus, path: 'src/second.ts'}} onCommentRange={vi.fn()}/>)
 	await waitFor(() => {
-	  root = document.querySelector('diffs-container')!.shadowRoot!
+	  root = document.querySelector<HTMLElement>('.evidence-file-renderer')!
 	  expect(root.querySelector('[data-line="1"]')).toHaveTextContent('second file')
 	})
   })
@@ -434,13 +637,13 @@ describe('Diff review interactions', () => {
 	expect(screen.getByRole('button', {name: 'Symbol 7'})).toBeInTheDocument()
 	await waitFor(() => expect(document.querySelector('.file-section span[title="src/second.ts"]')).toBeTruthy())
 	const secondFileButton = document.querySelector('.file-section span[title="src/second.ts"]')!.closest('button')!
-	fireEvent.click(screen.getByRole('button', {name: /src\/first\.tsL1/}))
-	fireEvent.click(screen.getByRole('button', {name: /src\/second\.tsL1/}))
+	fireEvent.click(screen.getAllByRole('button', {name: /src\/first\.tsL1/})[0])
+	fireEvent.click(screen.getAllByRole('button', {name: /src\/second\.tsL1/})[0])
 	resolveSecond({path: 'src/second.ts', revision: 'head', sha: 'head', content: 'second file wins\n', isBinary: false, lineCount: 1})
-	await waitFor(() => expect(document.querySelector('diffs-container')?.shadowRoot?.querySelector('[data-line="1"]')).toHaveTextContent('second file wins'))
+	await waitFor(() => expect(document.querySelector('.evidence-file-renderer [data-line="1"]')).toHaveTextContent('second file wins'))
 	resolveFirst({path: 'src/first.ts', revision: 'head', sha: 'head', content: 'stale first file\n', isBinary: false, lineCount: 1})
 	await Promise.resolve()
-	expect(document.querySelector('diffs-container')?.shadowRoot?.querySelector('[data-line="1"]')).toHaveTextContent('second file wins')
+	expect(document.querySelector('.evidence-file-renderer [data-line="1"]')).toHaveTextContent('second file wins')
 	resolveSecondDiff({file: {path: 'src/second.ts', previousPath: '', status: 'modified', additions: 0, deletions: 0, isBinary: true}, patch: '', hunks: []})
 	resolveFirstDiff({file: {path: 'src/first.ts', previousPath: '', status: 'modified', additions: 1, deletions: 0, isBinary: false}, patch: 'diff --git a/src/first.ts b/src/first.ts\n--- a/src/first.ts\n+++ b/src/first.ts\n@@ -0,0 +1 @@\n+stale\n', hunks: []})
 	fireEvent.click(secondFileButton)

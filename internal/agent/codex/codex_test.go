@@ -151,13 +151,36 @@ func TestValidateRejectsTraversalAndInvalidLines(t *testing.T) {
 }
 
 func TestValidateModelIdentityRejectsDuplicateChapterIDs(t *testing.T) {
-	raw := rawAnalysis{Chapters: []rawChapter{{ID: "chapter", Order: 1}, {ID: "chapter", Order: 2}}}
+	raw := rawAnalysis{Summary: "Review summary", Chapters: []rawChapter{{ID: "chapter", Order: 1, Title: "One", Purpose: "Review one"}, {ID: "chapter", Order: 2, Title: "Two", Purpose: "Review two"}}}
 	if err := validateModelIdentity(raw); err == nil || !strings.Contains(err.Error(), "reused") {
 		t.Fatalf("duplicate chapter ID error = %v", err)
 	}
-	raw = rawAnalysis{Chapters: []rawChapter{{ID: "chapter", Order: 1}, {ID: "other", Order: 1}}}
+	raw = rawAnalysis{Summary: "Review summary", Chapters: []rawChapter{{ID: "chapter", Order: 1, Title: "One", Purpose: "Review one"}, {ID: "other", Order: 1, Title: "Two", Purpose: "Review two"}}}
 	if err := validateModelIdentity(raw); err == nil || !strings.Contains(err.Error(), "order") {
 		t.Fatalf("duplicate chapter order error = %v", err)
+	}
+}
+
+func TestValidateRejectsEmptyOrUnsupportedWalkthrough(t *testing.T) {
+	for _, raw := range []rawAnalysis{
+		{Chapters: []rawChapter{{ID: "chapter", Order: 1, Title: "Title", Purpose: "Purpose"}}},
+		{Summary: "Summary", Chapters: []rawChapter{{ID: "chapter", Order: 1, Purpose: "Purpose"}}},
+	} {
+		if err := validateModelIdentity(raw); err == nil || !strings.Contains(err.Error(), "empty") {
+			t.Fatalf("empty walkthrough error = %v", err)
+		}
+	}
+	analysis := domain.ReviewAnalysis{Summary: "Summary", Chapters: []domain.ReviewChapter{{ID: "chapter", Title: "Title", Purpose: "Purpose"}}}
+	if err := validateAnalysisSubstance(analysis); err == nil || !strings.Contains(err.Error(), "substantive review findings") {
+		t.Fatalf("unsupported walkthrough error = %v", err)
+	}
+	analysis.Chapters[0].Evidence = []domain.EvidenceReference{{ID: "evidence", ValidationStatus: domain.ValidationValid}}
+	if err := validateAnalysisSubstance(analysis); err == nil || !strings.Contains(err.Error(), "substantive review findings") {
+		t.Fatalf("empty evidence-only walkthrough error = %v", err)
+	}
+	analysis.Chapters[0].Facts = []domain.Claim{{ID: "fact", Text: "The implementation changes behavior.", Evidence: analysis.Chapters[0].Evidence}}
+	if err := validateAnalysisSubstance(analysis); err != nil {
+		t.Fatalf("evidence-backed walkthrough rejected: %v", err)
 	}
 }
 

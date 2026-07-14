@@ -196,14 +196,27 @@ func (a *App) startup(ctx context.Context) { a.mu.Lock(); a.ctx = ctx; a.mu.Unlo
 func (a *App) domReady(ctx context.Context) {
 	configureNativeWindowChrome(ctx)
 	configureNativeApplicationMenu(ctx)
+	if shouldNavigateToEmbeddedFrontend(runtime.Environment(ctx).BuildType) {
+		runtime.WindowExecJS(ctx, frontendRevisionScript(frontendRevision))
+	}
 	if a.updater == nil {
 		return
 	}
-	updateCtx, cancel := context.WithCancel(ctx)
 	a.mu.Lock()
+	if a.updateCancel != nil {
+		a.mu.Unlock()
+		return
+	}
+	updateCtx, cancel := context.WithCancel(ctx)
 	a.updateCancel = cancel
 	a.mu.Unlock()
 	_ = a.updater.Start(updateCtx)
+}
+
+func shouldNavigateToEmbeddedFrontend(buildType string) bool { return buildType != "dev" }
+
+func frontendRevisionScript(revision string) string {
+	return fmt.Sprintf(`(() => { const path = %q; if (window.location.pathname !== path) window.location.replace("wails://wails" + path); })();`, "/__frontend/"+revision+"/")
 }
 func (a *App) shutdown(context.Context) {
 	a.mu.Lock()
@@ -508,11 +521,11 @@ func (a *App) GetSession(id string) (domain.ReviewSession, error) {
 	return normalizeSession(session), nil
 }
 func (a *App) GetChangedFiles(sessionID string) ([]domain.ChangedFile, error) {
-	state, err := a.ensurePrepared(sessionID)
+	state, err := a.preparedReviewState(sessionID)
 	return state.files, err
 }
 func (a *App) GetDiff(sessionID, path string) (domain.DiffFile, error) {
-	state, err := a.ensurePrepared(sessionID)
+	state, err := a.preparedReviewState(sessionID)
 	if err != nil {
 		return domain.DiffFile{}, err
 	}
@@ -524,11 +537,49 @@ func (a *App) GetDiff(sessionID, path string) (domain.DiffFile, error) {
 	return domain.DiffFile{}, errors.New("file is not part of this pull request")
 }
 func (a *App) GetFile(sessionID, path string, revision domain.Revision) (domain.FileContent, error) {
-	state, err := a.ensurePrepared(sessionID)
+	state, _, err := a.preparedReviewRepository(sessionID)
 	if err != nil {
 		return domain.FileContent{}, err
 	}
 	return a.repos.ReadFile(a.appContext(), state.repository, revision, path)
+}
+
+func (a *App) preparedReviewState(sessionID string) (preparedState, error) {
+	state, revisionChanged, err := a.preparedReviewRepository(sessionID)
+	if err != nil || !revisionChanged {
+		return state, err
+	}
+	files, err := a.repos.ChangedFiles(a.appContext(), state.repository)
+	state.files = files
+	return state, err
+}
+
+func (a *App) preparedReviewRepository(sessionID string) (preparedState, bool, error) {
+	state, err := a.ensurePrepared(sessionID)
+	if err != nil {
+		return state, false, err
+	}
+	session, err := a.store.GetSession(a.appContext(), sessionID)
+	if err != nil {
+		return state, false, err
+	}
+	repository := analysisRepository(session, state.repository)
+	revisionChanged := repository.BaseSHA != state.repository.BaseSHA || repository.HeadSHA != state.repository.HeadSHA
+	state.repository = repository
+	return state, revisionChanged, nil
+}
+
+func analysisRepository(session domain.ReviewSession, repository gitcache.ManagedRepository) gitcache.ManagedRepository {
+	if !session.IsStale || session.Analysis == nil {
+		return repository
+	}
+	if session.Analysis.BaseSHA != "" {
+		repository.BaseSHA = session.Analysis.BaseSHA
+	}
+	if session.Analysis.HeadSHA != "" {
+		repository.HeadSHA = session.Analysis.HeadSHA
+	}
+	return repository
 }
 func (a *App) StartAnalysis(sessionID string) (Operation, error) {
 	session, err := a.store.GetSession(a.appContext(), sessionID)
@@ -983,7 +1034,7 @@ func (a *App) failOperation(op Operation, err error) {
 	op.Stage = "failed"
 	op.Message = safeMessage(err)
 	if session, loadErr := a.store.GetSession(a.appContext(), op.SessionID); loadErr == nil {
-		session.AnalysisStatus = domain.AnalysisFailed
+		session.AnalysisStatus = analysisStatusAfterFailure(session)
 		session.UpdatedAt = time.Now().UTC()
 		_ = a.store.SaveSession(a.appContext(), session)
 	}
@@ -1266,6 +1317,13 @@ func analysisStatusAfterCancellation(session domain.ReviewSession) domain.Analys
 		return domain.AnalysisStale
 	}
 	return domain.AnalysisReady
+}
+
+func analysisStatusAfterFailure(session domain.ReviewSession) domain.AnalysisStatus {
+	if session.Analysis == nil {
+		return domain.AnalysisFailed
+	}
+	return analysisStatusAfterCancellation(session)
 }
 
 func analysisWasCancelled(ctx context.Context, err error) bool {

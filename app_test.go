@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -15,6 +17,7 @@ import (
 
 	"reviewarc/internal/dependencies"
 	"reviewarc/internal/domain"
+	gitcache "reviewarc/internal/git"
 	githubclient "reviewarc/internal/github"
 	"reviewarc/internal/persistence"
 	proc "reviewarc/internal/process"
@@ -235,6 +238,36 @@ func TestApplicationOptionsKeepNativeWindowShapeWithCustomControls(t *testing.T)
 	if configured.OnDomReady == nil {
 		t.Fatal("native AppKit controls must be hidden after the window is ready")
 	}
+	if configured.AssetServer == nil || configured.AssetServer.Middleware == nil {
+		t.Fatal("embedded frontend assets must disable persistent webview caching")
+	}
+	recorder := httptest.NewRecorder()
+	servedPath := ""
+	handler := configured.AssetServer.Middleware(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		servedPath = request.URL.Path
+		response.WriteHeader(http.StatusNoContent)
+	}))
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "https://reviewarc.invalid/__frontend/"+frontendRevision+"/", nil))
+	if got := recorder.Header().Get("Cache-Control"); got != "no-store, max-age=0" {
+		t.Fatalf("Cache-Control=%q, want no-store", got)
+	}
+	if frontendRevision == "" || frontendRevision == "unavailable" || !strings.Contains(frontendRevisionScript(frontendRevision), frontendRevision) {
+		t.Fatalf("invalid embedded frontend revision %q", frontendRevision)
+	}
+	if servedPath != "/" {
+		t.Fatalf("versioned frontend path was not rewritten: %q", servedPath)
+	}
+}
+
+func TestFrontendRevisionNavigationSkipsWailsDevServer(t *testing.T) {
+	if shouldNavigateToEmbeddedFrontend("dev") {
+		t.Fatal("development builds must stay on the Wails frontend dev server")
+	}
+	for _, buildType := range []string{"production", "debug", ""} {
+		if !shouldNavigateToEmbeddedFrontend(buildType) {
+			t.Fatalf("build type %q must use the embedded frontend revision", buildType)
+		}
+	}
 }
 
 func TestAnalysisStatusAfterCancellationPreservesPreviousWalkthrough(t *testing.T) {
@@ -248,6 +281,39 @@ func TestAnalysisStatusAfterCancellationPreservesPreviousWalkthrough(t *testing.
 	withAnalysis.IsStale = true
 	if got := analysisStatusAfterCancellation(withAnalysis); got != domain.AnalysisStale {
 		t.Fatalf("stale reanalysis cancellation status=%q", got)
+	}
+}
+
+func TestAnalysisStatusAfterFailurePreservesPreviousWalkthrough(t *testing.T) {
+	if got := analysisStatusAfterFailure(domain.ReviewSession{}); got != domain.AnalysisFailed {
+		t.Fatalf("first analysis failure status=%q", got)
+	}
+	withAnalysis := domain.ReviewSession{Analysis: &domain.ReviewAnalysis{}}
+	if got := analysisStatusAfterFailure(withAnalysis); got != domain.AnalysisReady {
+		t.Fatalf("reanalysis failure status=%q", got)
+	}
+	withAnalysis.IsStale = true
+	if got := analysisStatusAfterFailure(withAnalysis); got != domain.AnalysisStale {
+		t.Fatalf("stale reanalysis failure status=%q", got)
+	}
+}
+
+func TestAnalysisRepositoryUsesAnalyzedRevisionForStaleWalkthrough(t *testing.T) {
+	repository := gitcache.ManagedRepository{BaseSHA: "current-base", HeadSHA: "current-head"}
+	session := domain.ReviewSession{IsStale: true, Analysis: &domain.ReviewAnalysis{BaseSHA: "analyzed-base", HeadSHA: "analyzed-head"}}
+
+	got := analysisRepository(session, repository)
+	if got.BaseSHA != "analyzed-base" || got.HeadSHA != "analyzed-head" {
+		t.Fatalf("stale evidence revisions = %q..%q", got.BaseSHA, got.HeadSHA)
+	}
+	if got.BaseSHA == repository.BaseSHA && got.HeadSHA == repository.HeadSHA {
+		t.Fatal("stale analysis revision should be detectable without loading changed files")
+	}
+
+	session.IsStale = false
+	got = analysisRepository(session, repository)
+	if got.BaseSHA != repository.BaseSHA || got.HeadSHA != repository.HeadSHA {
+		t.Fatalf("current evidence revisions changed = %q..%q", got.BaseSHA, got.HeadSHA)
 	}
 }
 

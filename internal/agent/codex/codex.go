@@ -342,11 +342,17 @@ func (p *Provider) validate(ctx context.Context, input agent.AnalyzeInput, raw r
 	}
 	v := validator{ctx: ctx, files: p.files, workspace: input.Workspace, base: input.BaseSHA, head: input.HeadSHA, cache: map[string][]byte{}, ids: map[string]rawEvidence{}}
 	analysis := v.convert(raw)
+	if err := validateAnalysisSubstance(analysis); err != nil {
+		return domain.ReviewAnalysis{}, err
+	}
 	analysis.CreatedAt = time.Now().UTC()
 	return analysis, nil
 }
 
 func validateModelIdentity(raw rawAnalysis) error {
+	if strings.TrimSpace(raw.Summary) == "" {
+		return errors.New("codex returned an empty review summary")
+	}
 	if len(raw.Chapters) == 0 {
 		return errors.New("codex returned no review chapters")
 	}
@@ -402,6 +408,9 @@ func validateModelIdentity(raw rawAnalysis) error {
 		return err
 	}
 	for _, c := range raw.Chapters {
+		if strings.TrimSpace(c.Title) == "" || strings.TrimSpace(c.Purpose) == "" {
+			return fmt.Errorf("codex returned an empty title or purpose for chapter %q", c.ID)
+		}
 		if err := add(c.ID, "chapter"); err != nil {
 			return err
 		}
@@ -436,6 +445,67 @@ func validateModelIdentity(raw rawAnalysis) error {
 		}
 	}
 	return nil
+}
+
+func validateAnalysisSubstance(analysis domain.ReviewAnalysis) error {
+	valid := func(values []domain.EvidenceReference) bool {
+		for _, evidence := range values {
+			if evidence.ValidationStatus == domain.ValidationValid {
+				return true
+			}
+		}
+		return false
+	}
+	hasFindings := false
+	hasValidatedFinding := false
+	for _, chapter := range analysis.Chapters {
+		for _, symbol := range chapter.Symbols {
+			hasFindings = true
+			if valid(symbol.Evidence) {
+				hasValidatedFinding = true
+			}
+		}
+		for _, change := range chapter.BehavioralChanges {
+			hasFindings = true
+			if valid(change.Evidence) {
+				hasValidatedFinding = true
+			}
+		}
+		for _, risk := range chapter.Risks {
+			hasFindings = true
+			if valid(risk.Evidence) {
+				hasValidatedFinding = true
+			}
+		}
+		claims := [][]domain.Claim{chapter.Facts, chapter.Inferences, chapter.Unknowns}
+		for _, group := range claims {
+			for _, claim := range group {
+				hasFindings = true
+				if valid(claim.Evidence) {
+					hasValidatedFinding = true
+				}
+			}
+		}
+		for _, test := range chapter.RelatedTests {
+			hasFindings = true
+			if valid(test.Evidence) {
+				hasValidatedFinding = true
+			}
+		}
+		for _, question := range chapter.SuggestedQuestions {
+			hasFindings = true
+			if valid(question.Evidence) {
+				hasValidatedFinding = true
+			}
+		}
+	}
+	if !hasFindings {
+		return errors.New("codex returned no substantive review findings")
+	}
+	if hasValidatedFinding {
+		return nil
+	}
+	return errors.New("codex returned no validated evidence for the walkthrough")
 }
 
 type validator struct {

@@ -85,11 +85,11 @@ func TestLimitedBufferCapsButReportsConsumedBytes(t *testing.T) {
 }
 
 func TestMinimalEnvironmentSeparatesCredentialsByTool(t *testing.T) {
-	source := []string{"PATH=/bin", "GH_TOKEN=github", "OPENAI_API_KEY=openai", "UNRELATED=nope"}
+	source := []string{"PATH=/bin", "GH_HOST=github.example.com", "GH_CONFIG_DIR=/tmp/gh", "GH_TOKEN=stale", "GITHUB_TOKEN=also-stale", "OPENAI_API_KEY=openai", "UNRELATED=nope"}
 	if got := minimalEnvironment(source, Git, "/safe/bin"); len(got) != 1 || got[0] != "PATH=/safe/bin" {
 		t.Fatalf("git env leaked credentials: %v", got)
 	}
-	if got := minimalEnvironment(source, GH, "/safe/bin"); len(got) != 2 || got[0] != "GH_TOKEN=github" || got[1] != "PATH=/safe/bin" {
+	if got := minimalEnvironment(source, GH, "/safe/bin"); len(got) != 3 || got[0] != "GH_HOST=github.example.com" || got[1] != "GH_CONFIG_DIR=/tmp/gh" || got[2] != "PATH=/safe/bin" {
 		t.Fatalf("unexpected gh env: %v", got)
 	}
 	if got := minimalEnvironment(source, Codex, "/safe/bin"); len(got) != 2 || got[0] != "OPENAI_API_KEY=openai" || got[1] != "PATH=/safe/bin" {

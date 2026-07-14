@@ -221,7 +221,10 @@ func minimalEnvironment(source []string, tool Tool, pathValue string) []string {
 		allowed["SSH_AUTH_SOCK"] = true
 	}
 	if tool == GH {
-		allowed["GH_HOST"], allowed["GH_CONFIG_DIR"], allowed["GH_TOKEN"], allowed["GITHUB_TOKEN"] = true, true, true, true
+		// ReviewArc deliberately relies on gh's own credential store. Forwarding
+		// launch-time token variables can shadow a newer keyring login for the
+		// entire lifetime of the desktop process.
+		allowed["GH_HOST"], allowed["GH_CONFIG_DIR"] = true, true
 	}
 	if tool == Codex {
 		allowed["CODEX_HOME"], allowed["OPENAI_API_KEY"] = true, true
