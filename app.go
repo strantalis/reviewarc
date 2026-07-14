@@ -508,7 +508,7 @@ func (a *App) OpenPullRequest(ref domain.PullRequestRef) (domain.ReviewSession, 
 			}
 		}
 	}
-	detail, err := a.github.GetPullRequest(ctx, ref)
+	detail, err := a.github.GetPullRequestCore(ctx, ref)
 	if err != nil {
 		return domain.ReviewSession{}, err
 	}
@@ -562,6 +562,38 @@ func (a *App) OpenPullRequest(ref domain.PullRequestRef) (domain.ReviewSession, 
 		return domain.ReviewSession{}, err
 	}
 	return a.GetSession(session.ID)
+}
+func (a *App) RefreshPullRequestContext(sessionID string) (domain.ReviewSession, error) {
+	return a.refreshPullRequestContext(a.appContext(), sessionID)
+}
+func (a *App) refreshPullRequestContext(ctx context.Context, sessionID string) (domain.ReviewSession, error) {
+	session, err := a.store.GetSession(ctx, sessionID)
+	if err != nil {
+		return domain.ReviewSession{}, err
+	}
+	pullRequestContext, err := a.github.GetPullRequestContext(ctx, session.PullRequest.Ref, session.PullRequest.HeadSHA)
+	if err != nil {
+		return domain.ReviewSession{}, err
+	}
+	current, err := a.store.GetSession(ctx, sessionID)
+	if err != nil {
+		return domain.ReviewSession{}, err
+	}
+	if current.PullRequest.Ref.Number != session.PullRequest.Ref.Number ||
+		!strings.EqualFold(current.PullRequest.Ref.Repository.Host, session.PullRequest.Ref.Repository.Host) ||
+		!strings.EqualFold(current.PullRequest.Ref.Repository.Owner, session.PullRequest.Ref.Repository.Owner) ||
+		!strings.EqualFold(current.PullRequest.Ref.Repository.Name, session.PullRequest.Ref.Repository.Name) ||
+		current.PullRequest.HeadSHA != session.PullRequest.HeadSHA {
+		return domain.ReviewSession{}, errors.New("pull request revision changed while loading discussion and checks")
+	}
+	current.PullRequest.Reviews = pullRequestContext.Reviews
+	current.PullRequest.ReviewComments = pullRequestContext.ReviewComments
+	current.PullRequest.CheckRuns = pullRequestContext.CheckRuns
+	current.UpdatedAt = time.Now().UTC()
+	if err := a.store.SaveSession(ctx, current); err != nil {
+		return domain.ReviewSession{}, err
+	}
+	return normalizeSession(current), nil
 }
 func (a *App) GetSession(id string) (domain.ReviewSession, error) {
 	session, err := a.store.GetSession(a.appContext(), id)
@@ -636,7 +668,7 @@ func (a *App) StartAnalysis(sessionID string) (Operation, error) {
 	if err != nil {
 		return Operation{}, err
 	}
-	op := Operation{ID: newID(), SessionID: sessionID, Kind: "analysis", Stage: "preparingSnapshot", State: "running", Message: "Preparing isolated repository snapshot"}
+	op := Operation{ID: newID(), SessionID: sessionID, Kind: "analysis", Stage: "loadingPullRequestContext", State: "running", Message: "Loading GitHub discussion and checks"}
 	ctx, cancel := context.WithCancel(a.appContext())
 	a.mu.Lock()
 	if _, exists := a.analysisBySession[sessionID]; exists {
@@ -951,6 +983,24 @@ func (a *App) ensurePreparedContext(ctx context.Context, sessionID string) (prep
 	return preparedState{}, errors.New("pull request revision changed while preparing the managed repository")
 }
 func (a *App) prepareAndRunAnalysis(ctx context.Context, op Operation, session domain.ReviewSession) {
+	sessionID := session.ID
+	op.Stage = "loadingPullRequestContext"
+	op.Message = "Loading GitHub discussion and checks"
+	a.emitOperation(op)
+	refreshed, err := a.refreshPullRequestContext(ctx, sessionID)
+	if err != nil {
+		a.mu.Lock()
+		delete(a.active, op.ID)
+		delete(a.analysisBySession, sessionID)
+		a.mu.Unlock()
+		if analysisWasCancelled(ctx, err) {
+			a.cancelAnalysisOperation(op)
+		} else {
+			a.failOperation(op, err)
+		}
+		return
+	}
+	session = refreshed
 	op.Stage = "preparingSnapshot"
 	op.Message = "Preparing isolated repository snapshot"
 	a.emitOperation(op)

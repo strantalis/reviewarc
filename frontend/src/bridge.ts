@@ -43,6 +43,7 @@ export const backend = {
   saveSelections: (selections: SourceSelection[]) => call<void>(['SaveSelections'], selections),
   refreshInbox: () => call<InboxResult>(['RefreshInbox']),
   openPullRequest: (ref: PullRequestRef) => call<ReviewSession>(['OpenPullRequest'], ref),
+  refreshPullRequestContext: (sessionId: string) => call<ReviewSession>(['RefreshPullRequestContext'], sessionId),
   startAnalysis: (sessionId: string) => call<Operation>(['StartAnalysis'], sessionId),
   cancelOperation: (operationId: string) => call<void>(['CancelOperation'], operationId),
   getSession: (sessionId: string) => call<ReviewSession>(['GetSession'], sessionId),

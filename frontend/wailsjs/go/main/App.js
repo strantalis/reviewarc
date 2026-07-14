@@ -90,6 +90,10 @@ export function RefreshOwnerRepositories(arg1) {
   return window['go']['main']['App']['RefreshOwnerRepositories'](arg1);
 }
 
+export function RefreshPullRequestContext(arg1) {
+  return window['go']['main']['App']['RefreshPullRequestContext'](arg1);
+}
+
 export function RefreshSelectedRepositories() {
   return window['go']['main']['App']['RefreshSelectedRepositories']();
 }

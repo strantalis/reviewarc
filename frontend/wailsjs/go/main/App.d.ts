@@ -47,6 +47,8 @@ export function RefreshInbox():Promise<main.InboxState>;
 
 export function RefreshOwnerRepositories(arg1:main.RepositoryPageInput):Promise<main.RepositoryPage>;
 
+export function RefreshPullRequestContext(arg1:string):Promise<domain.ReviewSession>;
+
 export function RefreshSelectedRepositories():Promise<main.SelectedRepositoryRefresh>;
 
 export function RefreshSourceAccess(arg1:Array<domain.Organization>):Promise<Array<domain.Organization>>;

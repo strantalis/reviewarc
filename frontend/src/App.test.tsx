@@ -130,6 +130,71 @@ describe('App startup', () => {
 	expect(screen.getByRole('heading', {name: /#7 Slow change/})).toBeInTheDocument()
 	expect(screen.queryByRole('heading', {name: 'Pull request inbox'})).not.toBeInTheDocument()
   })
+
+  it('renders the core session before lazy discussion and checks finish', async () => {
+	const core = reviewSession()
+	const pr = {...core.pullRequest, analysisStatus: core.analysisStatus, progress: core.progress}
+	const state: BootstrapState = {dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: [pr]}
+	installBackend(state)
+	let resolveContext!: (value: ReviewSession) => void
+	const context = new Promise<ReviewSession>((resolve) => { resolveContext = resolve })
+	window.go!.main!.App!.OpenPullRequest = vi.fn().mockResolvedValue(core)
+	window.go!.main!.App!.RefreshPullRequestContext = vi.fn(() => context)
+	window.runtime = {EventsOn: vi.fn(() => () => {})}
+	render(<App/>)
+
+	fireEvent.click((await screen.findByText(core.pullRequest.title)).closest('button')!)
+	expect(await screen.findByText(core.analysis!.summary)).toBeInTheDocument()
+	expect(screen.queryByText('Loading pull request context…')).not.toBeInTheDocument()
+	expect(window.go?.main?.App?.RefreshPullRequestContext).toHaveBeenCalledWith(core.id)
+
+	resolveContext({...core, pullRequest: {...core.pullRequest, reviews: [{id: 11, author: {login: 'alice', name: '', avatarUrl: ''}, state: 'COMMENTED', body: 'Please cover the retry path.', commitSha: 'head', submittedAt: '2026-07-12T01:00:00Z', url: ''}]}})
+	expect(await screen.findByText('Existing discussion')).toBeInTheDocument()
+  })
+
+  it('keeps the core session usable when lazy context exceeds its output limit', async () => {
+	const core = reviewSession()
+	const pr = {...core.pullRequest, analysisStatus: core.analysisStatus, progress: core.progress}
+	installBackend({dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: [pr]})
+	window.go!.main!.App!.OpenPullRequest = vi.fn().mockResolvedValue(core)
+	window.go!.main!.App!.RefreshPullRequestContext = vi.fn().mockRejectedValue(new Error('gh stdout exceeded the 16777216-byte output limit'))
+	window.runtime = {EventsOn: vi.fn(() => () => {})}
+	render(<App/>)
+
+	fireEvent.click((await screen.findByText(core.pullRequest.title)).closest('button')!)
+	expect(await screen.findByText(core.analysis!.summary)).toBeInTheDocument()
+	expect(await screen.findByText(/Pull request opened, but GitHub discussion and checks could not be loaded/)).toBeInTheDocument()
+	expect(screen.getByRole('heading', {name: new RegExp(core.pullRequest.title)})).toBeInTheDocument()
+  })
+
+  it('ignores a lazy context response after navigating to another pull request', async () => {
+	const first = reviewSession()
+	first.id = 'first-session'
+	first.pullRequest = {...first.pullRequest, ref: {...first.pullRequest.ref, number: 7}, title: 'First change'}
+	const second = reviewSession()
+	second.id = 'second-session'
+	second.pullRequest = {...second.pullRequest, ref: {...second.pullRequest.ref, number: 8}, title: 'Second change'}
+	const summaries = [first, second].map((item) => ({...item.pullRequest, analysisStatus: item.analysisStatus, progress: item.progress}))
+	installBackend({dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: summaries})
+	let resolveFirst!: (value: ReviewSession) => void
+	const firstContext = new Promise<ReviewSession>((resolve) => { resolveFirst = resolve })
+	window.go!.main!.App!.OpenPullRequest = vi.fn((ref: unknown) => Promise.resolve((ref as {number: number}).number === 7 ? first : second))
+	window.go!.main!.App!.RefreshPullRequestContext = vi.fn((id: unknown) => id === first.id ? firstContext : new Promise(() => {}))
+	window.runtime = {EventsOn: vi.fn(() => () => {})}
+	render(<App/>)
+
+	fireEvent.click((await screen.findByText('First change')).closest('button')!)
+	await waitFor(() => expect(window.go?.main?.App?.RefreshPullRequestContext).toHaveBeenCalledWith(first.id))
+	expect(screen.getByRole('heading', {name: /First change/})).toBeInTheDocument()
+	fireEvent.click(screen.getAllByRole('button', {name: 'Inbox'})[0])
+	fireEvent.click((await screen.findByText('Second change')).closest('button')!)
+	await waitFor(() => expect(window.go?.main?.App?.RefreshPullRequestContext).toHaveBeenCalledWith(second.id))
+	expect(screen.getByRole('heading', {name: /Second change/})).toBeInTheDocument()
+
+	resolveFirst({...first, pullRequest: {...first.pullRequest, title: 'Stale first response'}})
+	await waitFor(() => expect(screen.getByRole('heading', {name: /Second change/})).toBeInTheDocument())
+	expect(screen.queryByText('Stale first response')).not.toBeInTheDocument()
+  })
 })
 
 describe('Settings', () => {

@@ -30,10 +30,14 @@ type appFixtureRunner struct {
 }
 
 type pullRequestFixtureRunner struct {
-	mu       sync.Mutex
-	metadata []byte
-	comments []byte
-	commands []proc.Command
+	mu          sync.Mutex
+	metadata    []byte
+	reviews     []byte
+	comments    []byte
+	checks      []byte
+	contextErr  error
+	contextHook func()
+	commands    []proc.Command
 }
 
 func (r *pullRequestFixtureRunner) Run(_ context.Context, command proc.Command) (proc.Result, error) {
@@ -55,7 +59,21 @@ func (r *pullRequestFixtureRunner) Run(_ context.Context, command proc.Command) 
 			return proc.Result{Stdout: r.comments}, nil
 		}
 		return proc.Result{Stdout: []byte(`[[]]`)}, nil
+	case "repos/acme/api/pulls/7/reviews?per_page=100":
+		if r.contextHook != nil {
+			r.contextHook()
+		}
+		if r.contextErr != nil {
+			return proc.Result{}, r.contextErr
+		}
+		if len(r.reviews) > 0 {
+			return proc.Result{Stdout: r.reviews}, nil
+		}
+		return proc.Result{Stdout: []byte(`[[]]`)}, nil
 	case "repos/acme/api/commits/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/check-runs?per_page=100":
+		if len(r.checks) > 0 {
+			return proc.Result{Stdout: r.checks}, nil
+		}
 		return proc.Result{Stdout: []byte(`[{"check_runs":[]}]`)}, nil
 	default:
 		return proc.Result{Stdout: []byte(`[[]]`)}, nil
@@ -553,6 +571,169 @@ func TestNormalizeSessionMakesEveryFrontendCollectionNonNil(t *testing.T) {
 	chapter := analysis.Chapters[0]
 	if chapter.Evidence == nil || chapter.Files == nil || chapter.Symbols == nil || chapter.BehavioralChanges == nil || chapter.Risks == nil || chapter.Facts == nil || chapter.Inferences == nil || chapter.Unknowns == nil || chapter.RelatedTests == nil || chapter.SuggestedQuestions == nil {
 		t.Fatalf("chapter collections were not normalized: %+v", chapter)
+	}
+}
+
+func TestOpenPullRequestReturnsCoreBeforeRefreshingFullContext(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	baseSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	headSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	metadata := `{"number":7,"title":"Fixture PR","html_url":"https://github.com/acme/api/pull/7","updated_at":"2026-07-11T12:00:00Z","user":{"login":"author"},"base":{"ref":"main","sha":"` + baseSHA + `","repo":{"name":"api","clone_url":"https://github.com/acme/api.git","owner":{"login":"acme"}}},"head":{"ref":"feature","sha":"` + headSHA + `","repo":{"name":"api","clone_url":"https://github.com/acme/api.git","owner":{"login":"acme"}}}}`
+	reviews := []byte(`[[{"id":11,"user":{"login":"alice"},"body":"Please cover the retry path.","state":"COMMENTED","commit_id":"` + headSHA + `","submitted_at":"2026-07-11T13:00:00Z","html_url":"https://github.com/acme/api/pull/7#pullrequestreview-11"}]]`)
+	comments := []byte(`[[{"id":101,"pull_request_review_id":11,"user":{"login":"alice"},"body":"Can this race?","path":"quota/limiter.go","line":16,"side":"RIGHT","commit_id":"` + headSHA + `","created_at":"2026-07-11T13:01:00Z","updated_at":"2026-07-11T13:01:00Z","html_url":"https://github.com/acme/api/pull/7#discussion_r101"}]]`)
+	checks := []byte(`[{"check_runs":[{"id":21,"name":"test","status":"completed","conclusion":"success","html_url":"https://github.com/acme/api/actions/runs/21"}]}]`)
+	runner := &pullRequestFixtureRunner{metadata: []byte(metadata), reviews: reviews, comments: comments, checks: checks}
+	app := &App{ctx: ctx, github: githubclient.New(runner), store: store}
+	ref := domain.PullRequestRef{Repository: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}, Number: 7}
+
+	core, err := app.OpenPullRequest(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.commands) != 2 {
+		t.Fatalf("open commands=%d, want metadata and commits only: %v", len(runner.commands), runner.commands)
+	}
+	if len(core.PullRequest.Reviews) != 0 || len(core.PullRequest.ReviewComments) != 0 || len(core.PullRequest.CheckRuns) != 0 {
+		t.Fatalf("core open unexpectedly waited for context: %+v", core.PullRequest)
+	}
+
+	hydrated, err := app.RefreshPullRequestContext(core.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.commands) != 5 || len(hydrated.PullRequest.Reviews) != 1 || len(hydrated.PullRequest.ReviewComments) != 1 || len(hydrated.PullRequest.CheckRuns) != 1 {
+		t.Fatalf("hydrated session=%+v commands=%d", hydrated.PullRequest, len(runner.commands))
+	}
+	persisted, err := store.GetSession(ctx, core.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := existingDiscussion(persisted.PullRequest); !strings.Contains(got, "Please cover the retry path.") || !strings.Contains(got, "Can this race?") {
+		t.Fatalf("analysis discussion context=%q", got)
+	}
+}
+
+func TestPullRequestContextOverflowLeavesCoreSessionUsable(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	baseSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	headSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	metadata := `{"number":7,"title":"Large PR","base":{"ref":"main","sha":"` + baseSHA + `","repo":{"name":"api","owner":{"login":"acme"}}},"head":{"ref":"feature","sha":"` + headSHA + `","repo":{"name":"api","owner":{"login":"acme"}}}}`
+	runner := &pullRequestFixtureRunner{metadata: []byte(metadata)}
+	app := &App{ctx: ctx, github: githubclient.New(runner), store: store}
+	ref := domain.PullRequestRef{Repository: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}, Number: 7}
+	core, err := app.OpenPullRequest(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.contextErr = fmt.Errorf("gh stdout exceeded its limit: %w", proc.ErrOutputLimitExceeded)
+	if _, err := app.RefreshPullRequestContext(core.ID); !errors.Is(err, proc.ErrOutputLimitExceeded) {
+		t.Fatalf("context error=%v, want ErrOutputLimitExceeded", err)
+	}
+	persisted, err := store.GetSession(ctx, core.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.PullRequest.Title != "Large PR" || persisted.PullRequest.HeadSHA != headSHA || len(persisted.PullRequest.Reviews) != 0 || len(persisted.PullRequest.ReviewComments) != 0 {
+		t.Fatalf("core session was not preserved after context overflow: %+v", persisted.PullRequest)
+	}
+}
+
+func TestPullRequestContextRejectsAStaleRevisionBeforeSaving(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	oldHead := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	newHead := "cccccccccccccccccccccccccccccccccccccccc"
+	ref := domain.PullRequestRef{Repository: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}, Number: 7}
+	session := domain.ReviewSession{ID: "stale-context", PullRequest: domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: ref}, HeadSHA: oldHead}, HeadSHA: oldHead}
+	if err := store.SaveSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	runner := &pullRequestFixtureRunner{contextHook: func() {
+		current, loadErr := store.GetSession(ctx, session.ID)
+		if loadErr != nil {
+			t.Errorf("load concurrent session: %v", loadErr)
+			return
+		}
+		current.HeadSHA = newHead
+		current.PullRequest.HeadSHA = newHead
+		if saveErr := store.SaveSession(ctx, current); saveErr != nil {
+			t.Errorf("save concurrent session: %v", saveErr)
+		}
+	}}
+	app := &App{ctx: ctx, github: githubclient.New(runner), store: store}
+
+	if _, err := app.RefreshPullRequestContext(session.ID); err == nil || !strings.Contains(err.Error(), "revision changed") {
+		t.Fatalf("stale context error=%v", err)
+	}
+	persisted, err := store.GetSession(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.PullRequest.HeadSHA != newHead || len(persisted.PullRequest.Reviews) != 0 || len(persisted.PullRequest.ReviewComments) != 0 || len(persisted.PullRequest.CheckRuns) != 0 {
+		t.Fatalf("stale context was applied: %+v", persisted.PullRequest)
+	}
+}
+
+func TestStartAnalysisLoadsFullContextBeforePreparingSnapshot(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	ref := domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}
+	headSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	pr := domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: ref, Number: 7}}, HeadSHA: headSHA}
+	session := domain.ReviewSession{ID: "analysis-context", PullRequest: pr, BaseSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HeadSHA: headSHA, Status: domain.SessionPreparing, AnalysisStatus: domain.AnalysisNotStarted}
+	if err := store.SaveSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	runner := &pullRequestFixtureRunner{contextErr: errors.New("discussion unavailable")}
+	app := &App{github: githubclient.New(runner), store: store, prepared: map[string]preparedState{}, active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}}
+
+	op, err := app.StartAnalysis(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op.Stage != "loadingPullRequestContext" {
+		t.Fatalf("initial analysis stage=%q", op.Stage)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		current, loadErr := store.GetSession(ctx, session.ID)
+		if loadErr != nil {
+			t.Fatal(loadErr)
+		}
+		if current.AnalysisStatus == domain.AnalysisFailed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("analysis did not fail at the required context boundary")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(runner.commands) != 3 {
+		t.Fatalf("analysis context commands=%d, want reviews, comments, and checks", len(runner.commands))
+	}
+	for _, command := range runner.commands {
+		endpoint := command.Args[len(command.Args)-1]
+		if !strings.Contains(endpoint, "/reviews") && !strings.Contains(endpoint, "/comments") && !strings.Contains(endpoint, "/check-runs") {
+			t.Fatalf("analysis reached non-context endpoint before context completed: %q", endpoint)
+		}
 	}
 }
 

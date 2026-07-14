@@ -86,6 +86,12 @@ type PullRequestDetail struct {
 	PullRequest domain.PullRequest `json:"pullRequest"`
 }
 
+type PullRequestContext struct {
+	Reviews        []domain.PullRequestReview        `json:"reviews"`
+	ReviewComments []domain.PullRequestReviewComment `json:"reviewComments"`
+	CheckRuns      []domain.CheckRun                 `json:"checkRuns"`
+}
+
 func (c *Client) CurrentUser(ctx context.Context) (domain.GitHubUser, error) {
 	result, err := c.run(ctx, []string{"api", "user"})
 	if err != nil {
@@ -509,27 +515,19 @@ func (c *Client) listRepositoryPullRequests(ctx context.Context, repository doma
 	return result
 }
 
-func (c *Client) GetPullRequest(ctx context.Context, ref domain.PullRequestRef) (PullRequestDetail, error) {
+func (c *Client) GetPullRequestCore(ctx context.Context, ref domain.PullRequestRef) (PullRequestDetail, error) {
 	if ref.Number <= 0 || !validName(ref.Repository.Owner) || !validName(ref.Repository.Name) {
 		return PullRequestDetail{}, errors.New("invalid pull request reference")
 	}
 	root := fmt.Sprintf("repos/%s/%s/pulls/%d", ref.Repository.Owner, ref.Repository.Name, ref.Number)
-	var metadata, commits, reviews, comments proc.Result
-	var metadataErr, commitsErr, reviewsErr, commentsErr error
+	var metadata, commits proc.Result
+	var metadataErr, commitsErr error
 	var wg sync.WaitGroup
-	wg.Add(4)
+	wg.Add(2)
 	go func() { defer wg.Done(); metadata, metadataErr = c.run(ctx, []string{"api", root}) }()
 	go func() {
 		defer wg.Done()
 		commits, commitsErr = c.run(ctx, []string{"api", "--paginate", "--slurp", root + "/commits?per_page=100"})
-	}()
-	go func() {
-		defer wg.Done()
-		reviews, reviewsErr = c.run(ctx, []string{"api", "--paginate", "--slurp", root + "/reviews?per_page=100"})
-	}()
-	go func() {
-		defer wg.Done()
-		comments, commentsErr = c.run(ctx, []string{"api", "--paginate", "--slurp", root + "/comments?per_page=100"})
 	}()
 	wg.Wait()
 	if metadataErr != nil {
@@ -538,12 +536,6 @@ func (c *Client) GetPullRequest(ctx context.Context, ref domain.PullRequestRef) 
 	if commitsErr != nil {
 		return PullRequestDetail{}, fmt.Errorf("load pull request commits: %w", commitsErr)
 	}
-	if reviewsErr != nil {
-		return PullRequestDetail{}, fmt.Errorf("load pull request reviews: %w", reviewsErr)
-	}
-	if commentsErr != nil {
-		return PullRequestDetail{}, fmt.Errorf("load pull request review comments: %w", commentsErr)
-	}
 	detail, err := parsePullRequestDetail(metadata.Stdout, commits.Stdout)
 	if err != nil {
 		return PullRequestDetail{}, err
@@ -551,14 +543,66 @@ func (c *Client) GetPullRequest(ctx context.Context, ref domain.PullRequestRef) 
 	if !validCommitSHA(detail.PullRequest.HeadSHA) {
 		return PullRequestDetail{}, errors.New("pull request returned an invalid head revision")
 	}
-	checksEndpoint := fmt.Sprintf("repos/%s/%s/commits/%s/check-runs?per_page=100", ref.Repository.Owner, ref.Repository.Name, detail.PullRequest.HeadSHA)
-	checks, err := c.run(ctx, []string{"api", "--paginate", "--slurp", checksEndpoint})
-	if err != nil {
+	return detail, nil
+}
+
+func (c *Client) GetPullRequestContext(ctx context.Context, ref domain.PullRequestRef, headSHA string) (PullRequestContext, error) {
+	if ref.Number <= 0 || !validName(ref.Repository.Owner) || !validName(ref.Repository.Name) || !validCommitSHA(headSHA) {
+		return PullRequestContext{}, errors.New("invalid pull request context reference")
+	}
+	root := fmt.Sprintf("repos/%s/%s/pulls/%d", ref.Repository.Owner, ref.Repository.Name, ref.Number)
+	checksEndpoint := fmt.Sprintf("repos/%s/%s/commits/%s/check-runs?per_page=100", ref.Repository.Owner, ref.Repository.Name, headSHA)
+	var reviews, comments, checks proc.Result
+	var reviewsErr, commentsErr, checksErr error
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		reviews, reviewsErr = c.run(ctx, []string{"api", "--paginate", "--slurp", root + "/reviews?per_page=100"})
+	}()
+	go func() {
+		defer wg.Done()
+		comments, commentsErr = c.run(ctx, []string{"api", "--paginate", "--slurp", root + "/comments?per_page=100"})
+	}()
+	go func() {
+		defer wg.Done()
+		checks, checksErr = c.run(ctx, []string{"api", "--paginate", "--slurp", checksEndpoint})
+	}()
+	wg.Wait()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return PullRequestContext{}, ctxErr
+	}
+	if reviewsErr != nil {
+		return PullRequestContext{}, fmt.Errorf("load pull request reviews: %w", reviewsErr)
+	}
+	if commentsErr != nil {
+		return PullRequestContext{}, fmt.Errorf("load pull request review comments: %w", commentsErr)
+	}
+	if checksErr != nil {
+		if errors.Is(checksErr, proc.ErrOutputLimitExceeded) {
+			return PullRequestContext{}, fmt.Errorf("load pull request checks: %w", checksErr)
+		}
 		checks.Stdout = []byte(`[{"check_runs":[]}]`)
 	}
-	if err := parsePullRequestContext(&detail.PullRequest, reviews.Stdout, comments.Stdout, checks.Stdout); err != nil {
+	pr := domain.PullRequest{}
+	if err := parsePullRequestContext(&pr, reviews.Stdout, comments.Stdout, checks.Stdout); err != nil {
+		return PullRequestContext{}, err
+	}
+	return PullRequestContext{Reviews: pr.Reviews, ReviewComments: pr.ReviewComments, CheckRuns: pr.CheckRuns}, nil
+}
+
+func (c *Client) GetPullRequest(ctx context.Context, ref domain.PullRequestRef) (PullRequestDetail, error) {
+	detail, err := c.GetPullRequestCore(ctx, ref)
+	if err != nil {
 		return PullRequestDetail{}, err
 	}
+	pullRequestContext, err := c.GetPullRequestContext(ctx, ref, detail.PullRequest.HeadSHA)
+	if err != nil {
+		return PullRequestDetail{}, err
+	}
+	detail.PullRequest.Reviews = pullRequestContext.Reviews
+	detail.PullRequest.ReviewComments = pullRequestContext.ReviewComments
+	detail.PullRequest.CheckRuns = pullRequestContext.CheckRuns
 	return detail, nil
 }
 

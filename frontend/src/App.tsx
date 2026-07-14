@@ -99,8 +99,17 @@ export function App() {
   const openPR = async (pr: PullRequestSummary) => {
 	const request = ++openRequest.current
 	setError(''); setSession(undefined); setOpeningPR(pr); setReviewChapterId(''); setScreen('overview')
-	try { const value = await backend.openPullRequest(pr.ref); if (openRequest.current === request) { setSession(value); setOpeningPR(undefined) } }
-	catch (err) { if (openRequest.current === request) { setOpeningPR(undefined); setScreen('inbox'); setError(errorText(err)) } }
+	let value: ReviewSession
+	try { value = await backend.openPullRequest(pr.ref) }
+	catch (err) { if (openRequest.current === request) { setOpeningPR(undefined); setScreen('inbox'); setError(errorText(err)) }; return }
+	if (openRequest.current !== request) return
+	setSession(value); setOpeningPR(undefined)
+	try {
+	  const hydrated = await backend.refreshPullRequestContext(value.id)
+	  if (openRequest.current === request && hydrated.id === value.id) setSession(hydrated)
+	} catch (err) {
+	  if (openRequest.current === request) setError(`Pull request opened, but GitHub discussion and checks could not be loaded: ${errorText(err)}`)
+	}
   }
   const checkForUpdates = async () => {
     setUpdateBusy(true)
@@ -150,7 +159,7 @@ export function App() {
     {screen === 'inbox' && <InboxScreen state={bootstrap} onUpdate={(inbox) => setBootstrap({...bootstrap, inbox})} onOpen={openPR}/>}
     {openingPR && screen === 'overview' && <OpeningPullRequest pr={openingPR} onBack={() => { openRequest.current++; setOpeningPR(undefined); setScreen('inbox') }}/>}
     {session && screen === 'overview' && (
-      <OverviewScreen session={session} onBack={() => { setSession(undefined); setReviewChapterId(''); setScreen('inbox') }} onSession={setSession} onReview={(chapterId) => { setReviewChapterId(chapterId ?? ''); setScreen('review') }}/>
+      <OverviewScreen session={session} onBack={() => { openRequest.current++; setSession(undefined); setReviewChapterId(''); setScreen('inbox') }} onSession={setSession} onReview={(chapterId) => { setReviewChapterId(chapterId ?? ''); setScreen('review') }}/>
     )}
     {session && screen === 'review' && (
       <ReviewWorkspace session={session} initialChapterId={reviewChapterId} onSession={setSession} onBack={() => setScreen('overview')}/>
@@ -561,7 +570,7 @@ export function ReviewWorkspace({session, initialChapterId = '', onSession, onBa
     const ids = new Set(comments.map((comment) => comment.id))
     onSession({...session, comments: session.comments.map((comment) => ids.has(comment.id) ? comments.find((published) => published.id === comment.id)! : comment)})
     setPublish(undefined); setSelectedDrafts(new Set())
-    try { onSession(await backend.openPullRequest(session.pullRequest.ref)) }
+	try { onSession(await backend.refreshPullRequestContext(session.id)) }
     catch (err) { setActionError(`Published on GitHub, but ReviewArc could not refresh the local session: ${errorText(err)}`) }
     finally { setBusy(false) }
   }
@@ -580,7 +589,7 @@ export function ReviewWorkspace({session, initialChapterId = '', onSession, onBa
     onSession({...session, pullRequest: {...session.pullRequest, reviewComments: [...session.pullRequest.reviewComments, reply]}})
     setThreadReply(undefined)
     setThreadReplyReset((value) => ({rootId: threadReply.rootCommentId, version: (value?.version ?? 0) + 1}))
-    try { onSession(await backend.openPullRequest(session.pullRequest.ref)) }
+	try { onSession(await backend.refreshPullRequestContext(session.id)) }
     catch (err) { setActionError(`Reply published on GitHub, but ReviewArc could not refresh the conversation: ${errorText(err)}`) }
     finally { setBusy(false) }
   }

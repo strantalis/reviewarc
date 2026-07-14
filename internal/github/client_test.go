@@ -481,6 +481,33 @@ func TestPullRequestContextRejectsMalformedPagination(t *testing.T) {
 	}
 }
 
+func TestGetPullRequestCoreStopsAtUsableRequestBoundary(t *testing.T) {
+	sha := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	metadata := `{"number":4,"base":{"ref":"main","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","repo":{"name":"api","owner":{"login":"acme"}}},"head":{"ref":"topic","sha":"` + sha + `","repo":{"name":"api","owner":{"login":"fork"}}}}`
+	root := "repos/acme/api/pulls/4"
+	f := &organizationAccessRunner{results: map[string]proc.Result{
+		root:                           {Stdout: []byte(metadata)},
+		root + "/commits?per_page=100": {Stdout: []byte(`[[]]`)},
+	}, errors: map[string]error{}}
+	ref := domain.PullRequestRef{Repository: domain.RepositoryRef{Owner: "acme", Name: "api"}, Number: 4}
+	detail, err := New(f).GetPullRequestCore(context.Background(), ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.PullRequest.HeadSHA != sha || detail.PullRequest.Reviews == nil || detail.PullRequest.ReviewComments == nil || detail.PullRequest.CheckRuns == nil {
+		t.Fatalf("core detail is not immediately usable: %+v", detail.PullRequest)
+	}
+	if len(f.commands) != 2 {
+		t.Fatalf("core commands=%d, want metadata and commits only: %v", len(f.commands), f.commands)
+	}
+	for _, command := range f.commands {
+		endpoint := command.Args[len(command.Args)-1]
+		if strings.Contains(endpoint, "/reviews") || strings.Contains(endpoint, "/comments") || strings.Contains(endpoint, "/check-runs") {
+			t.Fatalf("core hydration waited for deferred context endpoint %q", endpoint)
+		}
+	}
+}
+
 func TestGetPullRequestLoadsContextWithoutUnusedFilesEndpoint(t *testing.T) {
 	sha := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	metadata := `{"number":4,"base":{"ref":"main","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","repo":{"name":"api","owner":{"login":"acme"}}},"head":{"ref":"topic","sha":"` + sha + `","repo":{"name":"api","owner":{"login":"fork"}}}}`
