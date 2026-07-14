@@ -1390,6 +1390,7 @@ export namespace domain {
 
 
 }
+
 export namespace main {
 
 	export class AccountState {

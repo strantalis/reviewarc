@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "normalize:bindings": "node scripts/normalize-wails-bindings.mjs",
     "test": "vitest run",
     "check": "npm run test && npm run build"
   },
