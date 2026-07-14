@@ -1693,6 +1693,24 @@ export namespace main {
 	        this.cursor = source["cursor"];
 	    }
 	}
+	export class RepositorySearchInput {
+	    owner: string;
+	    query: string;
+	    cursor: string;
+	    organization: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new RepositorySearchInput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.owner = source["owner"];
+	        this.query = source["query"];
+	        this.cursor = source["cursor"];
+	        this.organization = source["organization"];
+	    }
+	}
 	export class SelectedRepositoryRefresh {
 	    repositories: domain.Repository[];
 	    archivedKeys: string[];

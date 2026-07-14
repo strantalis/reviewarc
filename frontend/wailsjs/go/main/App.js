@@ -118,6 +118,10 @@ export function SaveSelections(arg1) {
   return window['go']['main']['App']['SaveSelections'](arg1);
 }
 
+export function SearchOwnerRepositories(arg1) {
+  return window['go']['main']['App']['SearchOwnerRepositories'](arg1);
+}
+
 export function SetChapterStatus(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetChapterStatus'](arg1, arg2, arg3);
 }

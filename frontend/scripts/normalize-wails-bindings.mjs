@@ -4,6 +4,9 @@ const bindings = [
   'wailsjs/go/main/App.d.ts',
   'wailsjs/go/main/App.js',
   'wailsjs/go/models.ts',
+  'wailsjs/runtime/package.json',
+  'wailsjs/runtime/runtime.d.ts',
+  'wailsjs/runtime/runtime.js',
 ]
 
 for (const path of bindings) {

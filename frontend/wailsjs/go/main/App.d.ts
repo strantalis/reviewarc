@@ -61,6 +61,8 @@ export function SaveNote(arg1:main.NoteInput):Promise<domain.ReviewNote>;
 
 export function SaveSelections(arg1:Array<domain.SourceSelection>):Promise<void>;
 
+export function SearchOwnerRepositories(arg1:main.RepositorySearchInput):Promise<main.RepositoryPage>;
+
 export function SetChapterStatus(arg1:string,arg2:string,arg3:domain.ChapterStatus):Promise<domain.ReviewSession>;
 
 export function SetUpdateChannel(arg1:string):Promise<main.SoftwareUpdateStatus>;

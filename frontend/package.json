@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "normalize:bindings": "node scripts/normalize-wails-bindings.mjs",
+    "wails:dev": "npm run dev",
+    "wails:build": "npm run normalize:bindings && npm run build",
     "test": "vitest run",
     "check": "npm run test && npm run build"
   },
