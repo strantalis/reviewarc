@@ -136,6 +136,46 @@ describe('App startup', () => {
     expect(screen.queryByText('Documentation change')).not.toBeInTheDocument()
   })
 
+  it('bounds mounted inbox rows while filtering the complete result set', async () => {
+    const inbox = Array.from({length: 250}, (_, index) => ({
+      ref: {repository: {host: 'github.com', owner: 'acme', name: 'api', cloneUrl: '', databaseId: '1'}, number: index + 1},
+      title: `Performance change ${index + 1}`,
+      url: '',
+      author: {login: 'sean', name: '', avatarUrl: ''},
+      updatedAt: '2026-07-12T00:00:00Z',
+      isDraft: false,
+      additions: 1,
+      deletions: 0,
+      changedFiles: 1,
+      relationships: ['selectedRepo' as const],
+      labels: [],
+      analysisStatus: 'notStarted' as const,
+      progress: {total: 0, reviewed: 0, blocked: 0, clarify: 0, percent: 0},
+      riskLevel: 'unknown' as const,
+    }))
+    installBackend({dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox})
+    const {container} = render(<App/>)
+
+    expect(await screen.findByText('Performance change 1')).toBeInTheDocument()
+    expect(screen.getByText('250', {selector: '.inbox-summary strong'})).toBeInTheDocument()
+    expect(container.querySelectorAll('.pr-row')).toHaveLength(100)
+    expect(screen.queryByText('Performance change 101')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', {name: 'Show 100 more pull requests'}))
+    expect(container.querySelectorAll('.pr-row')).toHaveLength(200)
+    expect(screen.getByText('Performance change 200')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Show 50 more pull requests'}))
+    expect(container.querySelectorAll('.pr-row')).toHaveLength(250)
+    expect(screen.queryByRole('button', {name: /more pull requests/})).not.toBeInTheDocument()
+
+    const search = screen.getByPlaceholderText('Search title, repository, author, PR number, or label')
+    fireEvent.change(search, {target: {value: 'Performance change 250'}})
+    expect(container.querySelectorAll('.pr-row')).toHaveLength(1)
+    expect(screen.getByText('Performance change 250')).toBeInTheDocument()
+    fireEvent.change(search, {target: {value: ''}})
+    expect(container.querySelectorAll('.pr-row')).toHaveLength(100)
+  })
+
   it('transitions immediately when pull request hydration is still running', async () => {
 	const pr = {ref: {repository: {host: 'github.com', owner: 'acme', name: 'api', cloneUrl: '', databaseId: '1'}, number: 7}, title: 'Slow change', url: 'https://github.com/acme/api/pull/7', author: {login: 'sean', name: 'Sean', avatarUrl: ''}, updatedAt: '2026-07-12T00:00:00Z', isDraft: false, additions: 8, deletions: 2, changedFiles: 3, relationships: ['authored' as const], labels: [], analysisStatus: 'notStarted' as const, progress: {total: 0, reviewed: 0, blocked: 0, clarify: 0, percent: 0}, riskLevel: 'unknown' as const}
 	const state: BootstrapState = {dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: [pr]}
