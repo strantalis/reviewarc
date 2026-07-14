@@ -459,33 +459,27 @@ func (c *Client) listOrganizationPullRequests(ctx context.Context, organization,
 		items   []domain.PullRequestSummary
 		message string
 	}{items: []domain.PullRequestSummary{}}
-	const graphQL = `query($search:String!,$endCursor:String){search(type:ISSUE,query:$search,first:100,after:$endCursor){issueCount nodes{... on PullRequest{number title url updatedAt isDraft additions deletions changedFiles reviewDecision headRefOid baseRefOid author{login} assignees(first:100){nodes{login}} reviewRequests(first:100){nodes{requestedReviewer{... on User{login}}}} labels(first:100){nodes{name}} repository{id name nameWithOwner isPrivate isArchived owner{login}}}} pageInfo{hasNextPage endCursor}}}`
+	const graphQL = `query($search:String!){search(type:ISSUE,query:$search,first:100){issueCount nodes{... on PullRequest{number title url updatedAt isDraft additions deletions changedFiles reviewDecision headRefOid baseRefOid author{login} assignees(first:100){nodes{login}} reviewRequests(first:100){nodes{requestedReviewer{... on User{login}}}} labels(first:100){nodes{name}} repository{id name nameWithOwner isPrivate isArchived owner{login}}}}}}`
 	search := fmt.Sprintf("org:%s is:pr is:open archived:false sort:updated-desc", organization)
-	output, err := c.run(ctx, []string{"api", "graphql", "--paginate", "--slurp", "-f", "search=" + search, "-f", "query=" + graphQL})
+	output, err := c.run(ctx, []string{"api", "graphql", "-f", "search=" + search, "-f", "query=" + graphQL})
 	if err != nil {
 		result.message = safeError(err)
 		return result
 	}
-	var pages []searchPullRequestsPageJSON
-	if err := json.Unmarshal(output.Stdout, &pages); err != nil {
+	var page searchPullRequestsPageJSON
+	if err := json.Unmarshal(output.Stdout, &page); err != nil {
 		result.message = "GitHub returned malformed pull request data"
 		return result
 	}
-	issueCount := 0
-	for _, page := range pages {
-		if page.Data.Search.IssueCount > issueCount {
-			issueCount = page.Data.Search.IssueCount
+	for _, row := range page.Data.Search.Nodes {
+		repository := row.Repository
+		if row.Number <= 0 || repository.IsArchived || repository.Owner.Login == "" || repository.Name == "" || repository.NameWithOwner == "" {
+			continue
 		}
-		for _, row := range page.Data.Search.Nodes {
-			repository := row.Repository
-			if row.Number <= 0 || repository.IsArchived || repository.Owner.Login == "" || repository.Name == "" || repository.NameWithOwner == "" {
-				continue
-			}
-			result.items = append(result.items, row.summaryJSON().domain(repository.domain().Ref, currentLogin))
-		}
+		result.items = append(result.items, row.summaryJSON().domain(repository.domain().Ref, currentLogin))
 	}
-	if issueCount > len(result.items) && len(result.items) >= 1000 {
-		result.message = "GitHub search returned the first 1,000 open pull requests"
+	if page.Data.Search.IssueCount > len(result.items) {
+		result.message = fmt.Sprintf("Showing %d of %d open pull requests from %s, ordered by most recently updated. Narrow the source selection to review older work.", len(result.items), page.Data.Search.IssueCount, organization)
 	}
 	return result
 }

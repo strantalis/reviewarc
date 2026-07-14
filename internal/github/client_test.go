@@ -344,7 +344,7 @@ func TestSearchOwnerRepositoriesUsesOneScopedCursorRequest(t *testing.T) {
 }
 
 func TestOrganizationPullRequestSearchAvoidsRepositoryFanoutAndPreservesRelationships(t *testing.T) {
-	organization := `[{"data":{"search":{"issueCount":1,"nodes":[{"number":7,"title":"Org change","url":"https://github.com/acme/api/pull/7","author":{"login":"dev"},"updatedAt":"2026-07-12T10:00:00Z","additions":4,"deletions":2,"changedFiles":1,"assignees":{"nodes":[{"login":"sean"}]},"reviewRequests":{"nodes":[{"requestedReviewer":{"login":"sean"}}]},"labels":{"nodes":[{"name":"security"}]},"headRefOid":"head","baseRefOid":"base","repository":{"id":"R1","name":"api","nameWithOwner":"acme/api","isPrivate":true,"owner":{"login":"acme"}}}],"pageInfo":{"hasNextPage":false}}}}]`
+	organization := `{"data":{"search":{"issueCount":1,"nodes":[{"number":7,"title":"Org change","url":"https://github.com/acme/api/pull/7","author":{"login":"dev"},"updatedAt":"2026-07-12T10:00:00Z","additions":4,"deletions":2,"changedFiles":1,"assignees":{"nodes":[{"login":"sean"}]},"reviewRequests":{"nodes":[{"requestedReviewer":{"login":"sean"}}]},"labels":{"nodes":[{"name":"security"}]},"headRefOid":"head","baseRefOid":"base","repository":{"id":"R1","name":"api","nameWithOwner":"acme/api","isPrivate":true,"owner":{"login":"acme"}}}]}}}`
 	explicitDuplicate := `[{"number":7,"title":"Org change","url":"https://github.com/acme/api/pull/7","author":{"login":"dev"},"updatedAt":"2026-07-12T10:00:00Z"}]`
 	f := &pullRequestListRunner{results: map[string]proc.Result{"organization:acme": {Stdout: []byte(organization)}, "repository:acme/api": {Stdout: []byte(explicitDuplicate)}}, errors: map[string]error{}}
 	query := PullRequestQuery{Organizations: []string{"acme", "ACME"}, Repositories: []domain.RepositoryRef{{Owner: "acme", Name: "api"}}, CurrentLogin: "sean"}
@@ -364,8 +364,53 @@ func TestOrganizationPullRequestSearchAvoidsRepositoryFanoutAndPreservesRelation
 			organizationArgs = command.Args
 		}
 	}
-	if !containsString(organizationArgs, "--paginate") {
+	if containsString(organizationArgs, "--paginate") || containsString(organizationArgs, "--slurp") {
 		t.Fatalf("organization search commands=%v", f.commands)
+	}
+}
+
+func TestOrganizationPullRequestSearchReturnsOneNewestPageWithPartialWarning(t *testing.T) {
+	nodes := make([]map[string]any, 100)
+	for index := range nodes {
+		number := index + 1
+		nodes[index] = map[string]any{
+			"number":    number,
+			"title":     fmt.Sprintf("Change %d", number),
+			"url":       fmt.Sprintf("https://github.com/acme/api/pull/%d", number),
+			"updatedAt": fmt.Sprintf("2026-07-12T10:%02d:00Z", index%60),
+			"repository": map[string]any{
+				"id":            "R1",
+				"name":          "api",
+				"nameWithOwner": "acme/api",
+				"owner":         map[string]any{"login": "acme"},
+			},
+		}
+	}
+	body, err := json.Marshal(map[string]any{
+		"data": map[string]any{"search": map[string]any{"issueCount": 125, "nodes": nodes}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &pullRequestListRunner{
+		results: map[string]proc.Result{"organization:acme": {Stdout: body}},
+		errors:  map[string]error{},
+	}
+
+	got := New(runner).ListPullRequests(context.Background(), PullRequestQuery{Organizations: []string{"acme"}})
+	if !got.Partial || len(got.Items) != 100 {
+		t.Fatalf("inbox=%+v", got)
+	}
+	wantWarning := "Showing 100 of 125 open pull requests from acme, ordered by most recently updated. Narrow the source selection to review older work."
+	if got.Errors["organization:acme"] != wantWarning {
+		t.Fatalf("warning=%q, want %q", got.Errors["organization:acme"], wantWarning)
+	}
+	if len(runner.commands) != 1 {
+		t.Fatalf("commands=%d, want one organization request", len(runner.commands))
+	}
+	args := runner.commands[0].Args
+	if containsString(args, "--paginate") || containsString(args, "--slurp") || !strings.Contains(args[len(args)-1], "first:100") || !containsString(args, "search=org:acme is:pr is:open archived:false sort:updated-desc") {
+		t.Fatalf("organization search command=%v", args)
 	}
 }
 
