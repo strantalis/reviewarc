@@ -30,10 +30,14 @@ type appFixtureRunner struct {
 }
 
 type pullRequestFixtureRunner struct {
-	mu       sync.Mutex
-	metadata []byte
-	comments []byte
-	commands []proc.Command
+	mu          sync.Mutex
+	metadata    []byte
+	reviews     []byte
+	comments    []byte
+	checks      []byte
+	contextErr  error
+	contextHook func()
+	commands    []proc.Command
 }
 
 func (r *pullRequestFixtureRunner) Run(_ context.Context, command proc.Command) (proc.Result, error) {
@@ -55,7 +59,21 @@ func (r *pullRequestFixtureRunner) Run(_ context.Context, command proc.Command) 
 			return proc.Result{Stdout: r.comments}, nil
 		}
 		return proc.Result{Stdout: []byte(`[[]]`)}, nil
+	case "repos/acme/api/pulls/7/reviews?per_page=100":
+		if r.contextHook != nil {
+			r.contextHook()
+		}
+		if r.contextErr != nil {
+			return proc.Result{}, r.contextErr
+		}
+		if len(r.reviews) > 0 {
+			return proc.Result{Stdout: r.reviews}, nil
+		}
+		return proc.Result{Stdout: []byte(`[[]]`)}, nil
 	case "repos/acme/api/commits/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/check-runs?per_page=100":
+		if len(r.checks) > 0 {
+			return proc.Result{Stdout: r.checks}, nil
+		}
 		return proc.Result{Stdout: []byte(`[{"check_runs":[]}]`)}, nil
 	default:
 		return proc.Result{Stdout: []byte(`[[]]`)}, nil
@@ -66,6 +84,36 @@ type protocolRunner struct{ protocol string }
 
 type bootstrapRefreshRunner struct{ refreshed bool }
 
+type bootstrapConcurrentRunner struct {
+	started      chan string
+	release      chan struct{}
+	accountLogin string
+}
+
+func (r *bootstrapConcurrentRunner) RefreshPaths() {}
+func (r *bootstrapConcurrentRunner) ResolvedPath(tool proc.Tool) (string, error) {
+	return "/fixture/bin/" + string(tool), nil
+}
+func (r *bootstrapConcurrentRunner) Run(_ context.Context, command proc.Command) (proc.Result, error) {
+	name := string(command.Tool)
+	if len(command.Args) > 0 && command.Args[0] == "api" {
+		name = "account"
+	}
+	r.started <- name
+	<-r.release
+	if name == "account" {
+		return proc.Result{Stdout: []byte(fmt.Sprintf(`{"login":%q,"name":"Sean","avatar_url":""}`, r.accountLogin))}, nil
+	}
+	return proc.Result{Stdout: []byte(name + " version fixture\n")}, nil
+}
+
+type repositoryRefreshConcurrencyRunner struct {
+	mu       sync.Mutex
+	active   int
+	maximum  int
+	commands int
+}
+
 func (r *bootstrapRefreshRunner) RefreshPaths() { r.refreshed = true }
 func (r *bootstrapRefreshRunner) ResolvedPath(tool proc.Tool) (string, error) {
 	return "/fixture/bin/" + string(tool), nil
@@ -75,6 +123,24 @@ func (r *bootstrapRefreshRunner) Run(_ context.Context, command proc.Command) (p
 		return proc.Result{Stdout: []byte(`{"login":"strantalis","name":"Sean","avatar_url":""}`)}, nil
 	}
 	return proc.Result{Stdout: []byte(string(command.Tool) + " version fixture\n")}, nil
+}
+
+func (r *repositoryRefreshConcurrencyRunner) Run(_ context.Context, command proc.Command) (proc.Result, error) {
+	r.mu.Lock()
+	r.active++
+	r.commands++
+	if r.active > r.maximum {
+		r.maximum = r.active
+	}
+	r.mu.Unlock()
+	time.Sleep(20 * time.Millisecond)
+	nameWithOwner := command.Args[2]
+	owner, name, _ := strings.Cut(nameWithOwner, "/")
+	body := fmt.Sprintf(`{"id":"%s","name":"%s","nameWithOwner":"%s","owner":{"login":"%s"}}`, nameWithOwner, name, nameWithOwner, owner)
+	r.mu.Lock()
+	r.active--
+	r.mu.Unlock()
+	return proc.Result{Stdout: []byte(body)}, nil
 }
 
 func (r protocolRunner) Run(_ context.Context, command proc.Command) (proc.Result, error) {
@@ -171,6 +237,32 @@ func TestRefreshSelectedRepositoriesDetectsArchiveTransition(t *testing.T) {
 	}
 }
 
+func TestExplicitRepositoryRefreshUsesBoundedConcurrency(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	runner := &repositoryRefreshConcurrencyRunner{}
+	app := &App{ctx: context.Background(), github: githubclient.New(runner), store: store}
+	selections := make([]domain.SourceSelection, 12)
+	for index := range selections {
+		selections[index] = domain.SourceSelection{Kind: domain.SelectionRepository, Key: fmt.Sprintf("acme/repo-%02d", index), Enabled: true}
+	}
+	repositories, archived, refreshErrors := app.refreshExplicitRepositories(context.Background(), selections)
+	if len(repositories) != len(selections) || len(archived) != 0 || len(refreshErrors) != 0 {
+		t.Fatalf("repositories=%d archived=%v errors=%v", len(repositories), archived, refreshErrors)
+	}
+	if runner.commands != len(selections) || runner.maximum != 4 {
+		t.Fatalf("commands=%d maximum concurrency=%d", runner.commands, runner.maximum)
+	}
+	for index, repository := range repositories {
+		if repository.Ref.Name != fmt.Sprintf("repo-%02d", index) {
+			t.Fatalf("repository order changed at %d: %+v", index, repository.Ref)
+		}
+	}
+}
+
 func TestInboxSortUsesGitHubUpdatedTime(t *testing.T) {
 	items := []domain.PullRequestSummary{{Title: "old", UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}, {Title: "new", UpdatedAt: time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)}}
 	sortInbox(items)
@@ -220,6 +312,116 @@ func TestBootstrapRefreshesDependenciesBeforeReadingGitProtocol(t *testing.T) {
 	state := app.Bootstrap()
 	if !runner.refreshed || state.GitProtocol != "ssh" {
 		t.Fatalf("refreshed=%v protocol=%q, want refreshed SSH state", runner.refreshed, state.GitProtocol)
+	}
+}
+
+func TestBootstrapOverlapsIndependentEnvironmentChecks(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	runner := &bootstrapConcurrentRunner{started: make(chan string, 5), release: make(chan struct{}), accountLogin: "strantalis"}
+	app := &App{
+		detector: dependencies.New(runner),
+		github:   githubclient.New(runner),
+		store:    store,
+		gitProtocol: func() string {
+			runner.started <- "protocol"
+			<-runner.release
+			return "ssh"
+		},
+	}
+	done := make(chan domain.BootstrapState, 1)
+	go func() { done <- app.Bootstrap() }()
+	seen := map[string]bool{}
+	for range 5 {
+		select {
+		case name := <-runner.started:
+			seen[name] = true
+		case <-time.After(time.Second):
+			close(runner.release)
+			t.Fatalf("environment checks did not overlap; started=%v", seen)
+		}
+	}
+	close(runner.release)
+	state := <-done
+	for _, name := range []string{"git", "gh", "codex", "account", "protocol"} {
+		if !seen[name] {
+			t.Fatalf("missing concurrent check %q; started=%v", name, seen)
+		}
+	}
+	if len(state.Dependencies) != 3 || state.Account == nil || state.Account.Login != "strantalis" || state.GitProtocol != "ssh" {
+		t.Fatalf("bootstrap=%+v", state)
+	}
+	if state.EnvironmentCached {
+		t.Fatal("first bootstrap unexpectedly reported cached environment")
+	}
+	warm := app.Bootstrap()
+	if !warm.EnvironmentCached || warm.Account == nil || warm.Account.Login != "strantalis" || len(runner.started) != 0 {
+		t.Fatalf("warm bootstrap invoked environment checks or lost snapshot: state=%+v pending=%d", warm, len(runner.started))
+	}
+
+	runner.accountLogin = "updated"
+	runner.release = make(chan struct{})
+	refreshed := make(chan domain.EnvironmentState, 1)
+	refreshErrors := make(chan error, 1)
+	go func() {
+		state, err := app.RefreshEnvironment()
+		refreshed <- state
+		refreshErrors <- err
+	}()
+	for range 5 {
+		select {
+		case <-runner.started:
+		case <-time.After(time.Second):
+			close(runner.release)
+			t.Fatal("background environment refresh did not run every check")
+		}
+	}
+	close(runner.release)
+	next := <-refreshed
+	if err := <-refreshErrors; err != nil {
+		t.Fatal(err)
+	}
+	if next.Account == nil || next.Account.Login != "updated" {
+		t.Fatalf("refreshed environment=%+v", next)
+	}
+	updated := app.Bootstrap()
+	if !updated.EnvironmentCached || updated.Account == nil || updated.Account.Login != "updated" || len(runner.started) != 0 {
+		t.Fatalf("updated snapshot was not reused: state=%+v pending=%d", updated, len(runner.started))
+	}
+}
+
+type panicRunner struct{}
+
+func (panicRunner) Run(context.Context, proc.Command) (proc.Result, error) {
+	panic("cached bootstrap invoked a process")
+}
+
+func TestBootstrapAcceptsCachedMissingDependenciesWithoutRunningTools(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	snapshot := domain.EnvironmentState{
+		Dependencies: []domain.DependencyStatus{
+			{Name: domain.DependencyGit, State: domain.DependencyAvailable},
+			{Name: domain.DependencyGH, State: domain.DependencyMissing, Message: "Not installed in a supported location"},
+			{Name: domain.DependencyCodex, State: domain.DependencyBroken, Message: "Found but could not run"},
+		},
+		GitProtocol: "https",
+		RefreshedAt: time.Now().UTC(),
+	}
+	if err := store.SetSetting(context.Background(), environmentSnapshotSetting, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	runner := panicRunner{}
+	app := &App{detector: dependencies.New(runner), github: githubclient.New(runner), store: store, gitProtocol: func() string { panic("cached bootstrap read protocol") }}
+	state := app.Bootstrap()
+	if !state.EnvironmentCached || state.Account != nil || state.Dependencies[1].State != domain.DependencyMissing || state.Dependencies[2].State != domain.DependencyBroken {
+		t.Fatalf("bootstrap=%+v", state)
 	}
 }
 
@@ -442,6 +644,169 @@ func TestNormalizeSessionMakesEveryFrontendCollectionNonNil(t *testing.T) {
 	}
 }
 
+func TestOpenPullRequestReturnsCoreBeforeRefreshingFullContext(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	baseSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	headSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	metadata := `{"number":7,"title":"Fixture PR","html_url":"https://github.com/acme/api/pull/7","updated_at":"2026-07-11T12:00:00Z","user":{"login":"author"},"base":{"ref":"main","sha":"` + baseSHA + `","repo":{"name":"api","clone_url":"https://github.com/acme/api.git","owner":{"login":"acme"}}},"head":{"ref":"feature","sha":"` + headSHA + `","repo":{"name":"api","clone_url":"https://github.com/acme/api.git","owner":{"login":"acme"}}}}`
+	reviews := []byte(`[[{"id":11,"user":{"login":"alice"},"body":"Please cover the retry path.","state":"COMMENTED","commit_id":"` + headSHA + `","submitted_at":"2026-07-11T13:00:00Z","html_url":"https://github.com/acme/api/pull/7#pullrequestreview-11"}]]`)
+	comments := []byte(`[[{"id":101,"pull_request_review_id":11,"user":{"login":"alice"},"body":"Can this race?","path":"quota/limiter.go","line":16,"side":"RIGHT","commit_id":"` + headSHA + `","created_at":"2026-07-11T13:01:00Z","updated_at":"2026-07-11T13:01:00Z","html_url":"https://github.com/acme/api/pull/7#discussion_r101"}]]`)
+	checks := []byte(`[{"check_runs":[{"id":21,"name":"test","status":"completed","conclusion":"success","html_url":"https://github.com/acme/api/actions/runs/21"}]}]`)
+	runner := &pullRequestFixtureRunner{metadata: []byte(metadata), reviews: reviews, comments: comments, checks: checks}
+	app := &App{ctx: ctx, github: githubclient.New(runner), store: store}
+	ref := domain.PullRequestRef{Repository: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}, Number: 7}
+
+	core, err := app.OpenPullRequest(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.commands) != 2 {
+		t.Fatalf("open commands=%d, want metadata and commits only: %v", len(runner.commands), runner.commands)
+	}
+	if len(core.PullRequest.Reviews) != 0 || len(core.PullRequest.ReviewComments) != 0 || len(core.PullRequest.CheckRuns) != 0 {
+		t.Fatalf("core open unexpectedly waited for context: %+v", core.PullRequest)
+	}
+
+	hydrated, err := app.RefreshPullRequestContext(core.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.commands) != 5 || len(hydrated.PullRequest.Reviews) != 1 || len(hydrated.PullRequest.ReviewComments) != 1 || len(hydrated.PullRequest.CheckRuns) != 1 {
+		t.Fatalf("hydrated session=%+v commands=%d", hydrated.PullRequest, len(runner.commands))
+	}
+	persisted, err := store.GetSession(ctx, core.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := existingDiscussion(persisted.PullRequest); !strings.Contains(got, "Please cover the retry path.") || !strings.Contains(got, "Can this race?") {
+		t.Fatalf("analysis discussion context=%q", got)
+	}
+}
+
+func TestPullRequestContextOverflowLeavesCoreSessionUsable(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	baseSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	headSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	metadata := `{"number":7,"title":"Large PR","base":{"ref":"main","sha":"` + baseSHA + `","repo":{"name":"api","owner":{"login":"acme"}}},"head":{"ref":"feature","sha":"` + headSHA + `","repo":{"name":"api","owner":{"login":"acme"}}}}`
+	runner := &pullRequestFixtureRunner{metadata: []byte(metadata)}
+	app := &App{ctx: ctx, github: githubclient.New(runner), store: store}
+	ref := domain.PullRequestRef{Repository: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}, Number: 7}
+	core, err := app.OpenPullRequest(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.contextErr = fmt.Errorf("gh stdout exceeded its limit: %w", proc.ErrOutputLimitExceeded)
+	if _, err := app.RefreshPullRequestContext(core.ID); !errors.Is(err, proc.ErrOutputLimitExceeded) {
+		t.Fatalf("context error=%v, want ErrOutputLimitExceeded", err)
+	}
+	persisted, err := store.GetSession(ctx, core.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.PullRequest.Title != "Large PR" || persisted.PullRequest.HeadSHA != headSHA || len(persisted.PullRequest.Reviews) != 0 || len(persisted.PullRequest.ReviewComments) != 0 {
+		t.Fatalf("core session was not preserved after context overflow: %+v", persisted.PullRequest)
+	}
+}
+
+func TestPullRequestContextRejectsAStaleRevisionBeforeSaving(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	oldHead := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	newHead := "cccccccccccccccccccccccccccccccccccccccc"
+	ref := domain.PullRequestRef{Repository: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}, Number: 7}
+	session := domain.ReviewSession{ID: "stale-context", PullRequest: domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: ref}, HeadSHA: oldHead}, HeadSHA: oldHead}
+	if err := store.SaveSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	runner := &pullRequestFixtureRunner{contextHook: func() {
+		current, loadErr := store.GetSession(ctx, session.ID)
+		if loadErr != nil {
+			t.Errorf("load concurrent session: %v", loadErr)
+			return
+		}
+		current.HeadSHA = newHead
+		current.PullRequest.HeadSHA = newHead
+		if saveErr := store.SaveSession(ctx, current); saveErr != nil {
+			t.Errorf("save concurrent session: %v", saveErr)
+		}
+	}}
+	app := &App{ctx: ctx, github: githubclient.New(runner), store: store}
+
+	if _, err := app.RefreshPullRequestContext(session.ID); err == nil || !strings.Contains(err.Error(), "revision changed") {
+		t.Fatalf("stale context error=%v", err)
+	}
+	persisted, err := store.GetSession(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.PullRequest.HeadSHA != newHead || len(persisted.PullRequest.Reviews) != 0 || len(persisted.PullRequest.ReviewComments) != 0 || len(persisted.PullRequest.CheckRuns) != 0 {
+		t.Fatalf("stale context was applied: %+v", persisted.PullRequest)
+	}
+}
+
+func TestStartAnalysisLoadsFullContextBeforePreparingSnapshot(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	ref := domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}
+	headSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	pr := domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: ref, Number: 7}}, HeadSHA: headSHA}
+	session := domain.ReviewSession{ID: "analysis-context", PullRequest: pr, BaseSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HeadSHA: headSHA, Status: domain.SessionPreparing, AnalysisStatus: domain.AnalysisNotStarted}
+	if err := store.SaveSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	runner := &pullRequestFixtureRunner{contextErr: errors.New("discussion unavailable")}
+	app := &App{github: githubclient.New(runner), store: store, prepared: map[string]preparedState{}, active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}}
+
+	op, err := app.StartAnalysis(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op.Stage != "loadingPullRequestContext" {
+		t.Fatalf("initial analysis stage=%q", op.Stage)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		current, loadErr := store.GetSession(ctx, session.ID)
+		if loadErr != nil {
+			t.Fatal(loadErr)
+		}
+		if current.AnalysisStatus == domain.AnalysisFailed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("analysis did not fail at the required context boundary")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(runner.commands) != 3 {
+		t.Fatalf("analysis context commands=%d, want reviews, comments, and checks", len(runner.commands))
+	}
+	for _, command := range runner.commands {
+		endpoint := command.Args[len(command.Args)-1]
+		if !strings.Contains(endpoint, "/reviews") && !strings.Contains(endpoint, "/comments") && !strings.Contains(endpoint, "/check-runs") {
+			t.Fatalf("analysis reached non-context endpoint before context completed: %q", endpoint)
+		}
+	}
+}
+
 func TestPublishRequiresMatchingConfirmationAndUsesFixtureBackedGitHubFlow(t *testing.T) {
 	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
 	if err != nil {
@@ -493,8 +858,8 @@ func TestPublishRequiresMatchingConfirmationAndUsesFixtureBackedGitHubFlow(t *te
 	if len(published) != 1 || published[0].Status != domain.CommentPublished || published[0].GitHubID != "991" {
 		t.Fatalf("published=%+v", published)
 	}
-	if len(runner.commands) != 7 {
-		t.Fatalf("commands=%d, want detail metadata, commits, files, reviews, comments, checks, and publish", len(runner.commands))
+	if len(runner.commands) != 6 {
+		t.Fatalf("commands=%d, want detail metadata, commits, reviews, comments, checks, and publish", len(runner.commands))
 	}
 	var publishCommand proc.Command
 	for _, command := range runner.commands {

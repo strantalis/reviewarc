@@ -92,6 +92,84 @@ func TestRepositoryOwnerCacheIsScopedLimitedAndExcludesArchived(t *testing.T) {
 	}
 }
 
+func TestListSelectedRepositoriesExcludesUnselectedRows(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	selected := domain.Repository{Ref: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}, IsArchived: true}
+	unrelated := domain.Repository{Ref: domain.RepositoryRef{Host: "github.com", Owner: "large-org", Name: "unrelated"}}
+	if err := s.UpsertRepositories(ctx, []domain.Repository{selected, unrelated}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReplaceSelections(ctx, []domain.SourceSelection{{Kind: domain.SelectionRepository, Key: "ACME/API", Enabled: true}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListSelectedRepositories(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Ref.Name != "api" || !got[0].IsArchived {
+		t.Fatalf("repositories=%+v", got)
+	}
+}
+
+func TestListPullRequestSummariesProjectsLatestReviewState(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	ref := domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}
+	pullRequest := domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{
+		Ref:            domain.PullRequestRef{Repository: ref, Number: 42},
+		Title:          "Keep bootstrap local",
+		AnalysisStatus: domain.AnalysisNotStarted,
+		RiskLevel:      domain.RiskUnknown,
+	}, BaseSHA: "base", HeadSHA: "head"}
+	if err := s.UpsertPullRequest(ctx, pullRequest); err != nil {
+		t.Fatal(err)
+	}
+	session := domain.ReviewSession{ID: "latest", PullRequest: pullRequest, BaseSHA: "base", HeadSHA: "head", Status: domain.SessionReady, AnalysisStatus: domain.AnalysisNotStarted}
+	if err := s.SaveSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	analysis := domain.ReviewAnalysis{
+		SchemaVersion: 1,
+		BaseSHA:       "base",
+		HeadSHA:       "head",
+		Risks:         []domain.ReviewRisk{{ID: "risk", Level: domain.RiskHigh}},
+		Chapters: []domain.ReviewChapter{
+			{ID: "reviewed"},
+			{ID: "blocked"},
+			{ID: "clarify"},
+		},
+	}
+	if err := s.SaveCompletedAnalysis(ctx, session.ID, analysis); err != nil {
+		t.Fatal(err)
+	}
+	for id, status := range map[string]domain.ChapterStatus{
+		"reviewed": domain.ChapterReviewed,
+		"blocked":  domain.ChapterBlocked,
+		"clarify":  domain.ChapterNeedsClarification,
+	} {
+		if err := s.SetChapterStatus(ctx, session.ID, id, status); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	items, err := s.ListPullRequestSummaries(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("summaries=%d, want one", len(items))
+	}
+	got := items[0]
+	if got.Title != pullRequest.Title || got.AnalysisStatus != domain.AnalysisReady || got.RiskLevel != domain.RiskHigh {
+		t.Fatalf("summary=%+v", got)
+	}
+	wantProgress := domain.ReviewProgress{Total: 3, Reviewed: 1, Blocked: 1, Clarify: 1, Percent: 33}
+	if got.Progress != wantProgress {
+		t.Fatalf("progress=%+v, want %+v", got.Progress, wantProgress)
+	}
+}
+
 func TestSessionAnalysisProgressNotesAndComments(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()

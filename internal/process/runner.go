@@ -24,7 +24,10 @@ const (
 
 const defaultMaxOutput = 16 << 20
 
-var ErrToolNotFound = errors.New("tool executable not found")
+var (
+	ErrToolNotFound        = errors.New("tool executable not found")
+	ErrOutputLimitExceeded = errors.New("tool output exceeded limit")
+)
 
 type Command struct {
 	Tool         Tool
@@ -152,6 +155,15 @@ func (r *ExecRunner) Run(ctx context.Context, c Command) (Result, error) {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return result, ctxErr
 	}
+	if stdout.truncated || stderr.truncated {
+		stream := "stdout"
+		if stdout.truncated && stderr.truncated {
+			stream = "stdout and stderr"
+		} else if stderr.truncated {
+			stream = "stderr"
+		}
+		return result, fmt.Errorf("%s %s exceeded the %d-byte output limit: %w", c.Tool, stream, limit, ErrOutputLimitExceeded)
+	}
 	if err != nil {
 		return result, fmt.Errorf("%s exited with code %d: %w", c.Tool, result.ExitCode, err)
 	}
@@ -172,12 +184,16 @@ func exitCode(err error) int {
 
 type limitedBuffer struct {
 	bytes.Buffer
-	limit int
+	limit     int
+	truncated bool
 }
 
 func (b *limitedBuffer) Write(p []byte) (int, error) {
 	n := len(p)
 	remaining := b.limit - b.Len()
+	if len(p) > remaining {
+		b.truncated = true
+	}
 	if remaining > 0 {
 		if remaining < len(p) {
 			p = p[:remaining]

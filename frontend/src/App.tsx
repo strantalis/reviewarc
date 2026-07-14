@@ -10,7 +10,7 @@ import { AnalysisBadge, DependencyPills, EmptyState, ErrorBanner, Logo, Markdown
 import { WindowToggleMaximise } from '../wailsjs/runtime/runtime'
 import { analysisLabel, chapterStatusLabel, filterInbox, normalizeProgress, primaryRelationship, relationshipLabel, relativeTime, repoName } from './lib'
 import type {
-  AnalysisStatus, BootstrapState, ChangedFile, ChapterStatus, CommentRange, DependencyStatus, DiffFile, EvidenceReference, FileContent, Operation,
+  AnalysisStatus, BootstrapState, ChangedFile, ChapterStatus, CommentRange, DependencyStatus, DiffFile, EnvironmentState, EvidenceReference, FileContent, Operation,
   OperationEvent, PublishPreview, PullRequestRef, PullRequestReviewComment, PullRequestSummary, Relationship, ReviewChapter, ReviewRisk,
   Repository, RepositoryPage, ReviewComment, ReviewSession, SoftwareUpdateStatus, SourceSelection, SourceState, UpdateChannel, Organization,
   ThreadReplyPreview,
@@ -22,6 +22,7 @@ type DraftTarget = {path: string; startLine?: number; startSide?: 'LEFT' | 'RIGH
 const PierreDiffRenderer = lazy(() => import('./PierreRenderer').then((module) => ({default: module.PierreDiffRenderer})))
 const PierreFileRenderer = lazy(() => import('./PierreRenderer').then((module) => ({default: module.PierreFileRenderer})))
 const PierreCodeExcerpt = lazy(() => import('./PierreRenderer').then((module) => ({default: module.PierreCodeExcerpt})))
+const inboxPageSize = 100
 
 function errorText(error: unknown) {
   if (error instanceof Error) return error.message
@@ -57,6 +58,10 @@ function savedInboxFilters() {
   try { return JSON.parse(window.localStorage?.getItem?.('reviewarc:inbox-view') ?? '{}') as {relationship?: Relationship | 'all'; label?: string; analysis?: AnalysisStatus | 'all'} } catch { return {} }
 }
 
+function withEnvironment(state: BootstrapState, environment: EnvironmentState): BootstrapState {
+  return {...state, dependencies: environment.dependencies, account: environment.account, gitProtocol: environment.gitProtocol, environmentCached: false}
+}
+
 export function App() {
   const [bootstrap, setBootstrap] = useState<BootstrapState>()
   const [screen, setScreen] = useState<Screen>('inbox')
@@ -71,21 +76,34 @@ export function App() {
   const [dismissedUpdateBuild, setDismissedUpdateBuild] = useState('')
   const [installUpdateOpen, setInstallUpdateOpen] = useState(false)
   const openRequest = useRef(0)
+  const environmentRequest = useRef(0)
+
+  const refreshEnvironment = async (foreground = false, sourceState = bootstrap) => {
+    const request = ++environmentRequest.current
+    if (foreground) { setLoading(true); setError('') }
+    try {
+      const environment = await backend.refreshEnvironment()
+      if (environmentRequest.current === request) {
+        setBootstrap((current) => current ? withEnvironment(current, environment) : current)
+        if (environment.account && sourceState && !sourceState.selections.some((selection) => selection.enabled)) setScreen('sources')
+      }
+    } catch (err) {
+      if (foreground && environmentRequest.current === request) setError(errorText(err))
+    } finally {
+      if (foreground && environmentRequest.current === request) setLoading(false)
+    }
+  }
 
   const load = async () => {
     setLoading(true); setError('')
     try {
       const [state, updateStatus] = await Promise.all([backend.bootstrap(), backend.getUpdateStatus()])
-      const gh = state.dependencies.find((dep) => dep.name === 'gh')
-      if (gh?.state === 'available') {
-        const account = await backend.refreshAccount()
-        if (account.user) state.account = account.user
-      }
       setBootstrap(state)
       setSoftwareUpdate(updateStatus)
       state.selections ??= []
       state.inbox ??= []
       if (state.account && !state.selections.some((s) => s.enabled)) setScreen('sources')
+      if (state.environmentCached) void refreshEnvironment(false, state)
     } catch (err) { setError(errorText(err)) }
     finally { setLoading(false) }
   }
@@ -104,8 +122,17 @@ export function App() {
   const openPR = async (pr: PullRequestSummary) => {
 	const request = ++openRequest.current
 	setError(''); setSession(undefined); setOpeningPR(pr); setReviewChapterId(''); setScreen('overview')
-	try { const value = await backend.openPullRequest(pr.ref); if (openRequest.current === request) { setSession(value); setOpeningPR(undefined) } }
-	catch (err) { if (openRequest.current === request) { setOpeningPR(undefined); setScreen('inbox'); setError(errorText(err)) } }
+	let value: ReviewSession
+	try { value = await backend.openPullRequest(pr.ref) }
+	catch (err) { if (openRequest.current === request) { setOpeningPR(undefined); setScreen('inbox'); setError(errorText(err)) }; return }
+	if (openRequest.current !== request) return
+	setSession(value); setOpeningPR(undefined)
+	try {
+	  const hydrated = await backend.refreshPullRequestContext(value.id)
+	  if (openRequest.current === request && hydrated.id === value.id) setSession(hydrated)
+	} catch (err) {
+	  if (openRequest.current === request) setError(`Pull request opened, but GitHub discussion and checks could not be loaded: ${errorText(err)}`)
+	}
   }
   const checkForUpdates = async () => {
     setUpdateBusy(true)
@@ -144,7 +171,7 @@ export function App() {
   if (!bootstrap) return <main className="startup"><WindowControls/><Logo/><ErrorBanner message={error || 'ReviewArc could not load its local state.'} onRetry={load}/></main>
 
   const missingRequired = bootstrap.dependencies.filter((dep) => dep.name !== 'codex' && dep.state !== 'available')
-  if (missingRequired.length || !bootstrap.account) return <DependencyGate state={bootstrap} onRefresh={load} refreshing={loading} error={error}/>
+  if (missingRequired.length || !bootstrap.account) return <DependencyGate state={bootstrap} onRefresh={() => void refreshEnvironment(true)} refreshing={loading} error={error}/>
 
   return <div className="app-shell">
     <AppHeader state={bootstrap} screen={screen} onNavigate={(next) => { setScreen(next); if (next === 'inbox') { openRequest.current++; setSession(undefined); setOpeningPR(undefined) } }}/>
@@ -155,7 +182,7 @@ export function App() {
     {screen === 'inbox' && <InboxScreen state={bootstrap} onUpdate={(inbox) => setBootstrap({...bootstrap, inbox})} onOpen={openPR}/>}
     {openingPR && screen === 'overview' && <OpeningPullRequest pr={openingPR} onBack={() => { openRequest.current++; setOpeningPR(undefined); setScreen('inbox') }}/>}
     {session && screen === 'overview' && (
-      <OverviewScreen session={session} onBack={() => { setSession(undefined); setReviewChapterId(''); setScreen('inbox') }} onSession={setSession} onReview={(chapterId) => { setReviewChapterId(chapterId ?? ''); setScreen('review') }}/>
+      <OverviewScreen session={session} onBack={() => { openRequest.current++; setSession(undefined); setReviewChapterId(''); setScreen('inbox') }} onSession={setSession} onReview={(chapterId) => { setReviewChapterId(chapterId ?? ''); setScreen('review') }}/>
     )}
     {session && screen === 'review' && (
       <ReviewWorkspace session={session} initialChapterId={reviewChapterId} onSession={setSession} onBack={() => setScreen('overview')}/>
@@ -231,12 +258,16 @@ export function SourceSelector({state, onDone}: {state: BootstrapState; onDone: 
   const [query, setQuery] = useState('')
   const [organization, setOrganization] = useState('included')
   const [ownerPage, setOwnerPage] = useState<RepositoryPage>()
+  const [browsePage, setBrowsePage] = useState<RepositoryPage>()
   const [ownerCounts, setOwnerCounts] = useState<Record<string, number>>({})
   const [busy, setBusy] = useState(false)
   const [accessBusy, setAccessBusy] = useState(false)
   const [ownerBusy, setOwnerBusy] = useState(false)
   const [error, setError] = useState('')
   const ownerRequest = useRef(0)
+  const searchRequest = useRef(0)
+  const previousSearch = useRef('')
+  const selectedOrganization = catalog?.organizations.find((org) => org.login.toLowerCase() === organization.toLowerCase())
   const refreshAccess = async (organizations = catalog?.organizations ?? []) => {
 	setAccessBusy(true)
 	try {
@@ -270,35 +301,73 @@ export function SourceSelector({state, onDone}: {state: BootstrapState; onDone: 
   const toggle = (key: string) => setSelected((current) => { const next = new Set(current); next.has(key) ? next.delete(key) : next.add(key); return next })
   const loadOwner = async (owner: string) => {
     const request = ++ownerRequest.current
-    setOrganization(owner); setQuery(''); setOwnerBusy(true); setError(''); setOwnerPage(undefined)
+    searchRequest.current++
+    previousSearch.current = ''
+    const activeSearch = searchRequest.current
+    setOrganization(owner); setQuery(''); setOwnerBusy(true); setError(''); setOwnerPage(undefined); setBrowsePage(undefined)
     try {
       const cached = await backend.listCachedOwnerRepositories(owner)
-      if (ownerRequest.current === request && cached.items.length) setOwnerPage(cached)
+      if (ownerRequest.current === request && cached.items.length) {
+        setBrowsePage(cached)
+        if (searchRequest.current === activeSearch) setOwnerPage(cached)
+      }
       const fresh = await backend.refreshOwnerRepositories(owner)
       if (ownerRequest.current === request) {
-        setOwnerPage(fresh)
+        setBrowsePage(fresh)
+        if (searchRequest.current === activeSearch) setOwnerPage(fresh)
         setOwnerCounts((counts) => ({...counts, [owner.toLowerCase()]: fresh.totalCount}))
       }
-    } catch (err) { if (ownerRequest.current === request) setError(errorText(err)) } finally { if (ownerRequest.current === request) setOwnerBusy(false) }
+    } catch (err) { if (ownerRequest.current === request && searchRequest.current === activeSearch) setError(errorText(err)) } finally { if (ownerRequest.current === request && searchRequest.current === activeSearch) setOwnerBusy(false) }
   }
   const loadMore = async () => {
     if (!ownerPage?.hasNextPage || !ownerPage.endCursor || ownerBusy) return
     const request = ownerRequest.current
+    const activeSearch = searchRequest.current
     setOwnerBusy(true); setError('')
     try {
-      const next = await backend.refreshOwnerRepositories(organization, ownerPage.endCursor)
-      if (ownerRequest.current === request) {
+      const search = query.trim()
+      const next = search
+        ? await backend.searchOwnerRepositories(organization, search, ownerPage.endCursor, selectedOrganization !== undefined)
+        : await backend.refreshOwnerRepositories(organization, ownerPage.endCursor)
+      if (ownerRequest.current === request && searchRequest.current === activeSearch) {
         const items = new Map(ownerPage.items.map((repo) => [`${repo.ref.owner}/${repo.ref.name}`.toLowerCase(), repo]))
         for (const repo of next.items) items.set(`${repo.ref.owner}/${repo.ref.name}`.toLowerCase(), repo)
-        setOwnerPage({...next, items: [...items.values()]})
+        const merged = {...next, items: [...items.values()]}
+        setOwnerPage(merged)
+        if (!search) setBrowsePage(merged)
         setOwnerCounts((counts) => ({...counts, [organization.toLowerCase()]: next.totalCount}))
       }
-    } catch (err) { if (ownerRequest.current === request) setError(errorText(err)) } finally { if (ownerRequest.current === request) setOwnerBusy(false) }
+    } catch (err) { if (ownerRequest.current === request && searchRequest.current === activeSearch) setError(errorText(err)) } finally { if (ownerRequest.current === request && searchRequest.current === activeSearch) setOwnerBusy(false) }
   }
   useEffect(() => {
-    if (!query.trim() || organization === 'included' || !ownerPage?.hasNextPage || !ownerPage.endCursor || ownerBusy) return
-    void loadMore()
-  }, [query, organization, ownerPage?.hasNextPage, ownerPage?.endCursor, ownerBusy])
+    const search = query.trim()
+    if (organization === 'included') return
+    if (!search) {
+      if (previousSearch.current) {
+        previousSearch.current = ''
+        searchRequest.current++
+        setOwnerPage(browsePage)
+        setOwnerBusy(false)
+      }
+      return
+    }
+    previousSearch.current = search
+    const request = ++searchRequest.current
+    const ownerVersion = ownerRequest.current
+    const owner = organization
+    const organizationSearch = selectedOrganization !== undefined
+    const timer = window.setTimeout(() => {
+      setOwnerBusy(true); setError('')
+      void backend.searchOwnerRepositories(owner, search, '', organizationSearch).then((page) => {
+        if (ownerRequest.current === ownerVersion && searchRequest.current === request) setOwnerPage(page)
+      }).catch((err) => {
+        if (ownerRequest.current === ownerVersion && searchRequest.current === request) setError(errorText(err))
+      }).finally(() => {
+        if (ownerRequest.current === ownerVersion && searchRequest.current === request) setOwnerBusy(false)
+      })
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [query, organization, selectedOrganization])
   const save = async () => {
     setBusy(true); setError('')
     const selections: SourceSelection[] = [...selected].map((entry) => { const [kind, ...parts] = entry.split(':'); return {kind: kind as SourceSelection['kind'], key: parts.join(':'), enabled: true} })
@@ -308,11 +377,12 @@ export function SourceSelector({state, onDone}: {state: BootstrapState; onDone: 
   const personalLogin = state.account?.login ?? ''
   const personalCount = ownerCounts[personalLogin.toLowerCase()]
   const personalSelected = personalLogin !== '' && organization.toLowerCase() === personalLogin.toLowerCase()
-  const selectedOrganization = catalog?.organizations.find((org) => org.login.toLowerCase() === organization.toLowerCase())
   useEffect(() => {
     if (selectedOrganization?.accessStatus === 'ssoRequired' || selectedOrganization?.accessStatus === 'denied') {
       ownerRequest.current++
+      searchRequest.current++
       setOwnerPage({items: [], totalCount: 0, hasNextPage: false, cached: false})
+      setBrowsePage(undefined)
       setOwnerBusy(false)
     }
   }, [selectedOrganization?.accessStatus, organization])
@@ -328,13 +398,52 @@ export function SourceSelector({state, onDone}: {state: BootstrapState; onDone: 
   })
   return <main className="page source-page"><div className="page-heading"><div><h1>Repository sources</h1><p>Choose where ReviewArc should look for open pull requests. Repositories are only fetched when you open a PR.</p></div><button className="button primary" disabled={busy || selected.size === 0} onClick={save}>{busy ? <LoaderCircle className="spin" size={16}/> : <Check size={16}/>}Save sources</button></div>
     {error && <ErrorBanner message={error}/>}<div className="source-toolbar"><label className="search-field"><Search size={16}/><input autoCapitalize="none" autoCorrect="off" spellCheck={false} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={organization === 'included' ? 'Search included repositories' : 'Search all repositories'}/></label><button className="button secondary small" disabled={accessBusy} onClick={() => void refreshAccess()}>{accessBusy ? <LoaderCircle className="spin" size={14}/> : <RefreshCw size={14}/>}Refresh access</button><span>{selected.size} {selected.size === 1 ? 'source' : 'sources'} included</span></div>
-    <div className="source-layout"><aside><div className="source-section-heading"><h2>Repository owners</h2><button className={organization === 'included' ? 'active' : ''} aria-pressed={organization === 'included'} onClick={() => { ownerRequest.current++; setOrganization('included'); setOwnerPage(undefined); setQuery('') }}>Included</button></div><div className="organization-choices">{personalLogin && <><p className="source-group-label">Personal account</p><div className={`source-org-row personal${personalSelected ? ' active' : ''}`}><button className="org-focus" aria-label={`Show personal repositories from ${personalLogin}`} aria-pressed={personalSelected} onClick={() => void loadOwner(personalLogin)}>{state.account?.avatarUrl ? <img src={state.account.avatarUrl} alt=""/> : <span className="org-avatar">{personalLogin.slice(0, 1).toUpperCase()}</span>}<span><b>{personalLogin}</b><small>{personalCount === undefined ? 'Open to load repositories' : `${personalCount} personal ${personalCount === 1 ? 'repository' : 'repositories'}`}</small></span></button></div></>}<p className="source-group-label">Organizations</p>{catalog?.organizations.map((org) => { const key = `organization:${org.login}`; const blocked = org.accessStatus === 'ssoRequired' || org.accessStatus === 'denied'; return <OrganizationSourceRow key={key} org={org} count={ownerCounts[org.login.toLowerCase()]} active={organization.toLowerCase() === org.login.toLowerCase()} checked={selected.has(key)} onFilter={() => blocked ? (setOrganization(org.login), setOwnerPage({items: [], totalCount: 0, hasNextPage: false, cached: false})) : void loadOwner(org.login)} onToggle={() => toggle(key)}/>})}{!catalog && <div className="owner-loading"><LoaderCircle className="spin" size={13}/>Loading owners…</div>}</div></aside><section><div className="source-section-heading"><h2>{organization === 'included' ? 'Included sources' : personalSelected ? 'Personal repositories' : `${organization} repositories`}</h2><span>{organization === 'included' ? selected.size : ownerPage?.totalCount ?? '—'}</span></div><div className="repository-choices">{organization === 'included' && selectedOrganizations.map((owner) => <div className="source-rule" key={`included:${owner}`}><span className="included-mark"><Check size={13}/></span><span className="source-rule-copy"><strong>{owner}</strong><small>Every active repository in this organization</small></span><button className="button text small" aria-label={`Remove ${owner} organization from included sources`} onClick={() => toggle(`organization:${owner}`)}>Remove</button></div>)}{organization === 'included' ? includedRepositories.map((name) => { const repository = catalog?.repositories.find((repo) => `${repo.ref.owner}/${repo.ref.name}`.toLowerCase() === name.toLowerCase()); return <div className="source-rule" key={`included:${name}`}><span className="included-mark"><Check size={13}/></span><span className="source-rule-copy"><strong>{name}</strong><small>{repository?.description || 'Repository'}</small></span><button className="button text small" aria-label={`Remove ${name} repository from included sources`} onClick={() => toggle(`repository:${name}`)}>Remove</button></div> }) : repos.map((repo) => { const name = `${repo.ref.owner}/${repo.ref.name}`; const key = `repository:${name}`; const inherited = selected.has(`organization:${repo.ref.owner}`); return <label className={`repo-choice${inherited ? ' inherited' : ''}`} key={key}><input type="checkbox" checked={inherited || selected.has(key)} disabled={inherited} onChange={() => toggle(key)}/><span className="check-box"><Check size={13}/></span><span><strong>{name}</strong><small>{inherited ? `Included through ${repo.ref.owner}` : repo.description || (repo.isPrivate ? 'Private repository' : 'GitHub repository')}</small></span>{repo.isPrivate && <span className="privacy">Private</span>}</label>})}{ownerBusy && !repos.length && <div className="owner-page-loading"><LoaderCircle className="spin" size={17}/><p>Loading the first 50 active repositories…</p></div>}{!ownerBusy && !repos.length && organization !== 'included' && <div className="source-empty">{selectedOrganization?.accessStatus === 'ssoRequired' ? <ShieldCheck size={18}/> : <Search size={18}/>}<p>{selectedOrganization?.accessStatus === 'ssoRequired' ? `Authorize SSO for ${selectedOrganization.login}, then refresh access to load its repositories.` : selectedOrganization?.accessStatus === 'denied' ? `GitHub denied access to ${selectedOrganization.login}.` : 'No active repositories match this owner and search.'}</p></div>}{organization === 'included' && !selected.size && <div className="source-empty"><Search size={18}/><p>Select a repository or include an organization to build your review inbox.</p></div>}</div>{ownerPage?.hasNextPage && <div className="source-pagination"><span>{query.trim() ? `Searching all ${ownerPage.totalCount} repositories…` : `Showing ${ownerPage.items.length} of ${ownerPage.totalCount}`}</span>{!query.trim() && <button className="button secondary small" disabled={ownerBusy} onClick={() => void loadMore()}>{ownerBusy ? <LoaderCircle className="spin" size={14}/> : null}Load 50 more</button>}</div>}</section></div>
+    <div className="source-layout">
+      <aside>
+        <div className="source-section-heading">
+          <h2>Repository owners</h2>
+          <button className={organization === 'included' ? 'active' : ''} aria-pressed={organization === 'included'} onClick={() => { ownerRequest.current++; searchRequest.current++; setOrganization('included'); setOwnerPage(undefined); setBrowsePage(undefined); setQuery('') }}>Included</button>
+        </div>
+        <div className="organization-choices">
+          {personalLogin && <><p className="source-group-label">Personal account</p><div className={`source-org-row personal${personalSelected ? ' active' : ''}`}><button className="org-focus" aria-label={`Show personal repositories from ${personalLogin}`} aria-pressed={personalSelected} onClick={() => void loadOwner(personalLogin)}>{state.account?.avatarUrl ? <img src={state.account.avatarUrl} alt=""/> : <span className="org-avatar">{personalLogin.slice(0, 1).toUpperCase()}</span>}<span><b>{personalLogin}</b><small>{personalCount === undefined ? 'Open to load repositories' : `${personalCount} personal ${personalCount === 1 ? 'repository' : 'repositories'}`}</small></span></button></div></>}
+          <p className="source-group-label">Organizations</p>
+          {catalog?.organizations.map((org) => {
+            const key = `organization:${org.login}`
+            const blocked = org.accessStatus === 'ssoRequired' || org.accessStatus === 'denied'
+            return <OrganizationSourceRow key={key} org={org} count={ownerCounts[org.login.toLowerCase()]} active={organization.toLowerCase() === org.login.toLowerCase()} checked={selected.has(key)} onFilter={() => blocked ? (ownerRequest.current++, searchRequest.current++, setOrganization(org.login), setOwnerPage({items: [], totalCount: 0, hasNextPage: false, cached: false}), setBrowsePage(undefined)) : void loadOwner(org.login)} onToggle={() => toggle(key)}/>
+          })}
+          {!catalog && <div className="owner-loading"><LoaderCircle className="spin" size={13}/>Loading owners…</div>}
+        </div>
+      </aside>
+      <section>
+        <div className="source-section-heading"><h2>{organization === 'included' ? 'Included sources' : personalSelected ? 'Personal repositories' : `${organization} repositories`}</h2><span>{organization === 'included' ? selected.size : ownerPage?.totalCount ?? '—'}</span></div>
+        <div className="repository-choices">
+          {organization === 'included' && selectedOrganizations.map((owner) => <div className="source-rule" key={`included:${owner}`}><span className="included-mark"><Check size={13}/></span><span className="source-rule-copy"><strong>{owner}</strong><small>Every active repository in this organization</small></span><button className="button text small" aria-label={`Remove ${owner} organization from included sources`} onClick={() => toggle(`organization:${owner}`)}>Remove</button></div>)}
+          {organization === 'included' ? includedRepositories.map((name) => {
+            const repository = catalog?.repositories.find((repo) => `${repo.ref.owner}/${repo.ref.name}`.toLowerCase() === name.toLowerCase())
+            return <div className="source-rule" key={`included:${name}`}><span className="included-mark"><Check size={13}/></span><span className="source-rule-copy"><strong>{name}</strong><small>{repository?.description || 'Repository'}</small></span><button className="button text small" aria-label={`Remove ${name} repository from included sources`} onClick={() => toggle(`repository:${name}`)}>Remove</button></div>
+          }) : repos.map((repo) => {
+            const name = `${repo.ref.owner}/${repo.ref.name}`
+            const key = `repository:${name}`
+            const inherited = selected.has(`organization:${repo.ref.owner}`)
+            return <label className={`repo-choice${inherited ? ' inherited' : ''}`} key={key}><input type="checkbox" checked={inherited || selected.has(key)} disabled={inherited} onChange={() => toggle(key)}/><span className="check-box"><Check size={13}/></span><span><strong>{name}</strong><small>{inherited ? `Included through ${repo.ref.owner}` : repo.description || (repo.isPrivate ? 'Private repository' : 'GitHub repository')}</small></span>{repo.isPrivate && <span className="privacy">Private</span>}</label>
+          })}
+          {ownerBusy && !repos.length && <div className="owner-page-loading"><LoaderCircle className="spin" size={17}/><p>{query.trim() ? 'Searching repositories…' : 'Loading the first 50 active repositories…'}</p></div>}
+          {!ownerBusy && !repos.length && organization !== 'included' && <div className="source-empty">{selectedOrganization?.accessStatus === 'ssoRequired' ? <ShieldCheck size={18}/> : <Search size={18}/>}<p>{selectedOrganization?.accessStatus === 'ssoRequired' ? `Authorize SSO for ${selectedOrganization.login}, then refresh access to load its repositories.` : selectedOrganization?.accessStatus === 'denied' ? `GitHub denied access to ${selectedOrganization.login}.` : 'No active repositories match this owner and search.'}</p></div>}
+          {organization === 'included' && !selected.size && <div className="source-empty"><Search size={18}/><p>Select a repository or include an organization to build your review inbox.</p></div>}
+        </div>
+        {ownerPage && organization !== 'included' && <div className="source-pagination"><span>{query.trim() ? `Showing ${ownerPage.items.length} of ${ownerPage.totalCount} matching repositories` : `Showing ${ownerPage.items.length} of ${ownerPage.totalCount}`}</span>{ownerPage.hasNextPage && <button className="button secondary small" disabled={ownerBusy} onClick={() => void loadMore()}>{ownerBusy ? <LoaderCircle className="spin" size={14}/> : null}Load 50 more</button>}</div>}
+      </section>
+    </div>
   </main>
 }
 
 function InboxScreen({state, onUpdate, onOpen}: {state: BootstrapState; onUpdate: (items: PullRequestSummary[]) => void; onOpen: (pr: PullRequestSummary) => void}) {
   const saved = useMemo(savedInboxFilters, [])
   const [query, setQuery] = useState(''); const [relationship, setRelationship] = useState<Relationship | 'all'>(saved.relationship ?? 'all'); const [organization, setOrganization] = useState('all'); const [repository, setRepository] = useState('all'); const [label, setLabel] = useState(saved.label ?? 'all'); const [analysis, setAnalysis] = useState<AnalysisStatus | 'all'>(saved.analysis ?? 'all'); const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [partial, setPartial] = useState<string[]>([])
+  const [visibility, setVisibility] = useState({source: state.inbox, limit: inboxPageSize})
+  const visibleLimit = visibility.source === state.inbox ? visibility.limit : inboxPageSize
+  const resetVisibleLimit = () => setVisibility({source: state.inbox, limit: inboxPageSize})
   const refresh = async () => { setBusy(true); setError(''); try { const result = await backend.refreshInbox(); onUpdate(result.items ?? []); setPartial(Object.values(result.errors ?? {})) } catch (err) { setError(errorText(err)) } finally { setBusy(false) } }
   useEffect(() => { if (!state.inbox.length) void refresh() }, [])
   useEffect(() => { try { window.localStorage?.setItem?.('reviewarc:inbox-view', JSON.stringify({relationship, label, analysis})) } catch { /* The inbox remains usable when WebView storage is unavailable. */ } }, [relationship, label, analysis])
@@ -348,16 +457,18 @@ function InboxScreen({state, onUpdate, onOpen}: {state: BootstrapState; onUpdate
   useEffect(() => {
     if (label === 'all') return
     const current = labels.find((item) => item.localeCompare(label, undefined, {sensitivity: 'accent'}) === 0)
-    setLabel(current ?? 'all')
-  }, [label, labels])
+    if ((current ?? 'all') !== label) { setVisibility({source: state.inbox, limit: inboxPageSize}); setLabel(current ?? 'all') }
+  }, [label, labels, state.inbox])
   const items = useMemo(() => filterInbox(state.inbox, query, relationship, repository, label, analysis).filter((pr) => organization === 'all' || pr.ref.repository.owner === organization), [state.inbox, query, relationship, organization, repository, label, analysis])
+  const visibleItems = items.slice(0, visibleLimit)
+  const remainingItems = items.length - visibleItems.length
   const allOpen = !query.trim() && relationship === 'all' && organization === 'all' && repository === 'all' && label === 'all' && analysis === 'all'
-  const resetFilters = () => { setQuery(''); setRelationship('all'); setOrganization('all'); setRepository('all'); setLabel('all'); setAnalysis('all') }
+  const resetFilters = () => { resetVisibleLimit(); setQuery(''); setRelationship('all'); setOrganization('all'); setRepository('all'); setLabel('all'); setAnalysis('all') }
   return <main className="page inbox-page"><div className="page-heading"><div><h1>Pull request inbox</h1><p>Open work across {repositories.length || 'your selected'} repositories, ordered by recent activity.</p></div><button className="button secondary" disabled={busy} onClick={refresh}>{busy ? <LoaderCircle className="spin" size={16}/> : <RefreshCw size={16}/>}Refresh</button></div>
     {error && <ErrorBanner message={error} onRetry={refresh}/>} {partial.length > 0 && <div className="warning-banner"><AlertTriangle size={16}/><span>Some repositories could not be refreshed. Showing the available results.</span></div>}
-    <div className="inbox-controls"><label className="search-field inbox-search"><Search size={17}/><input autoCapitalize="none" autoCorrect="off" spellCheck={false} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search title, repository, author, PR number, or label"/></label><Select label="Relationship" value={relationship} onChange={(value) => setRelationship(value as typeof relationship)} options={[['all','All relationships'],['reviewRequested','Needs your review'],['assigned','Assigned'],['authored','Authored by you'],['selectedRepo','All selected']]}/><Select label="Organization" value={organization} onChange={setOrganization} options={[['all','All organizations'], ...organizations.map((org) => [org,org])]}/><Select label="Repository" value={repository} onChange={setRepository} options={[['all','All repositories'], ...repositories.map((r) => [r,r])]}/><Select label="Label" value={label} onChange={setLabel} options={[['all','All labels'], ...labels.map((item) => [item,item])]}/><Select label="Analysis" value={analysis} onChange={(value) => setAnalysis(value as typeof analysis)} options={[['all','All analysis states'],['ready','Walkthrough ready'],['notStarted','Not analyzed'],['running','Analyzing'],['stale','Stale'],['failed','Failed']]}/></div>
-    <div className="saved-views" aria-label="Saved inbox views"><span>Views</span><button className={relationship === 'reviewRequested' ? 'active' : ''} aria-pressed={relationship === 'reviewRequested'} onClick={() => setRelationship('reviewRequested')}>Needs my review</button><button className={relationship === 'authored' ? 'active' : ''} aria-pressed={relationship === 'authored'} onClick={() => setRelationship('authored')}>Authored by me</button><button className={analysis === 'ready' ? 'active' : ''} aria-pressed={analysis === 'ready'} onClick={() => setAnalysis('ready')}>Walkthrough ready</button><button className={allOpen ? 'active' : ''} aria-pressed={allOpen} onClick={resetFilters}>All open</button></div><div className="inbox-summary"><div className="result-count" role="status" aria-label="Inbox result count">Showing <strong>{items.length}</strong>{items.length === state.inbox.length ? '' : ` of ${state.inbox.length}`} open pull request{state.inbox.length === 1 ? '' : 's'}</div><span>Sorted by last updated</span></div>
-    {busy && !state.inbox.length ? <Skeleton rows={7}/> : !items.length ? <EmptyState icon={<GitPullRequest/>} title={state.inbox.length ? 'No pull requests match these filters' : 'Your review queue is clear'}><p>{state.inbox.length ? 'Broaden the search or reset one of the filters.' : 'ReviewArc found no open pull requests in the selected sources. Refresh after new work is opened.'}</p>{state.inbox.length > 0 && <button className="button secondary" onClick={resetFilters}>Reset filters</button>}</EmptyState> : <div className="pr-list" aria-label="Pull request results">{items.map((pr) => <PRRow key={`${repoName(pr)}#${pr.ref.number}`} pr={pr} onOpen={() => onOpen(pr)}/>)}</div>}
+    <div className="inbox-controls"><label className="search-field inbox-search"><Search size={17}/><input autoCapitalize="none" autoCorrect="off" spellCheck={false} value={query} onChange={(e) => {resetVisibleLimit(); setQuery(e.target.value)}} placeholder="Search title, repository, author, PR number, or label"/></label><Select label="Relationship" value={relationship} onChange={(value) => {resetVisibleLimit(); setRelationship(value as typeof relationship)}} options={[['all','All relationships'],['reviewRequested','Needs your review'],['assigned','Assigned'],['authored','Authored by you'],['selectedRepo','All selected']]}/><Select label="Organization" value={organization} onChange={(value) => {resetVisibleLimit(); setOrganization(value)}} options={[['all','All organizations'], ...organizations.map((org) => [org,org])]}/><Select label="Repository" value={repository} onChange={(value) => {resetVisibleLimit(); setRepository(value)}} options={[['all','All repositories'], ...repositories.map((r) => [r,r])]}/><Select label="Label" value={label} onChange={(value) => {resetVisibleLimit(); setLabel(value)}} options={[['all','All labels'], ...labels.map((item) => [item,item])]}/><Select label="Analysis" value={analysis} onChange={(value) => {resetVisibleLimit(); setAnalysis(value as typeof analysis)}} options={[['all','All analysis states'],['ready','Walkthrough ready'],['notStarted','Not analyzed'],['running','Analyzing'],['stale','Stale'],['failed','Failed']]}/></div>
+    <div className="saved-views" aria-label="Saved inbox views"><span>Views</span><button className={relationship === 'reviewRequested' ? 'active' : ''} aria-pressed={relationship === 'reviewRequested'} onClick={() => {resetVisibleLimit(); setRelationship('reviewRequested')}}>Needs my review</button><button className={relationship === 'authored' ? 'active' : ''} aria-pressed={relationship === 'authored'} onClick={() => {resetVisibleLimit(); setRelationship('authored')}}>Authored by me</button><button className={analysis === 'ready' ? 'active' : ''} aria-pressed={analysis === 'ready'} onClick={() => {resetVisibleLimit(); setAnalysis('ready')}}>Walkthrough ready</button><button className={allOpen ? 'active' : ''} aria-pressed={allOpen} onClick={resetFilters}>All open</button></div><div className="inbox-summary"><div className="result-count" role="status" aria-label="Inbox result count">Showing <strong>{items.length}</strong>{items.length === state.inbox.length ? '' : ` of ${state.inbox.length}`} open pull request{state.inbox.length === 1 ? '' : 's'}</div><span>Sorted by last updated</span></div>
+    {busy && !state.inbox.length ? <Skeleton rows={7}/> : !items.length ? <EmptyState icon={<GitPullRequest/>} title={state.inbox.length ? 'No pull requests match these filters' : 'Your review queue is clear'}><p>{state.inbox.length ? 'Broaden the search or reset one of the filters.' : 'ReviewArc found no open pull requests in the selected sources. Refresh after new work is opened.'}</p>{state.inbox.length > 0 && <button className="button secondary" onClick={resetFilters}>Reset filters</button>}</EmptyState> : <div className="pr-list" id="pull-request-results" aria-label="Pull request results">{visibleItems.map((pr) => <PRRow key={`${repoName(pr)}#${pr.ref.number}`} pr={pr} onOpen={() => onOpen(pr)}/>)}{remainingItems > 0 && <div className="inbox-pagination"><span aria-live="polite">Showing {visibleItems.length} of {items.length}</span><button className="button secondary small" aria-controls="pull-request-results" aria-label={`Show ${Math.min(inboxPageSize, remainingItems)} more pull requests`} onClick={() => setVisibility({source: state.inbox, limit: visibleLimit + inboxPageSize})}>Show more</button></div>}</div>}
   </main>
 }
 
@@ -533,7 +644,7 @@ export function ReviewWorkspace({session, initialChapterId = '', onSession, onBa
     const ids = new Set(comments.map((comment) => comment.id))
     onSession({...session, comments: session.comments.map((comment) => ids.has(comment.id) ? comments.find((published) => published.id === comment.id)! : comment)})
     setPublish(undefined); setSelectedDrafts(new Set())
-    try { onSession(await backend.openPullRequest(session.pullRequest.ref)) }
+	try { onSession(await backend.refreshPullRequestContext(session.id)) }
     catch (err) { setActionError(`Published on GitHub, but ReviewArc could not refresh the local session: ${errorText(err)}`) }
     finally { setBusy(false) }
   }
@@ -552,7 +663,7 @@ export function ReviewWorkspace({session, initialChapterId = '', onSession, onBa
     onSession({...session, pullRequest: {...session.pullRequest, reviewComments: [...session.pullRequest.reviewComments, reply]}})
     setThreadReply(undefined)
     setThreadReplyReset((value) => ({rootId: threadReply.rootCommentId, version: (value?.version ?? 0) + 1}))
-    try { onSession(await backend.openPullRequest(session.pullRequest.ref)) }
+	try { onSession(await backend.refreshPullRequestContext(session.id)) }
     catch (err) { setActionError(`Reply published on GitHub, but ReviewArc could not refresh the conversation: ${errorText(err)}`) }
     finally { setBusy(false) }
   }

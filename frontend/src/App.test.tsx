@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { App, DiffView, FileContextView, OverviewScreen, ReviewWorkspace, SettingsScreen, SourceSelector, SplitDiffView } from './App'
 import { Markdown, WindowControls } from './components'
-import type { BootstrapState, ReviewSession, SoftwareUpdateStatus } from './types'
+import type { BootstrapState, EnvironmentState, RepositoryPage, ReviewSession, SoftwareUpdateStatus } from './types'
 
 const paths = {root: '/tmp/reviewarc', repositories: '/tmp/reviewarc/repos', worktrees: '/tmp/reviewarc/worktrees', database: '/tmp/reviewarc/db.sqlite', logs: '/tmp/reviewarc/logs', cache: '/tmp/reviewarc/cache'}
 const idleUpdate: SoftwareUpdateStatus = {currentVersion: '0.1.0', currentBuild: '7', state: 'idle', channel: 'stable'}
@@ -20,13 +20,16 @@ function reviewSession(): ReviewSession {
   }
 }
 
-function installBackend(state: BootstrapState, account: unknown = {status: 'authenticated', user: {login: 'sean', name: 'Sean', avatarUrl: ''}}) {
+function installBackend(state: BootstrapState) {
+	const bootstrapState = {...state, account: state.account ?? {login: 'sean', name: 'Sean', avatarUrl: ''}}
+  const environment: EnvironmentState = {dependencies: bootstrapState.dependencies, account: bootstrapState.account, gitProtocol: bootstrapState.gitProtocol ?? 'https', refreshedAt: '2026-07-14T12:00:00Z'}
   window.go = {main: {App: {
-    Bootstrap: vi.fn().mockResolvedValue(state),
+    Bootstrap: vi.fn().mockResolvedValue(bootstrapState),
+    RefreshEnvironment: vi.fn().mockResolvedValue(environment),
     GetUpdateStatus: vi.fn().mockResolvedValue(idleUpdate),
     CheckForUpdates: vi.fn().mockResolvedValue({...idleUpdate, state: 'checking'}),
     InstallUpdate: vi.fn().mockResolvedValue(undefined),
-    RefreshAccount: vi.fn().mockResolvedValue(account),
+    RefreshAccount: vi.fn(),
     RefreshInbox: vi.fn().mockResolvedValue({items: [], errors: {}, partial: false}),
   }}}
 }
@@ -58,13 +61,27 @@ describe('App startup', () => {
 
   it('checks dependencies again and leaves onboarding when the environment is repaired', async () => {
     const missing: BootstrapState = {dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'missing'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: []}
-    const ready: BootstrapState = {...missing, dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}]}
+    const ready: BootstrapState = {...missing, account: {login: 'sean', name: 'Sean', avatarUrl: ''}, dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}]}
     installBackend(missing)
-    window.go!.main!.App!.Bootstrap = vi.fn().mockResolvedValueOnce(missing).mockResolvedValueOnce(ready)
+    window.go!.main!.App!.RefreshEnvironment = vi.fn().mockResolvedValue({dependencies: ready.dependencies, account: ready.account, gitProtocol: 'https', refreshedAt: '2026-07-14T12:00:00Z'})
     render(<App/>)
     fireEvent.click(await screen.findByRole('button', {name: 'Check again'}))
     expect(await screen.findByText('Pull request inbox')).toBeInTheDocument()
-    expect(window.go?.main?.App?.Bootstrap).toHaveBeenCalledTimes(2)
+    expect(window.go?.main?.App?.Bootstrap).toHaveBeenCalledOnce()
+    expect(window.go?.main?.App?.RefreshEnvironment).toHaveBeenCalledOnce()
+  })
+
+  it('renders a warm cached gate immediately and repairs it in the background', async () => {
+    const cached: BootstrapState = {environmentCached: true, dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'missing'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: []}
+    installBackend(cached)
+    let finishRefresh!: (state: EnvironmentState) => void
+    window.go!.main!.App!.RefreshEnvironment = vi.fn(() => new Promise((resolve) => { finishRefresh = resolve }))
+    render(<App/>)
+    expect(await screen.findByText('Connect your review workspace')).toBeInTheDocument()
+    finishRefresh({dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], account: {login: 'sean', name: 'Sean', avatarUrl: ''}, gitProtocol: 'ssh', refreshedAt: '2026-07-14T12:00:00Z'})
+    expect(await screen.findByText('Pull request inbox')).toBeInTheDocument()
+    expect(window.go?.main?.App?.Bootstrap).toHaveBeenCalledOnce()
+    expect(window.go?.main?.App?.RefreshEnvironment).toHaveBeenCalledOnce()
   })
 
   it('opens the real-data inbox for an authenticated configured account', async () => {
@@ -72,6 +89,8 @@ describe('App startup', () => {
     render(<App/>)
     expect(await screen.findByText('Pull request inbox')).toBeInTheDocument()
     await waitFor(() => expect(window.go?.main?.App?.RefreshInbox).toHaveBeenCalled())
+	expect(window.go?.main?.App?.RefreshAccount).not.toHaveBeenCalled()
+	expect(window.go?.main?.App?.RefreshEnvironment).not.toHaveBeenCalled()
 	expect(screen.getByText('Your review queue is clear')).toBeInTheDocument()
   })
 
@@ -154,6 +173,46 @@ describe('App startup', () => {
     expect(allOpen).toHaveAttribute('aria-pressed', 'true')
   })
 
+  it('bounds mounted inbox rows while filtering the complete result set', async () => {
+    const inbox = Array.from({length: 250}, (_, index) => ({
+      ref: {repository: {host: 'github.com', owner: 'acme', name: 'api', cloneUrl: '', databaseId: '1'}, number: index + 1},
+      title: `Performance change ${index + 1}`,
+      url: '',
+      author: {login: 'sean', name: '', avatarUrl: ''},
+      updatedAt: '2026-07-12T00:00:00Z',
+      isDraft: false,
+      additions: 1,
+      deletions: 0,
+      changedFiles: 1,
+      relationships: ['selectedRepo' as const],
+      labels: [],
+      analysisStatus: 'notStarted' as const,
+      progress: {total: 0, reviewed: 0, blocked: 0, clarify: 0, percent: 0},
+      riskLevel: 'unknown' as const,
+    }))
+    installBackend({dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox})
+    const {container} = render(<App/>)
+
+    expect(await screen.findByText('Performance change 1')).toBeInTheDocument()
+    expect(screen.getByText('250', {selector: '.inbox-summary strong'})).toBeInTheDocument()
+    expect(container.querySelectorAll('.pr-row')).toHaveLength(100)
+    expect(screen.queryByText('Performance change 101')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', {name: 'Show 100 more pull requests'}))
+    expect(container.querySelectorAll('.pr-row')).toHaveLength(200)
+    expect(screen.getByText('Performance change 200')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Show 50 more pull requests'}))
+    expect(container.querySelectorAll('.pr-row')).toHaveLength(250)
+    expect(screen.queryByRole('button', {name: /more pull requests/})).not.toBeInTheDocument()
+
+    const search = screen.getByPlaceholderText('Search title, repository, author, PR number, or label')
+    fireEvent.change(search, {target: {value: 'Performance change 250'}})
+    expect(container.querySelectorAll('.pr-row')).toHaveLength(1)
+    expect(screen.getByText('Performance change 250')).toBeInTheDocument()
+    fireEvent.change(search, {target: {value: ''}})
+    expect(container.querySelectorAll('.pr-row')).toHaveLength(100)
+  })
+
   it('transitions immediately when pull request hydration is still running', async () => {
 	const pr = {ref: {repository: {host: 'github.com', owner: 'acme', name: 'api', cloneUrl: '', databaseId: '1'}, number: 7}, title: 'Slow change', url: 'https://github.com/acme/api/pull/7', author: {login: 'sean', name: 'Sean', avatarUrl: ''}, updatedAt: '2026-07-12T00:00:00Z', isDraft: false, additions: 8, deletions: 2, changedFiles: 3, relationships: ['authored' as const], labels: [], analysisStatus: 'notStarted' as const, progress: {total: 0, reviewed: 0, blocked: 0, clarify: 0, percent: 0}, riskLevel: 'unknown' as const}
 	const state: BootstrapState = {dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: [pr]}
@@ -164,6 +223,71 @@ describe('App startup', () => {
 	expect(screen.getByText('Loading pull request context…')).toBeInTheDocument()
 	expect(screen.getByRole('heading', {name: /#7 Slow change/})).toBeInTheDocument()
 	expect(screen.queryByRole('heading', {name: 'Pull request inbox'})).not.toBeInTheDocument()
+  })
+
+  it('renders the core session before lazy discussion and checks finish', async () => {
+	const core = reviewSession()
+	const pr = {...core.pullRequest, analysisStatus: core.analysisStatus, progress: core.progress}
+	const state: BootstrapState = {dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: [pr]}
+	installBackend(state)
+	let resolveContext!: (value: ReviewSession) => void
+	const context = new Promise<ReviewSession>((resolve) => { resolveContext = resolve })
+	window.go!.main!.App!.OpenPullRequest = vi.fn().mockResolvedValue(core)
+	window.go!.main!.App!.RefreshPullRequestContext = vi.fn(() => context)
+	window.runtime = {EventsOn: vi.fn(() => () => {})}
+	render(<App/>)
+
+	fireEvent.click((await screen.findByText(core.pullRequest.title)).closest('button')!)
+	expect(await screen.findByText(core.analysis!.summary)).toBeInTheDocument()
+	expect(screen.queryByText('Loading pull request context…')).not.toBeInTheDocument()
+	expect(window.go?.main?.App?.RefreshPullRequestContext).toHaveBeenCalledWith(core.id)
+
+	resolveContext({...core, pullRequest: {...core.pullRequest, reviews: [{id: 11, author: {login: 'alice', name: '', avatarUrl: ''}, state: 'COMMENTED', body: 'Please cover the retry path.', commitSha: 'head', submittedAt: '2026-07-12T01:00:00Z', url: ''}]}})
+	expect(await screen.findByText('Existing discussion')).toBeInTheDocument()
+  })
+
+  it('keeps the core session usable when lazy context exceeds its output limit', async () => {
+	const core = reviewSession()
+	const pr = {...core.pullRequest, analysisStatus: core.analysisStatus, progress: core.progress}
+	installBackend({dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: [pr]})
+	window.go!.main!.App!.OpenPullRequest = vi.fn().mockResolvedValue(core)
+	window.go!.main!.App!.RefreshPullRequestContext = vi.fn().mockRejectedValue(new Error('gh stdout exceeded the 16777216-byte output limit'))
+	window.runtime = {EventsOn: vi.fn(() => () => {})}
+	render(<App/>)
+
+	fireEvent.click((await screen.findByText(core.pullRequest.title)).closest('button')!)
+	expect(await screen.findByText(core.analysis!.summary)).toBeInTheDocument()
+	expect(await screen.findByText(/Pull request opened, but GitHub discussion and checks could not be loaded/)).toBeInTheDocument()
+	expect(screen.getByRole('heading', {name: new RegExp(core.pullRequest.title)})).toBeInTheDocument()
+  })
+
+  it('ignores a lazy context response after navigating to another pull request', async () => {
+	const first = reviewSession()
+	first.id = 'first-session'
+	first.pullRequest = {...first.pullRequest, ref: {...first.pullRequest.ref, number: 7}, title: 'First change'}
+	const second = reviewSession()
+	second.id = 'second-session'
+	second.pullRequest = {...second.pullRequest, ref: {...second.pullRequest.ref, number: 8}, title: 'Second change'}
+	const summaries = [first, second].map((item) => ({...item.pullRequest, analysisStatus: item.analysisStatus, progress: item.progress}))
+	installBackend({dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: summaries})
+	let resolveFirst!: (value: ReviewSession) => void
+	const firstContext = new Promise<ReviewSession>((resolve) => { resolveFirst = resolve })
+	window.go!.main!.App!.OpenPullRequest = vi.fn((ref: unknown) => Promise.resolve((ref as {number: number}).number === 7 ? first : second))
+	window.go!.main!.App!.RefreshPullRequestContext = vi.fn((id: unknown) => id === first.id ? firstContext : new Promise(() => {}))
+	window.runtime = {EventsOn: vi.fn(() => () => {})}
+	render(<App/>)
+
+	fireEvent.click((await screen.findByText('First change')).closest('button')!)
+	await waitFor(() => expect(window.go?.main?.App?.RefreshPullRequestContext).toHaveBeenCalledWith(first.id))
+	expect(screen.getByRole('heading', {name: /First change/})).toBeInTheDocument()
+	fireEvent.click(screen.getAllByRole('button', {name: 'Inbox'})[0])
+	fireEvent.click((await screen.findByText('Second change')).closest('button')!)
+	await waitFor(() => expect(window.go?.main?.App?.RefreshPullRequestContext).toHaveBeenCalledWith(second.id))
+	expect(screen.getByRole('heading', {name: /Second change/})).toBeInTheDocument()
+
+	resolveFirst({...first, pullRequest: {...first.pullRequest, title: 'Stale first response'}})
+	await waitFor(() => expect(screen.getByRole('heading', {name: /Second change/})).toBeInTheDocument())
+	expect(screen.queryByText('Stale first response')).not.toBeInTheDocument()
   })
 })
 
@@ -265,25 +389,59 @@ describe('Repository sources', () => {
     expect(screen.queryByText('sean/reviewarc')).not.toBeInTheDocument()
   })
 
-  it('searches all owner repository pages without requiring manual pagination', async () => {
+  it('searches a large owner with one debounced server request instead of draining browse pages', async () => {
     const state: BootstrapState = {dependencies: [], paths, account: {login: 'sean', name: 'Sean', avatarUrl: ''}, selections: [], inbox: []}
     const repository = (name: string) => ({ref: {host: 'github.com', owner: 'sean', name, cloneUrl: '', databaseId: name}, description: '', isPrivate: true, isArchived: false, updatedAt: '2026-07-12T00:00:00Z'})
     const first = Array.from({length: 50}, (_, index) => repository(`repo-${String(index).padStart(2, '0')}`))
-    const refresh = vi.fn().mockImplementation(({cursor}: {cursor: string}) => Promise.resolve(cursor ? {items: [repository('repo-50')], totalCount: 51, hasNextPage: false, cached: false} : {items: first, totalCount: 51, endCursor: 'next', hasNextPage: true, cached: false}))
+    const refresh = vi.fn().mockResolvedValue({items: first, totalCount: 12000, endCursor: 'next', hasNextPage: true, cached: false})
+    const search = vi.fn().mockResolvedValue({items: [repository('repo-50')], totalCount: 1, hasNextPage: false, cached: false})
     window.go = {main: {App: {
 	  ListSources: vi.fn().mockResolvedValue({organizations: [], repositories: [], selections: []}),
 	  RefreshSourceAccess: vi.fn().mockResolvedValue([]),
 	  RefreshSelectedRepositories: vi.fn().mockResolvedValue({repositories: [], archivedKeys: [], errors: {}}),
       ListCachedOwnerRepositories: vi.fn().mockResolvedValue({items: [], totalCount: 0, hasNextPage: false, cached: true}),
       RefreshOwnerRepositories: refresh,
+      SearchOwnerRepositories: search,
     }}}
     render(<SourceSelector state={state} onDone={vi.fn()}/>)
     fireEvent.click(screen.getByRole('button', {name: 'Show personal repositories from sean'}))
-    expect(await screen.findByText('Showing 50 of 51')).toBeInTheDocument()
+    expect(await screen.findByText('Showing 50 of 12000')).toBeInTheDocument()
     fireEvent.change(screen.getByPlaceholderText('Search all repositories'), {target: {value: 'repo-50'}})
     expect(await screen.findByText('sean/repo-50')).toBeInTheDocument()
-    expect(screen.queryByRole('button', {name: 'Load 50 more'})).not.toBeInTheDocument()
-    expect(refresh).toHaveBeenNthCalledWith(2, {owner: 'sean', cursor: 'next'})
+    expect(refresh).toHaveBeenCalledOnce()
+    expect(search).toHaveBeenCalledOnce()
+    expect(search).toHaveBeenCalledWith({owner: 'sean', query: 'repo-50', cursor: '', organization: false})
+  })
+
+  it('ignores stale owner search responses', async () => {
+    const state: BootstrapState = {dependencies: [], paths, account: {login: 'sean', name: 'Sean', avatarUrl: ''}, selections: [], inbox: []}
+    const repository = (name: string) => ({ref: {host: 'github.com', owner: 'sean', name, cloneUrl: '', databaseId: name}, description: '', isPrivate: true, isArchived: false, updatedAt: '2026-07-12T00:00:00Z'})
+    let resolveOld!: (page: RepositoryPage) => void
+    let resolveNew!: (page: RepositoryPage) => void
+    const oldResponse = new Promise<RepositoryPage>((resolve) => { resolveOld = resolve })
+    const newResponse = new Promise<RepositoryPage>((resolve) => { resolveNew = resolve })
+    const search = vi.fn().mockImplementation(({query}: {query: string}) => query === 'old' ? oldResponse : newResponse)
+    window.go = {main: {App: {
+      ListSources: vi.fn().mockResolvedValue({organizations: [], repositories: [], selections: []}),
+      RefreshSourceAccess: vi.fn().mockResolvedValue([]),
+      RefreshSelectedRepositories: vi.fn().mockResolvedValue({repositories: [], archivedKeys: [], errors: {}}),
+      ListCachedOwnerRepositories: vi.fn().mockResolvedValue({items: [], totalCount: 0, hasNextPage: false, cached: true}),
+      RefreshOwnerRepositories: vi.fn().mockResolvedValue({items: [repository('browse')], totalCount: 1, hasNextPage: false, cached: false}),
+      SearchOwnerRepositories: search,
+    }}}
+    render(<SourceSelector state={state} onDone={vi.fn()}/>)
+    fireEvent.click(screen.getByRole('button', {name: 'Show personal repositories from sean'}))
+    expect(await screen.findByText('sean/browse')).toBeInTheDocument()
+    const input = screen.getByPlaceholderText('Search all repositories')
+    fireEvent.change(input, {target: {value: 'old'}})
+    await waitFor(() => expect(search).toHaveBeenCalledTimes(1))
+    fireEvent.change(input, {target: {value: 'new'}})
+    await waitFor(() => expect(search).toHaveBeenCalledTimes(2))
+    resolveNew({items: [repository('new-result')], totalCount: 1, hasNextPage: false, cached: false})
+    expect(await screen.findByText('sean/new-result')).toBeInTheDocument()
+    resolveOld({items: [repository('old-result')], totalCount: 1, hasNextPage: false, cached: false})
+    await waitFor(() => expect(screen.queryByText('sean/old-result')).not.toBeInTheDocument())
+    expect(screen.getByText('sean/new-result')).toBeInTheDocument()
   })
 
   it('uses organization names to filter and a distinct control to include every repository', async () => {

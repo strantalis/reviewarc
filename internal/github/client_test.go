@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -16,9 +17,25 @@ import (
 )
 
 type fakeRunner struct {
+	mu        sync.Mutex
 	responses []proc.Result
 	errors    []error
 	commands  []proc.Command
+}
+
+type pullRequestListRunner struct {
+	mu       sync.Mutex
+	results  map[string]proc.Result
+	errors   map[string]error
+	commands []proc.Command
+}
+
+type concurrencyRunner struct {
+	mu       sync.Mutex
+	active   int
+	maximum  int
+	commands int
+	delay    time.Duration
 }
 
 type organizationAccessRunner struct {
@@ -37,6 +54,8 @@ func (f *organizationAccessRunner) Run(_ context.Context, command proc.Command) 
 }
 
 func (f *fakeRunner) Run(_ context.Context, c proc.Command) (proc.Result, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.commands = append(f.commands, c)
 	i := len(f.commands) - 1
 	var err error
@@ -44,6 +63,39 @@ func (f *fakeRunner) Run(_ context.Context, c proc.Command) (proc.Result, error)
 		err = f.errors[i]
 	}
 	return f.responses[i], err
+}
+
+func (r *pullRequestListRunner) Run(_ context.Context, command proc.Command) (proc.Result, error) {
+	key := ""
+	for index, arg := range command.Args {
+		if arg == "-R" && index+1 < len(command.Args) {
+			key = "repository:" + command.Args[index+1]
+		}
+		if strings.HasPrefix(arg, "search=org:") {
+			organization := strings.TrimPrefix(strings.Fields(strings.TrimPrefix(arg, "search="))[0], "org:")
+			key = "organization:" + organization
+		}
+	}
+	r.mu.Lock()
+	r.commands = append(r.commands, command)
+	result, err := r.results[key], r.errors[key]
+	r.mu.Unlock()
+	return result, err
+}
+
+func (r *concurrencyRunner) Run(_ context.Context, _ proc.Command) (proc.Result, error) {
+	r.mu.Lock()
+	r.active++
+	r.commands++
+	if r.active > r.maximum {
+		r.maximum = r.active
+	}
+	r.mu.Unlock()
+	time.Sleep(r.delay)
+	r.mu.Lock()
+	r.active--
+	r.mu.Unlock()
+	return proc.Result{Stdout: []byte(`[]`)}, nil
 }
 
 func TestCurrentUserUsesStructuredAPI(t *testing.T) {
@@ -275,10 +327,26 @@ func TestListOwnerRepositoriesPassesCursorAndRejectsInvalidOwner(t *testing.T) {
 	}
 }
 
+func TestSearchOwnerRepositoriesUsesOneScopedCursorRequest(t *testing.T) {
+	body := `{"data":{"search":{"repositoryCount":12000,"nodes":[{"id":"R50","name":"repo-50","nameWithOwner":"acme/repo-50","description":"match","owner":{"login":"acme"}}],"pageInfo":{"hasNextPage":true,"endCursor":"search-next"}}}}`
+	f := &fakeRunner{responses: []proc.Result{{Stdout: []byte(body)}}}
+	page, err := New(f).SearchOwnerRepositories(context.Background(), RepositorySearchQuery{Owner: "acme", Query: `repo "50"`, Cursor: "search-cursor", Organization: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.commands) != 1 || page.TotalCount != 12000 || len(page.Items) != 1 || page.Items[0].Ref.Name != "repo-50" || !page.HasNextPage || page.EndCursor != "search-next" {
+		t.Fatalf("page=%+v commands=%d", page, len(f.commands))
+	}
+	args := f.commands[0].Args
+	if containsString(args, "--paginate") || containsString(args, "--slurp") || !containsString(args, "after=search-cursor") || !containsString(args, `search="repo \"50\"" in:name,description org:acme archived:false`) {
+		t.Fatalf("repository search command=%v", args)
+	}
+}
+
 func TestOrganizationPullRequestSearchAvoidsRepositoryFanoutAndPreservesRelationships(t *testing.T) {
-	organization := `[{"data":{"search":{"issueCount":1,"nodes":[{"number":7,"title":"Org change","url":"https://github.com/acme/api/pull/7","author":{"login":"dev"},"updatedAt":"2026-07-12T10:00:00Z","additions":4,"deletions":2,"changedFiles":1,"assignees":{"nodes":[{"login":"sean"}]},"reviewRequests":{"nodes":[{"requestedReviewer":{"login":"sean"}}]},"labels":{"nodes":[{"name":"security"}]},"headRefOid":"head","baseRefOid":"base","repository":{"id":"R1","name":"api","nameWithOwner":"acme/api","isPrivate":true,"owner":{"login":"acme"}}}],"pageInfo":{"hasNextPage":false}}}}]`
+	organization := `{"data":{"search":{"issueCount":1,"nodes":[{"number":7,"title":"Org change","url":"https://github.com/acme/api/pull/7","author":{"login":"dev"},"updatedAt":"2026-07-12T10:00:00Z","additions":4,"deletions":2,"changedFiles":1,"assignees":{"nodes":[{"login":"sean"}]},"reviewRequests":{"nodes":[{"requestedReviewer":{"login":"sean"}}]},"labels":{"nodes":[{"name":"security"}]},"headRefOid":"head","baseRefOid":"base","repository":{"id":"R1","name":"api","nameWithOwner":"acme/api","isPrivate":true,"owner":{"login":"acme"}}}]}}}`
 	explicitDuplicate := `[{"number":7,"title":"Org change","url":"https://github.com/acme/api/pull/7","author":{"login":"dev"},"updatedAt":"2026-07-12T10:00:00Z"}]`
-	f := &fakeRunner{responses: []proc.Result{{Stdout: []byte(organization)}, {Stdout: []byte(explicitDuplicate)}}}
+	f := &pullRequestListRunner{results: map[string]proc.Result{"organization:acme": {Stdout: []byte(organization)}, "repository:acme/api": {Stdout: []byte(explicitDuplicate)}}, errors: map[string]error{}}
 	query := PullRequestQuery{Organizations: []string{"acme", "ACME"}, Repositories: []domain.RepositoryRef{{Owner: "acme", Name: "api"}}, CurrentLogin: "sean"}
 	got := New(f).ListPullRequests(context.Background(), query)
 	if got.Partial || len(got.Items) != 1 || len(f.commands) != 2 {
@@ -290,7 +358,58 @@ func TestOrganizationPullRequestSearchAvoidsRepositoryFanoutAndPreservesRelation
 	if !reflect.DeepEqual(got.Items[0].Labels, []string{"security"}) {
 		t.Fatalf("labels=%v", got.Items[0].Labels)
 	}
-	if args := f.commands[0].Args; !containsString(args, "search=org:acme is:pr is:open archived:false sort:updated-desc") || !containsString(args, "--paginate") {
+	var organizationArgs []string
+	for _, command := range f.commands {
+		if containsString(command.Args, "search=org:acme is:pr is:open archived:false sort:updated-desc") {
+			organizationArgs = command.Args
+		}
+	}
+	if containsString(organizationArgs, "--paginate") || containsString(organizationArgs, "--slurp") {
+		t.Fatalf("organization search commands=%v", f.commands)
+	}
+}
+
+func TestOrganizationPullRequestSearchReturnsOneNewestPageWithPartialWarning(t *testing.T) {
+	nodes := make([]map[string]any, 100)
+	for index := range nodes {
+		number := index + 1
+		nodes[index] = map[string]any{
+			"number":    number,
+			"title":     fmt.Sprintf("Change %d", number),
+			"url":       fmt.Sprintf("https://github.com/acme/api/pull/%d", number),
+			"updatedAt": fmt.Sprintf("2026-07-12T10:%02d:00Z", index%60),
+			"repository": map[string]any{
+				"id":            "R1",
+				"name":          "api",
+				"nameWithOwner": "acme/api",
+				"owner":         map[string]any{"login": "acme"},
+			},
+		}
+	}
+	body, err := json.Marshal(map[string]any{
+		"data": map[string]any{"search": map[string]any{"issueCount": 125, "nodes": nodes}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &pullRequestListRunner{
+		results: map[string]proc.Result{"organization:acme": {Stdout: body}},
+		errors:  map[string]error{},
+	}
+
+	got := New(runner).ListPullRequests(context.Background(), PullRequestQuery{Organizations: []string{"acme"}})
+	if !got.Partial || len(got.Items) != 100 {
+		t.Fatalf("inbox=%+v", got)
+	}
+	wantWarning := "Showing 100 of 125 open pull requests from acme, ordered by most recently updated. Narrow the source selection to review older work."
+	if got.Errors["organization:acme"] != wantWarning {
+		t.Fatalf("warning=%q, want %q", got.Errors["organization:acme"], wantWarning)
+	}
+	if len(runner.commands) != 1 {
+		t.Fatalf("commands=%d, want one organization request", len(runner.commands))
+	}
+	args := runner.commands[0].Args
+	if containsString(args, "--paginate") || containsString(args, "--slurp") || !strings.Contains(args[len(args)-1], "first:100") || !containsString(args, "search=org:acme is:pr is:open archived:false sort:updated-desc") {
 		t.Fatalf("organization search command=%v", args)
 	}
 }
@@ -298,9 +417,9 @@ func TestOrganizationPullRequestSearchAvoidsRepositoryFanoutAndPreservesRelation
 func TestInboxIsSortedAndIsolatesRepositoryFailures(t *testing.T) {
 	old := `[{"number":1,"title":"Old","url":"https://github.com/acme/api/pull/1","author":{"login":"dev"},"updatedAt":"2026-07-10T10:00:00Z","headRefOid":"head1","baseRefOid":"base1"}]`
 	newer := `[{"number":2,"title":"New","url":"https://github.com/acme/web/pull/2","author":{"login":"dev"},"updatedAt":"2026-07-11T10:00:00Z","reviewRequests":[{"login":"SEAN"}],"headRefOid":"head2","baseRefOid":"base2"}]`
-	f := &fakeRunner{
-		responses: []proc.Result{{Stdout: []byte(old)}, {Stderr: []byte("private details must not escape")}, {Stdout: []byte(newer)}},
-		errors:    []error{nil, errors.New("exit 1"), nil},
+	f := &pullRequestListRunner{
+		results: map[string]proc.Result{"repository:acme/api": {Stdout: []byte(old)}, "repository:acme/bad": {Stderr: []byte("private details must not escape")}, "repository:acme/web": {Stdout: []byte(newer)}},
+		errors:  map[string]error{"repository:acme/bad": errors.New("exit 1")},
 	}
 	repos := []domain.RepositoryRef{
 		{Owner: "acme", Name: "api"},
@@ -326,30 +445,41 @@ func TestInboxIsSortedAndIsolatesRepositoryFailures(t *testing.T) {
 	}
 }
 
-func TestPullRequestDetailParsesForkRenameAndBinary(t *testing.T) {
+func TestInboxRepositoryFetchesUseBoundedConcurrency(t *testing.T) {
+	runner := &concurrencyRunner{delay: 20 * time.Millisecond}
+	repositories := make([]domain.RepositoryRef, 12)
+	for index := range repositories {
+		repositories[index] = domain.RepositoryRef{Owner: "acme", Name: fmt.Sprintf("repo-%02d", index)}
+	}
+	result := New(runner).ListPullRequests(context.Background(), PullRequestQuery{Repositories: repositories, CurrentLogin: "sean"})
+	if result.Partial || len(result.Items) != 0 {
+		t.Fatalf("inbox=%+v", result)
+	}
+	if runner.commands != len(repositories) || runner.maximum != 4 {
+		t.Fatalf("commands=%d maximum concurrency=%d", runner.commands, runner.maximum)
+	}
+}
+
+func TestPullRequestDetailParsesOverviewData(t *testing.T) {
 	metadata := []byte(`{"number":4,"title":"Change","body":"why","html_url":"https://github.com/acme/api/pull/4","updated_at":"2026-07-11T11:00:00Z","user":{"login":"dev"},"base":{"ref":"main","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","repo":{"name":"api","clone_url":"https://github.com/acme/api.git","owner":{"login":"acme"}}},"head":{"ref":"topic","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repo":{"name":"api","clone_url":"https://github.com/fork/api.git","owner":{"login":"fork"}}},"additions":2,"deletions":1,"changed_files":2,"labels":[{"name":"security"}]}`)
 	commits := []byte(`[[{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","commit":{"message":"change","author":{"name":"Dev","date":"2026-07-11T10:00:00Z"}},"author":{"login":"dev"}}]]`)
-	files := []byte(`[[{"filename":"new.go","previous_filename":"old.go","status":"renamed","additions":1,"deletions":1,"patch":"@@"},{"filename":"asset.bin","status":"modified","additions":0,"deletions":0}]]`)
-	detail, err := parsePullRequestDetail(metadata, commits, files)
+	detail, err := parsePullRequestDetail(metadata, commits)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if detail.PullRequest.HeadRepository.Owner != "fork" || detail.PullRequest.URL == "" || detail.PullRequest.HeadRepository.CloneURL == "" || len(detail.PullRequest.Labels) != 1 || detail.PullRequest.Labels[0] != "security" || detail.Files[0].Status != domain.FileRenamed || detail.Files[0].PreviousPath != "old.go" || !detail.Files[1].IsBinary {
+	if detail.PullRequest.HeadRepository.Owner != "fork" || detail.PullRequest.URL == "" || detail.PullRequest.HeadRepository.CloneURL == "" || len(detail.PullRequest.Labels) != 1 || detail.PullRequest.Labels[0] != "security" || len(detail.PullRequest.Commits) != 1 {
 		t.Fatalf("detail=%+v", detail)
 	}
 }
 
 func TestPullRequestDetailRejectsUnavailableRepositoriesAndMalformedPages(t *testing.T) {
 	metadataWithoutHead := []byte(`{"number":4,"base":{"repo":{"name":"api","owner":{"login":"acme"}}},"head":{"repo":null}}`)
-	if _, err := parsePullRequestDetail(metadataWithoutHead, []byte(`[[]]`), []byte(`[[]]`)); err == nil {
+	if _, err := parsePullRequestDetail(metadataWithoutHead, []byte(`[[]]`)); err == nil {
 		t.Fatal("missing head repository was accepted")
 	}
 	metadata := []byte(`{"number":4,"base":{"repo":{"name":"api","owner":{"login":"acme"}}},"head":{"repo":{"name":"api","owner":{"login":"fork"}}}}`)
-	if _, err := parsePullRequestDetail(metadata, []byte(`{}`), []byte(`[[]]`)); err == nil {
+	if _, err := parsePullRequestDetail(metadata, []byte(`{}`)); err == nil {
 		t.Fatal("malformed commit pagination was accepted")
-	}
-	if _, err := parsePullRequestDetail(metadata, []byte(`[[]]`), []byte(`{}`)); err == nil {
-		t.Fatal("malformed file pagination was accepted")
 	}
 }
 
@@ -396,14 +526,40 @@ func TestPullRequestContextRejectsMalformedPagination(t *testing.T) {
 	}
 }
 
-func TestGetPullRequestLoadsContextFromFixedEndpoints(t *testing.T) {
+func TestGetPullRequestCoreStopsAtUsableRequestBoundary(t *testing.T) {
+	sha := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	metadata := `{"number":4,"base":{"ref":"main","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","repo":{"name":"api","owner":{"login":"acme"}}},"head":{"ref":"topic","sha":"` + sha + `","repo":{"name":"api","owner":{"login":"fork"}}}}`
+	root := "repos/acme/api/pulls/4"
+	f := &organizationAccessRunner{results: map[string]proc.Result{
+		root:                           {Stdout: []byte(metadata)},
+		root + "/commits?per_page=100": {Stdout: []byte(`[[]]`)},
+	}, errors: map[string]error{}}
+	ref := domain.PullRequestRef{Repository: domain.RepositoryRef{Owner: "acme", Name: "api"}, Number: 4}
+	detail, err := New(f).GetPullRequestCore(context.Background(), ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.PullRequest.HeadSHA != sha || detail.PullRequest.Reviews == nil || detail.PullRequest.ReviewComments == nil || detail.PullRequest.CheckRuns == nil {
+		t.Fatalf("core detail is not immediately usable: %+v", detail.PullRequest)
+	}
+	if len(f.commands) != 2 {
+		t.Fatalf("core commands=%d, want metadata and commits only: %v", len(f.commands), f.commands)
+	}
+	for _, command := range f.commands {
+		endpoint := command.Args[len(command.Args)-1]
+		if strings.Contains(endpoint, "/reviews") || strings.Contains(endpoint, "/comments") || strings.Contains(endpoint, "/check-runs") {
+			t.Fatalf("core hydration waited for deferred context endpoint %q", endpoint)
+		}
+	}
+}
+
+func TestGetPullRequestLoadsContextWithoutUnusedFilesEndpoint(t *testing.T) {
 	sha := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	metadata := `{"number":4,"base":{"ref":"main","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","repo":{"name":"api","owner":{"login":"acme"}}},"head":{"ref":"topic","sha":"` + sha + `","repo":{"name":"api","owner":{"login":"fork"}}}}`
 	root := "repos/acme/api/pulls/4"
 	f := &organizationAccessRunner{results: map[string]proc.Result{
 		root:                            {Stdout: []byte(metadata)},
 		root + "/commits?per_page=100":  {Stdout: []byte(`[[]]`)},
-		root + "/files?per_page=100":    {Stdout: []byte(`[[]]`)},
 		root + "/reviews?per_page=100":  {Stdout: []byte(`[[]]`)},
 		root + "/comments?per_page=100": {Stdout: []byte(`[[]]`)},
 		"repos/acme/api/commits/" + sha + "/check-runs?per_page=100": {Stdout: []byte(`[{"check_runs":[]}]`)},
@@ -419,7 +575,6 @@ func TestGetPullRequestLoadsContextFromFixedEndpoints(t *testing.T) {
 	wantEndpoints := []string{
 		"repos/acme/api/pulls/4",
 		"repos/acme/api/pulls/4/commits?per_page=100",
-		"repos/acme/api/pulls/4/files?per_page=100",
 		"repos/acme/api/pulls/4/reviews?per_page=100",
 		"repos/acme/api/pulls/4/comments?per_page=100",
 		"repos/acme/api/commits/" + sha + "/check-runs?per_page=100",
@@ -430,6 +585,9 @@ func TestGetPullRequestLoadsContextFromFixedEndpoints(t *testing.T) {
 	gotEndpoints := map[string]bool{}
 	for _, command := range f.commands {
 		gotEndpoints[command.Args[len(command.Args)-1]] = true
+	}
+	if gotEndpoints[root+"/files?per_page=100"] {
+		t.Fatalf("unused files endpoint was requested: commands=%v", f.commands)
 	}
 	for _, want := range wantEndpoints {
 		if !gotEndpoints[want] {

@@ -48,6 +48,14 @@ type RepositoryPageQuery struct {
 	PageSize int
 }
 
+type RepositorySearchQuery struct {
+	Owner        string
+	Query        string
+	Cursor       string
+	PageSize     int
+	Organization bool
+}
+
 type RepositoryPage struct {
 	Items       []domain.Repository `json:"items"`
 	TotalCount  int                 `json:"totalCount"`
@@ -75,8 +83,13 @@ type InboxResult struct {
 }
 
 type PullRequestDetail struct {
-	PullRequest domain.PullRequest   `json:"pullRequest"`
-	Files       []domain.ChangedFile `json:"files"`
+	PullRequest domain.PullRequest `json:"pullRequest"`
+}
+
+type PullRequestContext struct {
+	Reviews        []domain.PullRequestReview        `json:"reviews"`
+	ReviewComments []domain.PullRequestReviewComment `json:"reviewComments"`
+	CheckRuns      []domain.CheckRun                 `json:"checkRuns"`
 }
 
 func (c *Client) CurrentUser(ctx context.Context) (domain.GitHubUser, error) {
@@ -283,6 +296,50 @@ func (c *Client) ListOwnerRepositories(ctx context.Context, query RepositoryPage
 	return RepositoryPage{Items: items, TotalCount: connection.TotalCount, EndCursor: connection.PageInfo.EndCursor, HasNextPage: connection.PageInfo.HasNextPage}, nil
 }
 
+func (c *Client) SearchOwnerRepositories(ctx context.Context, query RepositorySearchQuery) (RepositoryPage, error) {
+	query.Query = strings.TrimSpace(query.Query)
+	if !validName(query.Owner) {
+		return RepositoryPage{}, errors.New("invalid GitHub repository owner")
+	}
+	if query.Query == "" || len(query.Query) > 256 {
+		return RepositoryPage{}, errors.New("invalid GitHub repository search")
+	}
+	if len(query.Cursor) > 4096 {
+		return RepositoryPage{}, errors.New("invalid GitHub pagination cursor")
+	}
+	pageSize := query.PageSize
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	ownerQualifier := "user:"
+	if query.Organization {
+		ownerQualifier = "org:"
+	}
+	search := fmt.Sprintf("%s in:name,description %s%s archived:false", strconv.Quote(query.Query), ownerQualifier, query.Owner)
+	const graphQL = `query($search:String!,$first:Int!,$after:String){search(type:REPOSITORY,query:$search,first:$first,after:$after){repositoryCount nodes{... on Repository{id name nameWithOwner url isPrivate isArchived description updatedAt owner{login}}} pageInfo{hasNextPage endCursor}}}`
+	args := []string{"api", "graphql", "-F", "search=" + search, "-F", fmt.Sprintf("first=%d", pageSize)}
+	if query.Cursor != "" {
+		args = append(args, "-f", "after="+query.Cursor)
+	}
+	args = append(args, "-f", "query="+graphQL)
+	result, err := c.run(ctx, args)
+	if err != nil {
+		return RepositoryPage{}, fmt.Errorf("search repositories for %s: %w", query.Owner, classifyAuth(result.Stderr, err))
+	}
+	var raw searchRepositoriesJSON
+	if err := json.Unmarshal(result.Stdout, &raw); err != nil {
+		return RepositoryPage{}, fmt.Errorf("parse repository search for %s: %w", query.Owner, err)
+	}
+	items := appendRepositories([]domain.Repository{}, map[string]bool{}, raw.Data.Search.Nodes, false)
+	if items == nil {
+		items = []domain.Repository{}
+	}
+	return RepositoryPage{Items: items, TotalCount: raw.Data.Search.RepositoryCount, EndCursor: raw.Data.Search.PageInfo.EndCursor, HasNextPage: raw.Data.Search.PageInfo.HasNextPage}, nil
+}
+
 func (c *Client) GetRepository(ctx context.Context, ref domain.RepositoryRef) (domain.Repository, error) {
 	if !validName(ref.Owner) || !validName(ref.Name) {
 		return domain.Repository{}, errors.New("invalid GitHub repository")
@@ -318,8 +375,16 @@ func appendRepositories(repositories []domain.Repository, seen map[string]bool, 
 
 func (c *Client) ListPullRequests(ctx context.Context, query PullRequestQuery) InboxResult {
 	result := InboxResult{Items: []domain.PullRequestSummary{}, Errors: map[string]string{}}
-	seen := map[string]bool{}
-	const organizationSearchGraphQL = `query($search:String!,$endCursor:String){search(type:ISSUE,query:$search,first:100,after:$endCursor){issueCount nodes{... on PullRequest{number title url updatedAt isDraft additions deletions changedFiles reviewDecision headRefOid baseRefOid author{login} assignees(first:100){nodes{login}} reviewRequests(first:100){nodes{requestedReviewer{... on User{login}}}} labels(first:100){nodes{name}} repository{id name nameWithOwner isPrivate isArchived owner{login}}}} pageInfo{hasNextPage endCursor}}}`
+	type sourceTask struct {
+		key          string
+		organization string
+		repository   domain.RepositoryRef
+	}
+	type sourceResult struct {
+		items   []domain.PullRequestSummary
+		message string
+	}
+	tasks := []sourceTask{}
 	seenOrganizations := map[string]bool{}
 	for _, organization := range query.Organizations {
 		key := strings.ToLower(organization)
@@ -333,45 +398,9 @@ func (c *Client) ListPullRequests(ctx context.Context, query PullRequestQuery) I
 			continue
 		}
 		seenOrganizations[key] = true
-		search := fmt.Sprintf("org:%s is:pr is:open archived:false sort:updated-desc", organization)
-		output, err := c.run(ctx, []string{"api", "graphql", "--paginate", "--slurp", "-f", "search=" + search, "-f", "query=" + organizationSearchGraphQL})
-		if err != nil {
-			result.Errors[errorKey] = safeError(err)
-			result.Partial = true
-			continue
-		}
-		var pages []searchPullRequestsPageJSON
-		if err := json.Unmarshal(output.Stdout, &pages); err != nil {
-			result.Errors[errorKey] = "GitHub returned malformed pull request data"
-			result.Partial = true
-			continue
-		}
-		parsed := 0
-		issueCount := 0
-		for _, page := range pages {
-			if page.Data.Search.IssueCount > issueCount {
-				issueCount = page.Data.Search.IssueCount
-			}
-			for _, row := range page.Data.Search.Nodes {
-				repository := row.Repository
-				if row.Number <= 0 || repository.IsArchived || repository.Owner.Login == "" || repository.Name == "" || repository.NameWithOwner == "" {
-					continue
-				}
-				ref := repository.domain().Ref
-				itemKey := strings.ToLower(ref.Owner+"/"+ref.Name) + fmt.Sprintf("#%d", row.Number)
-				if seen[itemKey] {
-					continue
-				}
-				seen[itemKey] = true
-				result.Items = append(result.Items, row.summaryJSON().domain(ref, query.CurrentLogin))
-				parsed++
-			}
-		}
-		if issueCount > parsed && parsed >= 1000 {
-			result.Errors[errorKey] = "GitHub search returned the first 1,000 open pull requests"
-			result.Partial = true
-		}
+		tasks = append(tasks, sourceTask{key: errorKey, organization: organization})
 	}
+	seenRepositories := map[string]bool{}
 	for _, repository := range query.Repositories {
 		name := repository.Owner + "/" + repository.Name
 		if !validName(repository.Owner) || !validName(repository.Name) {
@@ -379,21 +408,38 @@ func (c *Client) ListPullRequests(ctx context.Context, query PullRequestQuery) I
 			result.Partial = true
 			continue
 		}
-		output, err := c.run(ctx, []string{"pr", "list", "-R", name, "--state", "open", "--limit", "100", "--json", "number,title,url,author,updatedAt,isDraft,additions,deletions,changedFiles,assignees,reviewRequests,labels,reviewDecision,headRefOid,baseRefOid"})
-		if err != nil {
-			result.Errors[name] = safeError(err)
-			result.Partial = true
+		key := strings.ToLower(name)
+		if seenRepositories[key] {
 			continue
 		}
-		var rows []pullRequestSummaryJSON
-		if err := json.Unmarshal(output.Stdout, &rows); err != nil {
-			result.Errors[name] = "GitHub returned malformed pull request data"
+		seenRepositories[key] = true
+		tasks = append(tasks, sourceTask{key: name, repository: repository})
+	}
+	results := make([]sourceResult, len(tasks))
+	var wg sync.WaitGroup
+	workers := make(chan struct{}, 4)
+	for index := range tasks {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			workers <- struct{}{}
+			defer func() { <-workers }()
+			if tasks[index].organization != "" {
+				results[index] = c.listOrganizationPullRequests(ctx, tasks[index].organization, query.CurrentLogin)
+			} else {
+				results[index] = c.listRepositoryPullRequests(ctx, tasks[index].repository, query.CurrentLogin)
+			}
+		}()
+	}
+	wg.Wait()
+	seen := map[string]bool{}
+	for index, source := range results {
+		if source.message != "" {
+			result.Errors[tasks[index].key] = source.message
 			result.Partial = true
-			continue
 		}
-		for _, row := range rows {
-			item := row.domain(repository, query.CurrentLogin)
-			itemKey := strings.ToLower(name) + fmt.Sprintf("#%d", item.Ref.Number)
+		for _, item := range source.items {
+			itemKey := strings.ToLower(item.Ref.Repository.Owner+"/"+item.Ref.Repository.Name) + fmt.Sprintf("#%d", item.Ref.Number)
 			if item.Ref.Number <= 0 || seen[itemKey] {
 				continue
 			}
@@ -405,31 +451,77 @@ func (c *Client) ListPullRequests(ctx context.Context, query PullRequestQuery) I
 	return result
 }
 
-func (c *Client) GetPullRequest(ctx context.Context, ref domain.PullRequestRef) (PullRequestDetail, error) {
+func (c *Client) listOrganizationPullRequests(ctx context.Context, organization, currentLogin string) struct {
+	items   []domain.PullRequestSummary
+	message string
+} {
+	result := struct {
+		items   []domain.PullRequestSummary
+		message string
+	}{items: []domain.PullRequestSummary{}}
+	const graphQL = `query($search:String!){search(type:ISSUE,query:$search,first:100){issueCount nodes{... on PullRequest{number title url updatedAt isDraft additions deletions changedFiles reviewDecision headRefOid baseRefOid author{login} assignees(first:100){nodes{login}} reviewRequests(first:100){nodes{requestedReviewer{... on User{login}}}} labels(first:100){nodes{name}} repository{id name nameWithOwner isPrivate isArchived owner{login}}}}}}`
+	search := fmt.Sprintf("org:%s is:pr is:open archived:false sort:updated-desc", organization)
+	output, err := c.run(ctx, []string{"api", "graphql", "-f", "search=" + search, "-f", "query=" + graphQL})
+	if err != nil {
+		result.message = safeError(err)
+		return result
+	}
+	var page searchPullRequestsPageJSON
+	if err := json.Unmarshal(output.Stdout, &page); err != nil {
+		result.message = "GitHub returned malformed pull request data"
+		return result
+	}
+	for _, row := range page.Data.Search.Nodes {
+		repository := row.Repository
+		if row.Number <= 0 || repository.IsArchived || repository.Owner.Login == "" || repository.Name == "" || repository.NameWithOwner == "" {
+			continue
+		}
+		result.items = append(result.items, row.summaryJSON().domain(repository.domain().Ref, currentLogin))
+	}
+	if page.Data.Search.IssueCount > len(result.items) {
+		result.message = fmt.Sprintf("Showing %d of %d open pull requests from %s, ordered by most recently updated. Narrow the source selection to review older work.", len(result.items), page.Data.Search.IssueCount, organization)
+	}
+	return result
+}
+
+func (c *Client) listRepositoryPullRequests(ctx context.Context, repository domain.RepositoryRef, currentLogin string) struct {
+	items   []domain.PullRequestSummary
+	message string
+} {
+	result := struct {
+		items   []domain.PullRequestSummary
+		message string
+	}{items: []domain.PullRequestSummary{}}
+	name := repository.Owner + "/" + repository.Name
+	output, err := c.run(ctx, []string{"pr", "list", "-R", name, "--state", "open", "--limit", "100", "--json", "number,title,url,author,updatedAt,isDraft,additions,deletions,changedFiles,assignees,reviewRequests,labels,reviewDecision,headRefOid,baseRefOid"})
+	if err != nil {
+		result.message = safeError(err)
+		return result
+	}
+	var rows []pullRequestSummaryJSON
+	if err := json.Unmarshal(output.Stdout, &rows); err != nil {
+		result.message = "GitHub returned malformed pull request data"
+		return result
+	}
+	for _, row := range rows {
+		result.items = append(result.items, row.domain(repository, currentLogin))
+	}
+	return result
+}
+
+func (c *Client) GetPullRequestCore(ctx context.Context, ref domain.PullRequestRef) (PullRequestDetail, error) {
 	if ref.Number <= 0 || !validName(ref.Repository.Owner) || !validName(ref.Repository.Name) {
 		return PullRequestDetail{}, errors.New("invalid pull request reference")
 	}
 	root := fmt.Sprintf("repos/%s/%s/pulls/%d", ref.Repository.Owner, ref.Repository.Name, ref.Number)
-	var metadata, commits, files, reviews, comments proc.Result
-	var metadataErr, commitsErr, filesErr, reviewsErr, commentsErr error
+	var metadata, commits proc.Result
+	var metadataErr, commitsErr error
 	var wg sync.WaitGroup
-	wg.Add(5)
+	wg.Add(2)
 	go func() { defer wg.Done(); metadata, metadataErr = c.run(ctx, []string{"api", root}) }()
 	go func() {
 		defer wg.Done()
 		commits, commitsErr = c.run(ctx, []string{"api", "--paginate", "--slurp", root + "/commits?per_page=100"})
-	}()
-	go func() {
-		defer wg.Done()
-		files, filesErr = c.run(ctx, []string{"api", "--paginate", "--slurp", root + "/files?per_page=100"})
-	}()
-	go func() {
-		defer wg.Done()
-		reviews, reviewsErr = c.run(ctx, []string{"api", "--paginate", "--slurp", root + "/reviews?per_page=100"})
-	}()
-	go func() {
-		defer wg.Done()
-		comments, commentsErr = c.run(ctx, []string{"api", "--paginate", "--slurp", root + "/comments?per_page=100"})
 	}()
 	wg.Wait()
 	if metadataErr != nil {
@@ -438,30 +530,73 @@ func (c *Client) GetPullRequest(ctx context.Context, ref domain.PullRequestRef) 
 	if commitsErr != nil {
 		return PullRequestDetail{}, fmt.Errorf("load pull request commits: %w", commitsErr)
 	}
-	if filesErr != nil {
-		return PullRequestDetail{}, fmt.Errorf("load pull request files: %w", filesErr)
-	}
-	if reviewsErr != nil {
-		return PullRequestDetail{}, fmt.Errorf("load pull request reviews: %w", reviewsErr)
-	}
-	if commentsErr != nil {
-		return PullRequestDetail{}, fmt.Errorf("load pull request review comments: %w", commentsErr)
-	}
-	detail, err := parsePullRequestDetail(metadata.Stdout, commits.Stdout, files.Stdout)
+	detail, err := parsePullRequestDetail(metadata.Stdout, commits.Stdout)
 	if err != nil {
 		return PullRequestDetail{}, err
 	}
 	if !validCommitSHA(detail.PullRequest.HeadSHA) {
 		return PullRequestDetail{}, errors.New("pull request returned an invalid head revision")
 	}
-	checksEndpoint := fmt.Sprintf("repos/%s/%s/commits/%s/check-runs?per_page=100", ref.Repository.Owner, ref.Repository.Name, detail.PullRequest.HeadSHA)
-	checks, err := c.run(ctx, []string{"api", "--paginate", "--slurp", checksEndpoint})
-	if err != nil {
+	return detail, nil
+}
+
+func (c *Client) GetPullRequestContext(ctx context.Context, ref domain.PullRequestRef, headSHA string) (PullRequestContext, error) {
+	if ref.Number <= 0 || !validName(ref.Repository.Owner) || !validName(ref.Repository.Name) || !validCommitSHA(headSHA) {
+		return PullRequestContext{}, errors.New("invalid pull request context reference")
+	}
+	root := fmt.Sprintf("repos/%s/%s/pulls/%d", ref.Repository.Owner, ref.Repository.Name, ref.Number)
+	checksEndpoint := fmt.Sprintf("repos/%s/%s/commits/%s/check-runs?per_page=100", ref.Repository.Owner, ref.Repository.Name, headSHA)
+	var reviews, comments, checks proc.Result
+	var reviewsErr, commentsErr, checksErr error
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		reviews, reviewsErr = c.run(ctx, []string{"api", "--paginate", "--slurp", root + "/reviews?per_page=100"})
+	}()
+	go func() {
+		defer wg.Done()
+		comments, commentsErr = c.run(ctx, []string{"api", "--paginate", "--slurp", root + "/comments?per_page=100"})
+	}()
+	go func() {
+		defer wg.Done()
+		checks, checksErr = c.run(ctx, []string{"api", "--paginate", "--slurp", checksEndpoint})
+	}()
+	wg.Wait()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return PullRequestContext{}, ctxErr
+	}
+	if reviewsErr != nil {
+		return PullRequestContext{}, fmt.Errorf("load pull request reviews: %w", reviewsErr)
+	}
+	if commentsErr != nil {
+		return PullRequestContext{}, fmt.Errorf("load pull request review comments: %w", commentsErr)
+	}
+	if checksErr != nil {
+		if errors.Is(checksErr, proc.ErrOutputLimitExceeded) {
+			return PullRequestContext{}, fmt.Errorf("load pull request checks: %w", checksErr)
+		}
 		checks.Stdout = []byte(`[{"check_runs":[]}]`)
 	}
-	if err := parsePullRequestContext(&detail.PullRequest, reviews.Stdout, comments.Stdout, checks.Stdout); err != nil {
+	pr := domain.PullRequest{}
+	if err := parsePullRequestContext(&pr, reviews.Stdout, comments.Stdout, checks.Stdout); err != nil {
+		return PullRequestContext{}, err
+	}
+	return PullRequestContext{Reviews: pr.Reviews, ReviewComments: pr.ReviewComments, CheckRuns: pr.CheckRuns}, nil
+}
+
+func (c *Client) GetPullRequest(ctx context.Context, ref domain.PullRequestRef) (PullRequestDetail, error) {
+	detail, err := c.GetPullRequestCore(ctx, ref)
+	if err != nil {
 		return PullRequestDetail{}, err
 	}
+	pullRequestContext, err := c.GetPullRequestContext(ctx, ref, detail.PullRequest.HeadSHA)
+	if err != nil {
+		return PullRequestDetail{}, err
+	}
+	detail.PullRequest.Reviews = pullRequestContext.Reviews
+	detail.PullRequest.ReviewComments = pullRequestContext.ReviewComments
+	detail.PullRequest.CheckRuns = pullRequestContext.CheckRuns
 	return detail, nil
 }
 

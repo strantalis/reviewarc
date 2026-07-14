@@ -43,9 +43,13 @@ export function PrepareThreadReply(arg1:string,arg2:number,arg3:string):Promise<
 
 export function RefreshAccount():Promise<main.AccountState>;
 
+export function RefreshEnvironment():Promise<domain.EnvironmentState>;
+
 export function RefreshInbox():Promise<main.InboxState>;
 
 export function RefreshOwnerRepositories(arg1:main.RepositoryPageInput):Promise<main.RepositoryPage>;
+
+export function RefreshPullRequestContext(arg1:string):Promise<domain.ReviewSession>;
 
 export function RefreshSelectedRepositories():Promise<main.SelectedRepositoryRefresh>;
 

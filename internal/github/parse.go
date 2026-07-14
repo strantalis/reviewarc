@@ -68,6 +68,16 @@ type ownerRepositoriesJSON struct {
 	}
 }
 
+type searchRepositoriesJSON struct {
+	Data struct {
+		Search struct {
+			RepositoryCount int
+			Nodes           []repositoryJSON
+			PageInfo        pageInfoJSON
+		}
+	}
+}
+
 type namedUserJSON struct{ Login string }
 type labelJSON struct{ Name string }
 type pullRequestSummaryJSON struct {
@@ -190,15 +200,6 @@ type commitJSON struct {
 	}
 	Author *userJSON
 }
-type fileJSON struct {
-	Filename         string
-	Status           string
-	PreviousFilename string `json:"previous_filename"`
-	Additions        int
-	Deletions        int
-	Patch            *string
-}
-
 type reviewJSON struct {
 	ID          int64
 	User        userJSON
@@ -255,7 +256,7 @@ type checkRunsPageJSON struct {
 	CheckRuns []checkRunJSON `json:"check_runs"`
 }
 
-func parsePullRequestDetail(metadata, commitsData, filesData []byte) (PullRequestDetail, error) {
+func parsePullRequestDetail(metadata, commitsData []byte) (PullRequestDetail, error) {
 	var raw pullRequestJSON
 	if err := json.Unmarshal(metadata, &raw); err != nil {
 		return PullRequestDetail{}, fmt.Errorf("parse pull request metadata: %w", err)
@@ -298,18 +299,7 @@ func parsePullRequestDetail(metadata, commitsData, filesData []byte) (PullReques
 			pr.Commits = append(pr.Commits, domain.Commit{SHA: item.SHA, Message: item.Commit.Message, Author: author, AuthoredAt: authored})
 		}
 	}
-	var filePages [][]fileJSON
-	if err := json.Unmarshal(filesData, &filePages); err != nil {
-		return PullRequestDetail{}, fmt.Errorf("parse files: %w", err)
-	}
-	detail := PullRequestDetail{PullRequest: pr, Files: []domain.ChangedFile{}}
-	for _, page := range filePages {
-		for _, item := range page {
-			status := mapFileStatus(item.Status)
-			detail.Files = append(detail.Files, domain.ChangedFile{Path: item.Filename, PreviousPath: item.PreviousFilename, Status: status, Additions: item.Additions, Deletions: item.Deletions, IsBinary: item.Patch == nil})
-		}
-	}
-	return detail, nil
+	return PullRequestDetail{PullRequest: pr}, nil
 }
 
 func parsePullRequestContext(pr *domain.PullRequest, reviewsData, commentsData, checksData []byte) error {
@@ -406,20 +396,5 @@ func mapDiffSide(value string) domain.DiffSide {
 		return domain.DiffSideRight
 	default:
 		return ""
-	}
-}
-
-func mapFileStatus(value string) domain.FileStatus {
-	switch value {
-	case "added":
-		return domain.FileAdded
-	case "removed":
-		return domain.FileDeleted
-	case "renamed":
-		return domain.FileRenamed
-	case "copied":
-		return domain.FileCopied
-	default:
-		return domain.FileModified
 	}
 }

@@ -79,8 +79,30 @@ func TestRunnerHonorsCancellation(t *testing.T) {
 func TestLimitedBufferCapsButReportsConsumedBytes(t *testing.T) {
 	b := limitedBuffer{limit: 3}
 	n, err := b.Write([]byte("abcdef"))
-	if err != nil || n != 6 || b.String() != "abc" {
-		t.Fatalf("n=%d value=%q err=%v", n, b.String(), err)
+	if err != nil || n != 6 || b.String() != "abc" || !b.truncated {
+		t.Fatalf("n=%d value=%q truncated=%t err=%v", n, b.String(), b.truncated, err)
+	}
+}
+
+func TestRunnerReportsTruncatedOutput(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "codex")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf 'output-larger-than-limit'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := NewExecRunner()
+	if err := r.SetPath(Codex, path); err != nil {
+		t.Fatal(err)
+	}
+	result, err := r.Run(context.Background(), Command{Tool: Codex, MaxOutput: 8})
+	if !errors.Is(err, ErrOutputLimitExceeded) {
+		t.Fatalf("Run error=%v, want ErrOutputLimitExceeded", err)
+	}
+	if !strings.Contains(err.Error(), "codex stdout exceeded the 8-byte output limit") {
+		t.Fatalf("Run error=%q does not describe truncation", err)
+	}
+	if got := string(result.Stdout); got != "output-l" {
+		t.Fatalf("stdout=%q, want truncated prefix", got)
 	}
 }
 

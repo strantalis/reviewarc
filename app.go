@@ -48,6 +48,12 @@ type RepositoryPageInput struct {
 	Owner  string `json:"owner"`
 	Cursor string `json:"cursor"`
 }
+type RepositorySearchInput struct {
+	Owner        string `json:"owner"`
+	Query        string `json:"query"`
+	Cursor       string `json:"cursor"`
+	Organization bool   `json:"organization"`
+}
 type SelectedRepositoryRefresh struct {
 	Repositories []domain.Repository `json:"repositories"`
 	ArchivedKeys []string            `json:"archivedKeys"`
@@ -131,9 +137,12 @@ type pendingThreadReply struct {
 	sessionID string
 }
 
+const environmentSnapshotSetting = "environment_snapshot_v1"
+
 type App struct {
 	ctx               context.Context
 	mu                sync.RWMutex
+	environmentMu     sync.Mutex
 	paths             domain.AppPaths
 	detector          *dependencies.Detector
 	github            *githubclient.Client
@@ -240,42 +249,105 @@ func (a *App) appContext() context.Context {
 func (a *App) Bootstrap() domain.BootstrapState {
 	ctx := a.appContext()
 	selections, _ := a.store.ListSelections(ctx)
-	if repositories, err := a.store.ListRepositories(ctx); err == nil {
+	if repositories, err := a.store.ListSelectedRepositories(ctx); err == nil {
 		selections = activeSourceSelections(selections, repositories)
 	}
 	if selections == nil {
 		selections = []domain.SourceSelection{}
 	}
-	stored, _ := a.store.ListPullRequests(ctx)
-	inbox := make([]domain.PullRequestSummary, 0, len(stored))
-	for _, pr := range stored {
-		item := pr.PullRequestSummary
+	inbox, _ := a.store.ListPullRequestSummaries(ctx)
+	for i := range inbox {
+		item := &inbox[i]
 		if item.Relationships == nil {
 			item.Relationships = []domain.Relationship{}
 		}
 		if item.Labels == nil {
 			item.Labels = []string{}
 		}
-		if s, err := a.store.LatestSessionForPullRequest(ctx, pr.Ref); err == nil {
-			item.AnalysisStatus, item.Progress = s.AnalysisStatus, s.Progress
-			if s.Analysis != nil {
-				item.RiskLevel = highestRisk(s.Analysis.Risks)
-			}
-		}
-		inbox = append(inbox, item)
 	}
 	sortInbox(inbox)
-	dependencyState := a.detector.Detect(ctx)
-	protocol := "https"
-	if a.gitProtocol != nil {
-		protocol = a.gitProtocol()
+	environment, cached := a.cachedEnvironment(ctx)
+	if !cached {
+		environment = a.refreshEnvironment(ctx)
+		_ = a.store.SetSetting(ctx, environmentSnapshotSetting, environment)
 	}
-	state := domain.BootstrapState{Dependencies: dependencyState, Paths: a.paths, Selections: selections, Inbox: inbox, GitProtocol: protocol}
-	if user, err := a.github.CurrentUser(ctx); err == nil {
-		state.Account = &user
+	return domain.BootstrapState{
+		Dependencies:      environment.Dependencies,
+		Paths:             a.paths,
+		Selections:        selections,
+		Inbox:             inbox,
+		GitProtocol:       environment.GitProtocol,
+		Account:           environment.Account,
+		EnvironmentCached: cached,
 	}
-	return state
 }
+
+func (a *App) cachedEnvironment(ctx context.Context) (domain.EnvironmentState, bool) {
+	var state domain.EnvironmentState
+	if err := a.store.GetSetting(ctx, environmentSnapshotSetting, &state); err != nil || !validEnvironmentState(state) {
+		return domain.EnvironmentState{}, false
+	}
+	return state, true
+}
+
+func validEnvironmentState(state domain.EnvironmentState) bool {
+	if state.RefreshedAt.IsZero() || (state.GitProtocol != "https" && state.GitProtocol != "ssh") || len(state.Dependencies) != 3 {
+		return false
+	}
+	want := map[domain.DependencyName]bool{domain.DependencyGit: true, domain.DependencyGH: true, domain.DependencyCodex: true}
+	seen := map[domain.DependencyName]bool{}
+	for _, dependency := range state.Dependencies {
+		if !want[dependency.Name] || seen[dependency.Name] {
+			return false
+		}
+		switch dependency.State {
+		case domain.DependencyAvailable, domain.DependencyMissing, domain.DependencyBroken:
+		default:
+			return false
+		}
+		seen[dependency.Name] = true
+	}
+	return state.Account == nil || strings.TrimSpace(state.Account.Login) != ""
+}
+
+func (a *App) RefreshEnvironment() (domain.EnvironmentState, error) {
+	a.environmentMu.Lock()
+	defer a.environmentMu.Unlock()
+	ctx := a.appContext()
+	state := a.refreshEnvironment(ctx)
+	if err := a.store.SetSetting(ctx, environmentSnapshotSetting, state); err != nil {
+		return domain.EnvironmentState{}, fmt.Errorf("save environment snapshot: %w", err)
+	}
+	return state, nil
+}
+
+func (a *App) refreshEnvironment(ctx context.Context) domain.EnvironmentState {
+	a.detector.RefreshPaths()
+	var dependencyState []domain.DependencyStatus
+	protocol := "https"
+	var account *domain.GitHubUser
+	var environment sync.WaitGroup
+	environment.Add(3)
+	go func() {
+		defer environment.Done()
+		dependencyState = a.detector.DetectCurrent(ctx)
+	}()
+	go func() {
+		defer environment.Done()
+		if a.gitProtocol != nil {
+			protocol = a.gitProtocol()
+		}
+	}()
+	go func() {
+		defer environment.Done()
+		if user, err := a.github.CurrentUser(ctx); err == nil {
+			account = &user
+		}
+	}()
+	environment.Wait()
+	return domain.EnvironmentState{Dependencies: dependencyState, GitProtocol: protocol, Account: account, RefreshedAt: time.Now().UTC()}
+}
+
 func (a *App) RefreshAccount() AccountState {
 	u, err := a.github.CurrentUser(a.appContext())
 	if err != nil {
@@ -351,6 +423,16 @@ func (a *App) RefreshOwnerRepositories(input RepositoryPageInput) (RepositoryPag
 	}
 	return RepositoryPage{Items: page.Items, TotalCount: page.TotalCount, EndCursor: page.EndCursor, HasNextPage: page.HasNextPage}, nil
 }
+func (a *App) SearchOwnerRepositories(input RepositorySearchInput) (RepositoryPage, error) {
+	page, err := a.github.SearchOwnerRepositories(a.appContext(), githubclient.RepositorySearchQuery{Owner: input.Owner, Query: input.Query, Cursor: input.Cursor, PageSize: 50, Organization: input.Organization})
+	if err != nil {
+		return RepositoryPage{}, err
+	}
+	if err := a.store.UpsertRepositories(a.appContext(), page.Items); err != nil {
+		return RepositoryPage{}, err
+	}
+	return RepositoryPage{Items: page.Items, TotalCount: page.TotalCount, EndCursor: page.EndCursor, HasNextPage: page.HasNextPage}, nil
+}
 func (a *App) SaveSelections(selections []domain.SourceSelection) error {
 	for _, s := range selections {
 		if s.Kind != domain.SelectionOrganization && s.Kind != domain.SelectionRepository {
@@ -409,6 +491,15 @@ func (a *App) refreshExplicitRepositories(ctx context.Context, selections []doma
 	refreshErrors := map[string]string{}
 	seen := map[string]bool{}
 	all := []domain.Repository{}
+	type refreshTask struct {
+		selection domain.SourceSelection
+		ref       domain.RepositoryRef
+	}
+	type refreshResult struct {
+		repository domain.Repository
+		err        error
+	}
+	tasks := []refreshTask{}
 	for _, selection := range selections {
 		if !selection.Enabled || selection.Kind != domain.SelectionRepository {
 			continue
@@ -423,11 +514,28 @@ func (a *App) refreshExplicitRepositories(ctx context.Context, selections []doma
 			refreshErrors["repository:"+selection.Key] = "Invalid repository selection"
 			continue
 		}
-		repository, err := a.github.GetRepository(ctx, domain.RepositoryRef{Host: "github.com", Owner: owner, Name: name})
-		if err != nil {
-			refreshErrors["repository:"+selection.Key] = safeMessage(err)
+		tasks = append(tasks, refreshTask{selection: selection, ref: domain.RepositoryRef{Host: "github.com", Owner: owner, Name: name}})
+	}
+	results := make([]refreshResult, len(tasks))
+	var wg sync.WaitGroup
+	workers := make(chan struct{}, 4)
+	for index := range tasks {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			workers <- struct{}{}
+			defer func() { <-workers }()
+			results[index].repository, results[index].err = a.github.GetRepository(ctx, tasks[index].ref)
+		}()
+	}
+	wg.Wait()
+	for index, result := range results {
+		selection := tasks[index].selection
+		if result.err != nil {
+			refreshErrors["repository:"+selection.Key] = safeMessage(result.err)
 			continue
 		}
+		repository := result.repository
 		all = append(all, repository)
 		if repository.IsArchived {
 			archived = append(archived, selection.Key)
@@ -458,7 +566,7 @@ func (a *App) OpenPullRequest(ref domain.PullRequestRef) (domain.ReviewSession, 
 			}
 		}
 	}
-	detail, err := a.github.GetPullRequest(ctx, ref)
+	detail, err := a.github.GetPullRequestCore(ctx, ref)
 	if err != nil {
 		return domain.ReviewSession{}, err
 	}
@@ -512,6 +620,38 @@ func (a *App) OpenPullRequest(ref domain.PullRequestRef) (domain.ReviewSession, 
 		return domain.ReviewSession{}, err
 	}
 	return a.GetSession(session.ID)
+}
+func (a *App) RefreshPullRequestContext(sessionID string) (domain.ReviewSession, error) {
+	return a.refreshPullRequestContext(a.appContext(), sessionID)
+}
+func (a *App) refreshPullRequestContext(ctx context.Context, sessionID string) (domain.ReviewSession, error) {
+	session, err := a.store.GetSession(ctx, sessionID)
+	if err != nil {
+		return domain.ReviewSession{}, err
+	}
+	pullRequestContext, err := a.github.GetPullRequestContext(ctx, session.PullRequest.Ref, session.PullRequest.HeadSHA)
+	if err != nil {
+		return domain.ReviewSession{}, err
+	}
+	current, err := a.store.GetSession(ctx, sessionID)
+	if err != nil {
+		return domain.ReviewSession{}, err
+	}
+	if current.PullRequest.Ref.Number != session.PullRequest.Ref.Number ||
+		!strings.EqualFold(current.PullRequest.Ref.Repository.Host, session.PullRequest.Ref.Repository.Host) ||
+		!strings.EqualFold(current.PullRequest.Ref.Repository.Owner, session.PullRequest.Ref.Repository.Owner) ||
+		!strings.EqualFold(current.PullRequest.Ref.Repository.Name, session.PullRequest.Ref.Repository.Name) ||
+		current.PullRequest.HeadSHA != session.PullRequest.HeadSHA {
+		return domain.ReviewSession{}, errors.New("pull request revision changed while loading discussion and checks")
+	}
+	current.PullRequest.Reviews = pullRequestContext.Reviews
+	current.PullRequest.ReviewComments = pullRequestContext.ReviewComments
+	current.PullRequest.CheckRuns = pullRequestContext.CheckRuns
+	current.UpdatedAt = time.Now().UTC()
+	if err := a.store.SaveSession(ctx, current); err != nil {
+		return domain.ReviewSession{}, err
+	}
+	return normalizeSession(current), nil
 }
 func (a *App) GetSession(id string) (domain.ReviewSession, error) {
 	session, err := a.store.GetSession(a.appContext(), id)
@@ -586,7 +726,7 @@ func (a *App) StartAnalysis(sessionID string) (Operation, error) {
 	if err != nil {
 		return Operation{}, err
 	}
-	op := Operation{ID: newID(), SessionID: sessionID, Kind: "analysis", Stage: "preparingSnapshot", State: "running", Message: "Preparing isolated repository snapshot"}
+	op := Operation{ID: newID(), SessionID: sessionID, Kind: "analysis", Stage: "loadingPullRequestContext", State: "running", Message: "Loading GitHub discussion and checks"}
 	ctx, cancel := context.WithCancel(a.appContext())
 	a.mu.Lock()
 	if _, exists := a.analysisBySession[sessionID]; exists {
@@ -901,6 +1041,24 @@ func (a *App) ensurePreparedContext(ctx context.Context, sessionID string) (prep
 	return preparedState{}, errors.New("pull request revision changed while preparing the managed repository")
 }
 func (a *App) prepareAndRunAnalysis(ctx context.Context, op Operation, session domain.ReviewSession) {
+	sessionID := session.ID
+	op.Stage = "loadingPullRequestContext"
+	op.Message = "Loading GitHub discussion and checks"
+	a.emitOperation(op)
+	refreshed, err := a.refreshPullRequestContext(ctx, sessionID)
+	if err != nil {
+		a.mu.Lock()
+		delete(a.active, op.ID)
+		delete(a.analysisBySession, sessionID)
+		a.mu.Unlock()
+		if analysisWasCancelled(ctx, err) {
+			a.cancelAnalysisOperation(op)
+		} else {
+			a.failOperation(op, err)
+		}
+		return
+	}
+	session = refreshed
 	op.Stage = "preparingSnapshot"
 	op.Message = "Preparing isolated repository snapshot"
 	a.emitOperation(op)

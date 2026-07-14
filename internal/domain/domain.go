@@ -461,11 +461,19 @@ type AppPaths struct {
 	Cache        string `json:"cache"`
 }
 
+type EnvironmentState struct {
+	Dependencies []DependencyStatus `json:"dependencies"`
+	Account      *GitHubUser        `json:"account,omitempty"`
+	GitProtocol  string             `json:"gitProtocol"`
+	RefreshedAt  time.Time          `json:"refreshedAt"`
+}
+
 type BootstrapState struct {
-	Dependencies []DependencyStatus   `json:"dependencies"`
-	Paths        AppPaths             `json:"paths"`
-	Account      *GitHubUser          `json:"account,omitempty"`
-	GitProtocol  string               `json:"gitProtocol"`
-	Selections   []SourceSelection    `json:"selections"`
-	Inbox        []PullRequestSummary `json:"inbox"`
+	Dependencies      []DependencyStatus   `json:"dependencies"`
+	Paths             AppPaths             `json:"paths"`
+	Account           *GitHubUser          `json:"account,omitempty"`
+	GitProtocol       string               `json:"gitProtocol"`
+	Selections        []SourceSelection    `json:"selections"`
+	Inbox             []PullRequestSummary `json:"inbox"`
+	EnvironmentCached bool                 `json:"environmentCached"`
 }

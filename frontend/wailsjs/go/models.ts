@@ -322,6 +322,7 @@ export namespace domain {
 	    gitProtocol: string;
 	    selections: SourceSelection[];
 	    inbox: PullRequestSummary[];
+	    environmentCached: boolean;
 
 	    static createFrom(source: any = {}) {
 	        return new BootstrapState(source);
@@ -335,6 +336,7 @@ export namespace domain {
 	        this.gitProtocol = source["gitProtocol"];
 	        this.selections = this.convertValues(source["selections"], SourceSelection);
 	        this.inbox = this.convertValues(source["inbox"], PullRequestSummary);
+	        this.environmentCached = source["environmentCached"];
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -632,6 +634,43 @@ export namespace domain {
 	}
 
 
+	export class EnvironmentState {
+	    dependencies: DependencyStatus[];
+	    account?: GitHubUser;
+	    gitProtocol: string;
+	    // Go type: time
+	    refreshedAt: any;
+
+	    static createFrom(source: any = {}) {
+	        return new EnvironmentState(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.dependencies = this.convertValues(source["dependencies"], DependencyStatus);
+	        this.account = this.convertValues(source["account"], GitHubUser);
+	        this.gitProtocol = source["gitProtocol"];
+	        this.refreshedAt = this.convertValues(source["refreshedAt"], null);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 
 	export class FileContent {
 	    path: string;

@@ -1,4 +1,4 @@
-import type { AccountState, BootstrapState, ChapterStatus, ChangedFile, DiffFile, FileContent, InboxResult, Operation, PublishPreview, PullRequestRef, PullRequestReviewComment, RepositoryPage, ReviewComment, ReviewNote, ReviewSession, SelectedRepositoryRefresh, SoftwareUpdateStatus, SourceSelection, SourceState, ThreadReplyPreview, UpdateChannel, Organization } from './types'
+import type { AccountState, BootstrapState, ChapterStatus, ChangedFile, DiffFile, EnvironmentState, FileContent, InboxResult, Operation, PublishPreview, PullRequestRef, PullRequestReviewComment, RepositoryPage, ReviewComment, ReviewNote, ReviewSession, SelectedRepositoryRefresh, SoftwareUpdateStatus, SourceSelection, SourceState, ThreadReplyPreview, UpdateChannel, Organization } from './types'
 
 type WailsMethod = (...args: unknown[]) => Promise<unknown>
 type AppBinding = Record<string, WailsMethod>
@@ -29,6 +29,7 @@ async function call<T>(names: string[], ...args: unknown[]): Promise<T> {
 
 export const backend = {
   bootstrap: () => call<BootstrapState>(['Bootstrap']),
+  refreshEnvironment: () => call<EnvironmentState>(['RefreshEnvironment']),
   getUpdateStatus: () => call<SoftwareUpdateStatus>(['GetUpdateStatus']),
   checkForUpdates: () => call<SoftwareUpdateStatus>(['CheckForUpdates']),
   setUpdateChannel: (channel: UpdateChannel) => call<SoftwareUpdateStatus>(['SetUpdateChannel'], channel),
@@ -39,9 +40,11 @@ export const backend = {
   refreshSelectedRepositories: () => call<SelectedRepositoryRefresh>(['RefreshSelectedRepositories']),
   listCachedOwnerRepositories: (owner: string) => call<RepositoryPage>(['ListCachedOwnerRepositories'], owner),
   refreshOwnerRepositories: (owner: string, cursor = '') => call<RepositoryPage>(['RefreshOwnerRepositories'], {owner, cursor}),
+  searchOwnerRepositories: (owner: string, query: string, cursor = '', organization = false) => call<RepositoryPage>(['SearchOwnerRepositories'], {owner, query, cursor, organization}),
   saveSelections: (selections: SourceSelection[]) => call<void>(['SaveSelections'], selections),
   refreshInbox: () => call<InboxResult>(['RefreshInbox']),
   openPullRequest: (ref: PullRequestRef) => call<ReviewSession>(['OpenPullRequest'], ref),
+  refreshPullRequestContext: (sessionId: string) => call<ReviewSession>(['RefreshPullRequestContext'], sessionId),
   startAnalysis: (sessionId: string) => call<Operation>(['StartAnalysis'], sessionId),
   cancelOperation: (operationId: string) => call<void>(['CancelOperation'], operationId),
   getSession: (sessionId: string) => call<ReviewSession>(['GetSession'], sessionId),
