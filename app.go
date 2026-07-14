@@ -48,6 +48,12 @@ type RepositoryPageInput struct {
 	Owner  string `json:"owner"`
 	Cursor string `json:"cursor"`
 }
+type RepositorySearchInput struct {
+	Owner        string `json:"owner"`
+	Query        string `json:"query"`
+	Cursor       string `json:"cursor"`
+	Organization bool   `json:"organization"`
+}
 type SelectedRepositoryRefresh struct {
 	Repositories []domain.Repository `json:"repositories"`
 	ArchivedKeys []string            `json:"archivedKeys"`
@@ -359,6 +365,16 @@ func (a *App) RefreshOwnerRepositories(input RepositoryPageInput) (RepositoryPag
 	}
 	return RepositoryPage{Items: page.Items, TotalCount: page.TotalCount, EndCursor: page.EndCursor, HasNextPage: page.HasNextPage}, nil
 }
+func (a *App) SearchOwnerRepositories(input RepositorySearchInput) (RepositoryPage, error) {
+	page, err := a.github.SearchOwnerRepositories(a.appContext(), githubclient.RepositorySearchQuery{Owner: input.Owner, Query: input.Query, Cursor: input.Cursor, PageSize: 50, Organization: input.Organization})
+	if err != nil {
+		return RepositoryPage{}, err
+	}
+	if err := a.store.UpsertRepositories(a.appContext(), page.Items); err != nil {
+		return RepositoryPage{}, err
+	}
+	return RepositoryPage{Items: page.Items, TotalCount: page.TotalCount, EndCursor: page.EndCursor, HasNextPage: page.HasNextPage}, nil
+}
 func (a *App) SaveSelections(selections []domain.SourceSelection) error {
 	for _, s := range selections {
 		if s.Kind != domain.SelectionOrganization && s.Kind != domain.SelectionRepository {
@@ -417,6 +433,15 @@ func (a *App) refreshExplicitRepositories(ctx context.Context, selections []doma
 	refreshErrors := map[string]string{}
 	seen := map[string]bool{}
 	all := []domain.Repository{}
+	type refreshTask struct {
+		selection domain.SourceSelection
+		ref       domain.RepositoryRef
+	}
+	type refreshResult struct {
+		repository domain.Repository
+		err        error
+	}
+	tasks := []refreshTask{}
 	for _, selection := range selections {
 		if !selection.Enabled || selection.Kind != domain.SelectionRepository {
 			continue
@@ -431,11 +456,28 @@ func (a *App) refreshExplicitRepositories(ctx context.Context, selections []doma
 			refreshErrors["repository:"+selection.Key] = "Invalid repository selection"
 			continue
 		}
-		repository, err := a.github.GetRepository(ctx, domain.RepositoryRef{Host: "github.com", Owner: owner, Name: name})
-		if err != nil {
-			refreshErrors["repository:"+selection.Key] = safeMessage(err)
+		tasks = append(tasks, refreshTask{selection: selection, ref: domain.RepositoryRef{Host: "github.com", Owner: owner, Name: name}})
+	}
+	results := make([]refreshResult, len(tasks))
+	var wg sync.WaitGroup
+	workers := make(chan struct{}, 4)
+	for index := range tasks {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			workers <- struct{}{}
+			defer func() { <-workers }()
+			results[index].repository, results[index].err = a.github.GetRepository(ctx, tasks[index].ref)
+		}()
+	}
+	wg.Wait()
+	for index, result := range results {
+		selection := tasks[index].selection
+		if result.err != nil {
+			refreshErrors["repository:"+selection.Key] = safeMessage(result.err)
 			continue
 		}
+		repository := result.repository
 		all = append(all, repository)
 		if repository.IsArchived {
 			archived = append(archived, selection.Key)

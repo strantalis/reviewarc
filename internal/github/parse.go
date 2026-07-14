@@ -68,6 +68,16 @@ type ownerRepositoriesJSON struct {
 	}
 }
 
+type searchRepositoriesJSON struct {
+	Data struct {
+		Search struct {
+			RepositoryCount int
+			Nodes           []repositoryJSON
+			PageInfo        pageInfoJSON
+		}
+	}
+}
+
 type namedUserJSON struct{ Login string }
 type labelJSON struct{ Name string }
 type pullRequestSummaryJSON struct {

@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { App, DiffView, FileContextView, OverviewScreen, ReviewWorkspace, SettingsScreen, SourceSelector, SplitDiffView } from './App'
 import { Markdown, WindowControls } from './components'
-import type { BootstrapState, ReviewSession, SoftwareUpdateStatus } from './types'
+import type { BootstrapState, RepositoryPage, ReviewSession, SoftwareUpdateStatus } from './types'
 
 const paths = {root: '/tmp/reviewarc', repositories: '/tmp/reviewarc/repos', worktrees: '/tmp/reviewarc/worktrees', database: '/tmp/reviewarc/db.sqlite', logs: '/tmp/reviewarc/logs', cache: '/tmp/reviewarc/cache'}
 const idleUpdate: SoftwareUpdateStatus = {currentVersion: '0.1.0', currentBuild: '7', state: 'idle', channel: 'stable'}
@@ -214,25 +214,59 @@ describe('Repository sources', () => {
     expect(search).toHaveAttribute('spellcheck', 'false')
   })
 
-  it('searches all owner repository pages without requiring manual pagination', async () => {
+  it('searches a large owner with one debounced server request instead of draining browse pages', async () => {
     const state: BootstrapState = {dependencies: [], paths, account: {login: 'sean', name: 'Sean', avatarUrl: ''}, selections: [], inbox: []}
     const repository = (name: string) => ({ref: {host: 'github.com', owner: 'sean', name, cloneUrl: '', databaseId: name}, description: '', isPrivate: true, isArchived: false, updatedAt: '2026-07-12T00:00:00Z'})
     const first = Array.from({length: 50}, (_, index) => repository(`repo-${String(index).padStart(2, '0')}`))
-    const refresh = vi.fn().mockImplementation(({cursor}: {cursor: string}) => Promise.resolve(cursor ? {items: [repository('repo-50')], totalCount: 51, hasNextPage: false, cached: false} : {items: first, totalCount: 51, endCursor: 'next', hasNextPage: true, cached: false}))
+    const refresh = vi.fn().mockResolvedValue({items: first, totalCount: 12000, endCursor: 'next', hasNextPage: true, cached: false})
+    const search = vi.fn().mockResolvedValue({items: [repository('repo-50')], totalCount: 1, hasNextPage: false, cached: false})
     window.go = {main: {App: {
 	  ListSources: vi.fn().mockResolvedValue({organizations: [], repositories: [], selections: []}),
 	  RefreshSourceAccess: vi.fn().mockResolvedValue([]),
 	  RefreshSelectedRepositories: vi.fn().mockResolvedValue({repositories: [], archivedKeys: [], errors: {}}),
       ListCachedOwnerRepositories: vi.fn().mockResolvedValue({items: [], totalCount: 0, hasNextPage: false, cached: true}),
       RefreshOwnerRepositories: refresh,
+      SearchOwnerRepositories: search,
     }}}
     render(<SourceSelector state={state} onDone={vi.fn()}/>)
     fireEvent.click(screen.getByRole('button', {name: 'Show personal repositories from sean'}))
-    expect(await screen.findByText('Showing 50 of 51')).toBeInTheDocument()
+    expect(await screen.findByText('Showing 50 of 12000')).toBeInTheDocument()
     fireEvent.change(screen.getByPlaceholderText('Search all repositories'), {target: {value: 'repo-50'}})
     expect(await screen.findByText('sean/repo-50')).toBeInTheDocument()
-    expect(screen.queryByRole('button', {name: 'Load 50 more'})).not.toBeInTheDocument()
-    expect(refresh).toHaveBeenNthCalledWith(2, {owner: 'sean', cursor: 'next'})
+    expect(refresh).toHaveBeenCalledOnce()
+    expect(search).toHaveBeenCalledOnce()
+    expect(search).toHaveBeenCalledWith({owner: 'sean', query: 'repo-50', cursor: '', organization: false})
+  })
+
+  it('ignores stale owner search responses', async () => {
+    const state: BootstrapState = {dependencies: [], paths, account: {login: 'sean', name: 'Sean', avatarUrl: ''}, selections: [], inbox: []}
+    const repository = (name: string) => ({ref: {host: 'github.com', owner: 'sean', name, cloneUrl: '', databaseId: name}, description: '', isPrivate: true, isArchived: false, updatedAt: '2026-07-12T00:00:00Z'})
+    let resolveOld!: (page: RepositoryPage) => void
+    let resolveNew!: (page: RepositoryPage) => void
+    const oldResponse = new Promise<RepositoryPage>((resolve) => { resolveOld = resolve })
+    const newResponse = new Promise<RepositoryPage>((resolve) => { resolveNew = resolve })
+    const search = vi.fn().mockImplementation(({query}: {query: string}) => query === 'old' ? oldResponse : newResponse)
+    window.go = {main: {App: {
+      ListSources: vi.fn().mockResolvedValue({organizations: [], repositories: [], selections: []}),
+      RefreshSourceAccess: vi.fn().mockResolvedValue([]),
+      RefreshSelectedRepositories: vi.fn().mockResolvedValue({repositories: [], archivedKeys: [], errors: {}}),
+      ListCachedOwnerRepositories: vi.fn().mockResolvedValue({items: [], totalCount: 0, hasNextPage: false, cached: true}),
+      RefreshOwnerRepositories: vi.fn().mockResolvedValue({items: [repository('browse')], totalCount: 1, hasNextPage: false, cached: false}),
+      SearchOwnerRepositories: search,
+    }}}
+    render(<SourceSelector state={state} onDone={vi.fn()}/>)
+    fireEvent.click(screen.getByRole('button', {name: 'Show personal repositories from sean'}))
+    expect(await screen.findByText('sean/browse')).toBeInTheDocument()
+    const input = screen.getByPlaceholderText('Search all repositories')
+    fireEvent.change(input, {target: {value: 'old'}})
+    await waitFor(() => expect(search).toHaveBeenCalledTimes(1))
+    fireEvent.change(input, {target: {value: 'new'}})
+    await waitFor(() => expect(search).toHaveBeenCalledTimes(2))
+    resolveNew({items: [repository('new-result')], totalCount: 1, hasNextPage: false, cached: false})
+    expect(await screen.findByText('sean/new-result')).toBeInTheDocument()
+    resolveOld({items: [repository('old-result')], totalCount: 1, hasNextPage: false, cached: false})
+    await waitFor(() => expect(screen.queryByText('sean/old-result')).not.toBeInTheDocument())
+    expect(screen.getByText('sean/new-result')).toBeInTheDocument()
   })
 
   it('uses organization names to filter and a distinct control to include every repository', async () => {

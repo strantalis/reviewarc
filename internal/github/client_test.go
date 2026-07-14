@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -16,9 +17,25 @@ import (
 )
 
 type fakeRunner struct {
+	mu        sync.Mutex
 	responses []proc.Result
 	errors    []error
 	commands  []proc.Command
+}
+
+type pullRequestListRunner struct {
+	mu       sync.Mutex
+	results  map[string]proc.Result
+	errors   map[string]error
+	commands []proc.Command
+}
+
+type concurrencyRunner struct {
+	mu       sync.Mutex
+	active   int
+	maximum  int
+	commands int
+	delay    time.Duration
 }
 
 type organizationAccessRunner struct {
@@ -37,6 +54,8 @@ func (f *organizationAccessRunner) Run(_ context.Context, command proc.Command) 
 }
 
 func (f *fakeRunner) Run(_ context.Context, c proc.Command) (proc.Result, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.commands = append(f.commands, c)
 	i := len(f.commands) - 1
 	var err error
@@ -44,6 +63,39 @@ func (f *fakeRunner) Run(_ context.Context, c proc.Command) (proc.Result, error)
 		err = f.errors[i]
 	}
 	return f.responses[i], err
+}
+
+func (r *pullRequestListRunner) Run(_ context.Context, command proc.Command) (proc.Result, error) {
+	key := ""
+	for index, arg := range command.Args {
+		if arg == "-R" && index+1 < len(command.Args) {
+			key = "repository:" + command.Args[index+1]
+		}
+		if strings.HasPrefix(arg, "search=org:") {
+			organization := strings.TrimPrefix(strings.Fields(strings.TrimPrefix(arg, "search="))[0], "org:")
+			key = "organization:" + organization
+		}
+	}
+	r.mu.Lock()
+	r.commands = append(r.commands, command)
+	result, err := r.results[key], r.errors[key]
+	r.mu.Unlock()
+	return result, err
+}
+
+func (r *concurrencyRunner) Run(_ context.Context, _ proc.Command) (proc.Result, error) {
+	r.mu.Lock()
+	r.active++
+	r.commands++
+	if r.active > r.maximum {
+		r.maximum = r.active
+	}
+	r.mu.Unlock()
+	time.Sleep(r.delay)
+	r.mu.Lock()
+	r.active--
+	r.mu.Unlock()
+	return proc.Result{Stdout: []byte(`[]`)}, nil
 }
 
 func TestCurrentUserUsesStructuredAPI(t *testing.T) {
@@ -275,10 +327,26 @@ func TestListOwnerRepositoriesPassesCursorAndRejectsInvalidOwner(t *testing.T) {
 	}
 }
 
+func TestSearchOwnerRepositoriesUsesOneScopedCursorRequest(t *testing.T) {
+	body := `{"data":{"search":{"repositoryCount":12000,"nodes":[{"id":"R50","name":"repo-50","nameWithOwner":"acme/repo-50","description":"match","owner":{"login":"acme"}}],"pageInfo":{"hasNextPage":true,"endCursor":"search-next"}}}}`
+	f := &fakeRunner{responses: []proc.Result{{Stdout: []byte(body)}}}
+	page, err := New(f).SearchOwnerRepositories(context.Background(), RepositorySearchQuery{Owner: "acme", Query: `repo "50"`, Cursor: "search-cursor", Organization: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.commands) != 1 || page.TotalCount != 12000 || len(page.Items) != 1 || page.Items[0].Ref.Name != "repo-50" || !page.HasNextPage || page.EndCursor != "search-next" {
+		t.Fatalf("page=%+v commands=%d", page, len(f.commands))
+	}
+	args := f.commands[0].Args
+	if containsString(args, "--paginate") || containsString(args, "--slurp") || !containsString(args, "after=search-cursor") || !containsString(args, `search="repo \"50\"" in:name,description org:acme archived:false`) {
+		t.Fatalf("repository search command=%v", args)
+	}
+}
+
 func TestOrganizationPullRequestSearchAvoidsRepositoryFanoutAndPreservesRelationships(t *testing.T) {
 	organization := `[{"data":{"search":{"issueCount":1,"nodes":[{"number":7,"title":"Org change","url":"https://github.com/acme/api/pull/7","author":{"login":"dev"},"updatedAt":"2026-07-12T10:00:00Z","additions":4,"deletions":2,"changedFiles":1,"assignees":{"nodes":[{"login":"sean"}]},"reviewRequests":{"nodes":[{"requestedReviewer":{"login":"sean"}}]},"labels":{"nodes":[{"name":"security"}]},"headRefOid":"head","baseRefOid":"base","repository":{"id":"R1","name":"api","nameWithOwner":"acme/api","isPrivate":true,"owner":{"login":"acme"}}}],"pageInfo":{"hasNextPage":false}}}}]`
 	explicitDuplicate := `[{"number":7,"title":"Org change","url":"https://github.com/acme/api/pull/7","author":{"login":"dev"},"updatedAt":"2026-07-12T10:00:00Z"}]`
-	f := &fakeRunner{responses: []proc.Result{{Stdout: []byte(organization)}, {Stdout: []byte(explicitDuplicate)}}}
+	f := &pullRequestListRunner{results: map[string]proc.Result{"organization:acme": {Stdout: []byte(organization)}, "repository:acme/api": {Stdout: []byte(explicitDuplicate)}}, errors: map[string]error{}}
 	query := PullRequestQuery{Organizations: []string{"acme", "ACME"}, Repositories: []domain.RepositoryRef{{Owner: "acme", Name: "api"}}, CurrentLogin: "sean"}
 	got := New(f).ListPullRequests(context.Background(), query)
 	if got.Partial || len(got.Items) != 1 || len(f.commands) != 2 {
@@ -290,17 +358,23 @@ func TestOrganizationPullRequestSearchAvoidsRepositoryFanoutAndPreservesRelation
 	if !reflect.DeepEqual(got.Items[0].Labels, []string{"security"}) {
 		t.Fatalf("labels=%v", got.Items[0].Labels)
 	}
-	if args := f.commands[0].Args; !containsString(args, "search=org:acme is:pr is:open archived:false sort:updated-desc") || !containsString(args, "--paginate") {
-		t.Fatalf("organization search command=%v", args)
+	var organizationArgs []string
+	for _, command := range f.commands {
+		if containsString(command.Args, "search=org:acme is:pr is:open archived:false sort:updated-desc") {
+			organizationArgs = command.Args
+		}
+	}
+	if !containsString(organizationArgs, "--paginate") {
+		t.Fatalf("organization search commands=%v", f.commands)
 	}
 }
 
 func TestInboxIsSortedAndIsolatesRepositoryFailures(t *testing.T) {
 	old := `[{"number":1,"title":"Old","url":"https://github.com/acme/api/pull/1","author":{"login":"dev"},"updatedAt":"2026-07-10T10:00:00Z","headRefOid":"head1","baseRefOid":"base1"}]`
 	newer := `[{"number":2,"title":"New","url":"https://github.com/acme/web/pull/2","author":{"login":"dev"},"updatedAt":"2026-07-11T10:00:00Z","reviewRequests":[{"login":"SEAN"}],"headRefOid":"head2","baseRefOid":"base2"}]`
-	f := &fakeRunner{
-		responses: []proc.Result{{Stdout: []byte(old)}, {Stderr: []byte("private details must not escape")}, {Stdout: []byte(newer)}},
-		errors:    []error{nil, errors.New("exit 1"), nil},
+	f := &pullRequestListRunner{
+		results: map[string]proc.Result{"repository:acme/api": {Stdout: []byte(old)}, "repository:acme/bad": {Stderr: []byte("private details must not escape")}, "repository:acme/web": {Stdout: []byte(newer)}},
+		errors:  map[string]error{"repository:acme/bad": errors.New("exit 1")},
 	}
 	repos := []domain.RepositoryRef{
 		{Owner: "acme", Name: "api"},
@@ -323,6 +397,21 @@ func TestInboxIsSortedAndIsolatesRepositoryFailures(t *testing.T) {
 	}
 	if len(f.commands) != 3 {
 		t.Fatalf("invalid repository reached gh; commands=%d", len(f.commands))
+	}
+}
+
+func TestInboxRepositoryFetchesUseBoundedConcurrency(t *testing.T) {
+	runner := &concurrencyRunner{delay: 20 * time.Millisecond}
+	repositories := make([]domain.RepositoryRef, 12)
+	for index := range repositories {
+		repositories[index] = domain.RepositoryRef{Owner: "acme", Name: fmt.Sprintf("repo-%02d", index)}
+	}
+	result := New(runner).ListPullRequests(context.Background(), PullRequestQuery{Repositories: repositories, CurrentLogin: "sean"})
+	if result.Partial || len(result.Items) != 0 {
+		t.Fatalf("inbox=%+v", result)
+	}
+	if runner.commands != len(repositories) || runner.maximum != 4 {
+		t.Fatalf("commands=%d maximum concurrency=%d", runner.commands, runner.maximum)
 	}
 }
 

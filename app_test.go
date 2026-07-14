@@ -88,6 +88,13 @@ func (r *bootstrapConcurrentRunner) Run(_ context.Context, command proc.Command)
 	return proc.Result{Stdout: []byte(name + " version fixture\n")}, nil
 }
 
+type repositoryRefreshConcurrencyRunner struct {
+	mu       sync.Mutex
+	active   int
+	maximum  int
+	commands int
+}
+
 func (r *bootstrapRefreshRunner) RefreshPaths() { r.refreshed = true }
 func (r *bootstrapRefreshRunner) ResolvedPath(tool proc.Tool) (string, error) {
 	return "/fixture/bin/" + string(tool), nil
@@ -97,6 +104,24 @@ func (r *bootstrapRefreshRunner) Run(_ context.Context, command proc.Command) (p
 		return proc.Result{Stdout: []byte(`{"login":"strantalis","name":"Sean","avatar_url":""}`)}, nil
 	}
 	return proc.Result{Stdout: []byte(string(command.Tool) + " version fixture\n")}, nil
+}
+
+func (r *repositoryRefreshConcurrencyRunner) Run(_ context.Context, command proc.Command) (proc.Result, error) {
+	r.mu.Lock()
+	r.active++
+	r.commands++
+	if r.active > r.maximum {
+		r.maximum = r.active
+	}
+	r.mu.Unlock()
+	time.Sleep(20 * time.Millisecond)
+	nameWithOwner := command.Args[2]
+	owner, name, _ := strings.Cut(nameWithOwner, "/")
+	body := fmt.Sprintf(`{"id":"%s","name":"%s","nameWithOwner":"%s","owner":{"login":"%s"}}`, nameWithOwner, name, nameWithOwner, owner)
+	r.mu.Lock()
+	r.active--
+	r.mu.Unlock()
+	return proc.Result{Stdout: []byte(body)}, nil
 }
 
 func (r protocolRunner) Run(_ context.Context, command proc.Command) (proc.Result, error) {
@@ -190,6 +215,32 @@ func TestRefreshSelectedRepositoriesDetectsArchiveTransition(t *testing.T) {
 	}
 	if len(selections) != 0 {
 		t.Fatalf("archived selection remained persisted: %+v", selections)
+	}
+}
+
+func TestExplicitRepositoryRefreshUsesBoundedConcurrency(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	runner := &repositoryRefreshConcurrencyRunner{}
+	app := &App{ctx: context.Background(), github: githubclient.New(runner), store: store}
+	selections := make([]domain.SourceSelection, 12)
+	for index := range selections {
+		selections[index] = domain.SourceSelection{Kind: domain.SelectionRepository, Key: fmt.Sprintf("acme/repo-%02d", index), Enabled: true}
+	}
+	repositories, archived, refreshErrors := app.refreshExplicitRepositories(context.Background(), selections)
+	if len(repositories) != len(selections) || len(archived) != 0 || len(refreshErrors) != 0 {
+		t.Fatalf("repositories=%d archived=%v errors=%v", len(repositories), archived, refreshErrors)
+	}
+	if runner.commands != len(selections) || runner.maximum != 4 {
+		t.Fatalf("commands=%d maximum concurrency=%d", runner.commands, runner.maximum)
+	}
+	for index, repository := range repositories {
+		if repository.Ref.Name != fmt.Sprintf("repo-%02d", index) {
+			t.Fatalf("repository order changed at %d: %+v", index, repository.Ref)
+		}
 	}
 }
 

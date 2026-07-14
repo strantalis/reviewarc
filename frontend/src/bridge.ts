@@ -39,6 +39,7 @@ export const backend = {
   refreshSelectedRepositories: () => call<SelectedRepositoryRefresh>(['RefreshSelectedRepositories']),
   listCachedOwnerRepositories: (owner: string) => call<RepositoryPage>(['ListCachedOwnerRepositories'], owner),
   refreshOwnerRepositories: (owner: string, cursor = '') => call<RepositoryPage>(['RefreshOwnerRepositories'], {owner, cursor}),
+  searchOwnerRepositories: (owner: string, query: string, cursor = '', organization = false) => call<RepositoryPage>(['SearchOwnerRepositories'], {owner, query, cursor, organization}),
   saveSelections: (selections: SourceSelection[]) => call<void>(['SaveSelections'], selections),
   refreshInbox: () => call<InboxResult>(['RefreshInbox']),
   openPullRequest: (ref: PullRequestRef) => call<ReviewSession>(['OpenPullRequest'], ref),
