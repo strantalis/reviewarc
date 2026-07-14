@@ -75,8 +75,7 @@ type InboxResult struct {
 }
 
 type PullRequestDetail struct {
-	PullRequest domain.PullRequest   `json:"pullRequest"`
-	Files       []domain.ChangedFile `json:"files"`
+	PullRequest domain.PullRequest `json:"pullRequest"`
 }
 
 func (c *Client) CurrentUser(ctx context.Context) (domain.GitHubUser, error) {
@@ -410,18 +409,14 @@ func (c *Client) GetPullRequest(ctx context.Context, ref domain.PullRequestRef) 
 		return PullRequestDetail{}, errors.New("invalid pull request reference")
 	}
 	root := fmt.Sprintf("repos/%s/%s/pulls/%d", ref.Repository.Owner, ref.Repository.Name, ref.Number)
-	var metadata, commits, files, reviews, comments proc.Result
-	var metadataErr, commitsErr, filesErr, reviewsErr, commentsErr error
+	var metadata, commits, reviews, comments proc.Result
+	var metadataErr, commitsErr, reviewsErr, commentsErr error
 	var wg sync.WaitGroup
-	wg.Add(5)
+	wg.Add(4)
 	go func() { defer wg.Done(); metadata, metadataErr = c.run(ctx, []string{"api", root}) }()
 	go func() {
 		defer wg.Done()
 		commits, commitsErr = c.run(ctx, []string{"api", "--paginate", "--slurp", root + "/commits?per_page=100"})
-	}()
-	go func() {
-		defer wg.Done()
-		files, filesErr = c.run(ctx, []string{"api", "--paginate", "--slurp", root + "/files?per_page=100"})
 	}()
 	go func() {
 		defer wg.Done()
@@ -438,16 +433,13 @@ func (c *Client) GetPullRequest(ctx context.Context, ref domain.PullRequestRef) 
 	if commitsErr != nil {
 		return PullRequestDetail{}, fmt.Errorf("load pull request commits: %w", commitsErr)
 	}
-	if filesErr != nil {
-		return PullRequestDetail{}, fmt.Errorf("load pull request files: %w", filesErr)
-	}
 	if reviewsErr != nil {
 		return PullRequestDetail{}, fmt.Errorf("load pull request reviews: %w", reviewsErr)
 	}
 	if commentsErr != nil {
 		return PullRequestDetail{}, fmt.Errorf("load pull request review comments: %w", commentsErr)
 	}
-	detail, err := parsePullRequestDetail(metadata.Stdout, commits.Stdout, files.Stdout)
+	detail, err := parsePullRequestDetail(metadata.Stdout, commits.Stdout)
 	if err != nil {
 		return PullRequestDetail{}, err
 	}

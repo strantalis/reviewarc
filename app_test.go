@@ -493,8 +493,8 @@ func TestPublishRequiresMatchingConfirmationAndUsesFixtureBackedGitHubFlow(t *te
 	if len(published) != 1 || published[0].Status != domain.CommentPublished || published[0].GitHubID != "991" {
 		t.Fatalf("published=%+v", published)
 	}
-	if len(runner.commands) != 7 {
-		t.Fatalf("commands=%d, want detail metadata, commits, files, reviews, comments, checks, and publish", len(runner.commands))
+	if len(runner.commands) != 6 {
+		t.Fatalf("commands=%d, want detail metadata, commits, reviews, comments, checks, and publish", len(runner.commands))
 	}
 	var publishCommand proc.Command
 	for _, command := range runner.commands {

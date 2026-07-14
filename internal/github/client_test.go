@@ -326,30 +326,26 @@ func TestInboxIsSortedAndIsolatesRepositoryFailures(t *testing.T) {
 	}
 }
 
-func TestPullRequestDetailParsesForkRenameAndBinary(t *testing.T) {
+func TestPullRequestDetailParsesOverviewData(t *testing.T) {
 	metadata := []byte(`{"number":4,"title":"Change","body":"why","html_url":"https://github.com/acme/api/pull/4","updated_at":"2026-07-11T11:00:00Z","user":{"login":"dev"},"base":{"ref":"main","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","repo":{"name":"api","clone_url":"https://github.com/acme/api.git","owner":{"login":"acme"}}},"head":{"ref":"topic","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repo":{"name":"api","clone_url":"https://github.com/fork/api.git","owner":{"login":"fork"}}},"additions":2,"deletions":1,"changed_files":2,"labels":[{"name":"security"}]}`)
 	commits := []byte(`[[{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","commit":{"message":"change","author":{"name":"Dev","date":"2026-07-11T10:00:00Z"}},"author":{"login":"dev"}}]]`)
-	files := []byte(`[[{"filename":"new.go","previous_filename":"old.go","status":"renamed","additions":1,"deletions":1,"patch":"@@"},{"filename":"asset.bin","status":"modified","additions":0,"deletions":0}]]`)
-	detail, err := parsePullRequestDetail(metadata, commits, files)
+	detail, err := parsePullRequestDetail(metadata, commits)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if detail.PullRequest.HeadRepository.Owner != "fork" || detail.PullRequest.URL == "" || detail.PullRequest.HeadRepository.CloneURL == "" || len(detail.PullRequest.Labels) != 1 || detail.PullRequest.Labels[0] != "security" || detail.Files[0].Status != domain.FileRenamed || detail.Files[0].PreviousPath != "old.go" || !detail.Files[1].IsBinary {
+	if detail.PullRequest.HeadRepository.Owner != "fork" || detail.PullRequest.URL == "" || detail.PullRequest.HeadRepository.CloneURL == "" || len(detail.PullRequest.Labels) != 1 || detail.PullRequest.Labels[0] != "security" || len(detail.PullRequest.Commits) != 1 {
 		t.Fatalf("detail=%+v", detail)
 	}
 }
 
 func TestPullRequestDetailRejectsUnavailableRepositoriesAndMalformedPages(t *testing.T) {
 	metadataWithoutHead := []byte(`{"number":4,"base":{"repo":{"name":"api","owner":{"login":"acme"}}},"head":{"repo":null}}`)
-	if _, err := parsePullRequestDetail(metadataWithoutHead, []byte(`[[]]`), []byte(`[[]]`)); err == nil {
+	if _, err := parsePullRequestDetail(metadataWithoutHead, []byte(`[[]]`)); err == nil {
 		t.Fatal("missing head repository was accepted")
 	}
 	metadata := []byte(`{"number":4,"base":{"repo":{"name":"api","owner":{"login":"acme"}}},"head":{"repo":{"name":"api","owner":{"login":"fork"}}}}`)
-	if _, err := parsePullRequestDetail(metadata, []byte(`{}`), []byte(`[[]]`)); err == nil {
+	if _, err := parsePullRequestDetail(metadata, []byte(`{}`)); err == nil {
 		t.Fatal("malformed commit pagination was accepted")
-	}
-	if _, err := parsePullRequestDetail(metadata, []byte(`[[]]`), []byte(`{}`)); err == nil {
-		t.Fatal("malformed file pagination was accepted")
 	}
 }
 
@@ -396,14 +392,13 @@ func TestPullRequestContextRejectsMalformedPagination(t *testing.T) {
 	}
 }
 
-func TestGetPullRequestLoadsContextFromFixedEndpoints(t *testing.T) {
+func TestGetPullRequestLoadsContextWithoutUnusedFilesEndpoint(t *testing.T) {
 	sha := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	metadata := `{"number":4,"base":{"ref":"main","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","repo":{"name":"api","owner":{"login":"acme"}}},"head":{"ref":"topic","sha":"` + sha + `","repo":{"name":"api","owner":{"login":"fork"}}}}`
 	root := "repos/acme/api/pulls/4"
 	f := &organizationAccessRunner{results: map[string]proc.Result{
 		root:                            {Stdout: []byte(metadata)},
 		root + "/commits?per_page=100":  {Stdout: []byte(`[[]]`)},
-		root + "/files?per_page=100":    {Stdout: []byte(`[[]]`)},
 		root + "/reviews?per_page=100":  {Stdout: []byte(`[[]]`)},
 		root + "/comments?per_page=100": {Stdout: []byte(`[[]]`)},
 		"repos/acme/api/commits/" + sha + "/check-runs?per_page=100": {Stdout: []byte(`[{"check_runs":[]}]`)},
@@ -419,7 +414,6 @@ func TestGetPullRequestLoadsContextFromFixedEndpoints(t *testing.T) {
 	wantEndpoints := []string{
 		"repos/acme/api/pulls/4",
 		"repos/acme/api/pulls/4/commits?per_page=100",
-		"repos/acme/api/pulls/4/files?per_page=100",
 		"repos/acme/api/pulls/4/reviews?per_page=100",
 		"repos/acme/api/pulls/4/comments?per_page=100",
 		"repos/acme/api/commits/" + sha + "/check-runs?per_page=100",
@@ -430,6 +424,9 @@ func TestGetPullRequestLoadsContextFromFixedEndpoints(t *testing.T) {
 	gotEndpoints := map[string]bool{}
 	for _, command := range f.commands {
 		gotEndpoints[command.Args[len(command.Args)-1]] = true
+	}
+	if gotEndpoints[root+"/files?per_page=100"] {
+		t.Fatalf("unused files endpoint was requested: commands=%v", f.commands)
 	}
 	for _, want := range wantEndpoints {
 		if !gotEndpoints[want] {
