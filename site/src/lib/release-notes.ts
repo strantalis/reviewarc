@@ -20,6 +20,15 @@ const releaseNotes: Record<string, PublicReleaseNotes> = {
       "Signed download details and checksums are visible on each public release page.",
     ],
   },
+  "0.1.0-beta.8": {
+    summary: "ReviewArc now opens large organizations and pull requests faster while keeping the app responsive.",
+    changes: [
+      "Startup restores the last inbox and environment immediately while fresh GitHub data loads in the background.",
+      "Repository and pull-request discovery is bounded and paginated so large organizations do not stall the app.",
+      "Pull requests open before secondary files, comments, reviews, and checks finish loading.",
+      "Guided reviews surface the review brief, highest-risk starting point, and stale-analysis recovery more clearly.",
+    ],
+  },
 };
 
 export function releaseNotesFor(version: string): PublicReleaseNotes | null {
