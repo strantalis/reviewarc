@@ -8,13 +8,13 @@ import reviewArcMark from "../assets/reviewarc-mark.svg";
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#f3f5f8" />
-    <meta name="description" content="ReviewArc turns pull request review into a guided, evidence-backed journey." />
-    <title>ReviewArc — Review the change, not the noise</title>
+    <meta name="theme-color" content="#f6f8fb" />
+    <meta name="description" content="ReviewArc breaks large GitHub pull requests into focused chapters, with the relevant diff, risks, tests, and evidence kept together." />
+    <title>ReviewArc — Review the change with the evidence in view</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
-    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&amp;family=Newsreader:opsz,wght@6..72,500;6..72,600&amp;display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Commissioner:wght@400;500;600;650;700&amp;display=swap" rel="stylesheet" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to main content</a>
@@ -24,67 +24,123 @@ import reviewArcMark from "../assets/reviewarc-mark.svg";
         <span>ReviewArc</span>
       </a>
       <nav aria-label="Primary navigation">
+        <a class="wide-nav-link" href="#review-arc">How it works</a>
         <a href="/docs/">Docs</a>
-        <span class="platform-label">For macOS</span>
+        <a class="header-download is-loading" data-release-action aria-disabled="true">Checking…</a>
       </nav>
     </header>
 
     <main id="main-content">
-      <section class="hero">
-        <div class="hero-copy">
-          <div class="hero-message">
-            <p class="eyebrow" id="channel-label"><span class="status-dot"></span><span id="channel-copy">ReviewArc for macOS</span></p>
-            <h1>Review the change.<br /><em>Understand the risk.</em></h1>
-          </div>
-          <div class="hero-support">
-            <p class="lede">A local-first review workspace that turns sprawling pull requests into a guided path through behavior, evidence, tests, and uncertainty.</p>
-            <div class="download-group">
-              <a class="download-button is-loading" id="download" aria-disabled="true">
-                <span>Preparing release</span>
-                <small>Universal macOS build</small>
-              </a>
-              <p class="release-meta" id="release-meta" role="status">Checking the latest release…</p>
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-panel">
+          <div class="hero-copy">
+            <div class="hero-message">
+              <p class="availability-line" data-state="loading"><span class="status-dot" aria-hidden="true"></span>Pull request review for macOS</p>
+              <h1 id="hero-title">Review the change. <span>Follow the evidence.</span></h1>
+              <p class="lede">ReviewArc breaks a pull request into focused chapters, with the relevant diff, risks, tests, and open questions kept together.</p>
+
+              <div class="download-group">
+                <a class="download-button is-loading" id="download" data-release-action aria-disabled="true">
+                  <span data-release-title>Checking signed release</span>
+                  <small data-release-detail>Universal macOS build</small>
+                </a>
+              </div>
+
+              <div class="release-status" id="release-status" data-state="loading" aria-busy="true">
+                <p id="release-meta" role="status">Loading the latest signed release details…</p>
+                <div class="release-status-actions">
+                  <button id="retry-release" type="button" hidden>Try again</button>
+                  <a id="release-details" href="/docs/getting-started/" hidden>Release notes and checksum</a>
+                </div>
+              </div>
             </div>
-            <a class="quiet-link" href="/docs/getting-started/">Read the setup guide <span aria-hidden="true">→</span></a>
+
+            <aside class="evidence-specimen" aria-label="Example ReviewArc finding with supporting code">
+              <div class="specimen-heading">
+                <span>Example finding</span>
+                <strong><span aria-hidden="true">✓</span> Backed by code</strong>
+              </div>
+              <p class="specimen-claim">The audit recorder is optional; existing callers do not need to configure one.</p>
+              <dl>
+                <div><dt>File</dt><dd><code>quota/limiter.go</code></dd></div>
+                <div><dt>Lines</dt><dd><code>L34–37 · L39–62</code></dd></div>
+                <div><dt>Revision</dt><dd><code>feature/burst-audit</code></dd></div>
+              </dl>
+              <p class="specimen-note">Open the cited file and lines from the finding. Anything the code does not directly support is labeled as an inference or open question.</p>
+            </aside>
           </div>
         </div>
 
         <figure class="product-visual hero-visual">
-          <img src="/images/reviewarc-inbox.webp" width="1586" height="992" alt="ReviewArc's unified pull request inbox showing real review status, labels, and analysis state across repositories" fetchpriority="high" />
-          <figcaption><span>Unified pull request inbox</span><span>One calm queue across the repositories you choose.</span></figcaption>
+          <div class="visual-stage">
+            <img src="/images/reviewarc-guided-review.webp" width="1586" height="992" alt="ReviewArc's focused story mode showing one review chapter with a validated risk, collapsed code evidence, an open question, and a behavioral change" fetchpriority="high" />
+          </div>
+          <figcaption><strong>Story mode keeps the chapter, code, and evidence in one view.</strong></figcaption>
         </figure>
+      </section>
+
+      <section class="review-arc" id="review-arc" aria-labelledby="review-arc-title">
+        <header class="section-intro">
+          <p class="section-label">How a review works</p>
+          <h2 id="review-arc-title">Start with the change, then work into the code.</h2>
+          <p>ReviewArc organizes each pull request around the questions a reviewer needs to answer—not the order of files in the diff.</p>
+        </header>
+        <div class="arc-flow">
+          <article><strong>Get oriented</strong><p>See what changed, why it matters, and where the risk is concentrated.</p></article>
+          <article><strong>Work through it</strong><p>Review focused chapters beside the relevant diff and supporting code.</p></article>
+          <article><strong>Check the claims</strong><p>Separate code-backed facts from inferences, risks, tests, and open questions.</p></article>
+          <article><strong>Make the call</strong><p>Keep your progress, notes, drafts, and unresolved questions together until you are ready.</p></article>
+        </div>
       </section>
 
       <section class="product-story" aria-labelledby="product-story-title">
-        <div class="story-copy">
-          <p class="section-kicker">A guided review workspace</p>
-          <h2 id="product-story-title">Move through the change with evidence beside you.</h2>
-          <p>ReviewArc organizes each pull request into focused chapters, keeps the real diff at the center, and connects risks, tests, unknowns, and discussion to the lines that support them.</p>
-          <dl class="story-proof">
-            <div><dt>Left</dt><dd>Chapters and progress</dd></div>
-            <div><dt>Center</dt><dd>Code, diffs, and threads</dd></div>
-            <div><dt>Right</dt><dd>Evidence and uncertainty</dd></div>
-          </dl>
-        </div>
         <figure class="product-visual review-visual">
-          <img src="/images/reviewarc-guided-review.webp" width="1536" height="1024" alt="ReviewArc guided review with chapters, a code diff and inline thread, and evidence-backed risks in three panels" loading="lazy" />
+          <div class="visual-stage">
+            <img src="/images/reviewarc-inbox.webp" width="1586" height="992" alt="ReviewArc's pull request inbox showing saved views, repository filters, review relationships, and analysis state" loading="lazy" />
+          </div>
+          <figcaption><strong>Your review queue, across the repositories you choose.</strong></figcaption>
         </figure>
+        <div class="story-copy">
+          <h2 id="product-story-title">Keep the next review in view.</h2>
+          <p>The inbox keeps selected repositories, analysis state, and reviewer context visible. Open a pull request and return to the guided review where you left off.</p>
+          <ul class="proof-list">
+            <li><strong>Repositories</strong><span>See only the repositories you chose to review.</span></li>
+            <li><strong>Analysis</strong><span>Know which pull requests are ready to open.</span></li>
+            <li><strong>Progress</strong><span>Return to the chapter you were working through.</span></li>
+          </ul>
+        </div>
       </section>
 
-      <section class="principles" aria-labelledby="principles-title">
-        <p class="section-kicker" id="principles-title">A review instrument, not an approval bot</p>
-        <div class="principle-list">
-          <article><span>01</span><h2>Evidence before assertion</h2><p>Every risk and inference traces back to the exact revision, file, and line that supports it.</p></article>
-          <article><span>02</span><h2>Your repositories stay yours</h2><p>ReviewArc uses isolated managed caches. It never modifies your working checkouts or runs project commands.</p></article>
-          <article><span>03</span><h2>You make the decision</h2><p>Analysis guides attention. Notes stay private. Nothing reaches GitHub without explicit confirmation.</p></article>
+      <section class="trust-section" aria-labelledby="trust-title">
+        <div class="trust-statement">
+          <p class="section-label">Local until you publish</p>
+          <h2 id="trust-title">Nothing reaches GitHub until you confirm it.</h2>
+        </div>
+        <div class="trust-summary">
+          <p>ReviewArc works in its own copy of the repository. Your checkout stays untouched, and your notes and drafts stay on your Mac.</p>
+          <a class="secondary-action" href="/docs/security-and-local-data/">Read about security and local data <span aria-hidden="true">→</span></a>
+        </div>
+      </section>
+
+      <section class="final-cta" aria-labelledby="final-cta-title">
+        <div>
+          <p class="section-label">For your next large pull request</p>
+          <h2 id="final-cta-title">Try ReviewArc on a change that needs a closer look.</h2>
+        </div>
+        <div class="final-actions">
+          <a class="download-button is-loading" data-release-action aria-disabled="true"><span data-release-title>Checking signed release</span><small data-release-detail>Universal macOS build</small></a>
+          <a class="secondary-action" data-release-secondary href="/docs/getting-started/">Read the setup guide <span aria-hidden="true">→</span></a>
         </div>
       </section>
     </main>
 
     <footer>
-      <span>ReviewArc</span>
-      <span>Built for careful reviewers.</span>
-      <a href="/docs/security-and-local-data/">Security and privacy</a>
+      <a class="brand footer-brand" href="/" aria-label="ReviewArc home">
+        <img class="brand-mark" src={reviewArcMark.src} alt="" width="31" height="25" />
+        <span>ReviewArc</span>
+      </a>
+      <span>A focused pull request reviewer for macOS.</span>
+      <nav aria-label="Footer navigation"><a href="/docs/">Docs</a><a href="/docs/security-and-local-data/">Security</a><a class="is-loading" data-release-action aria-disabled="true">Checking…</a></nav>
     </footer>
 
     <script>

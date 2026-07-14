@@ -1,33 +1,32 @@
 ---
 title: ReviewArc documentation
-description: Review pull requests across repositories with an evidence-backed, local-first workflow.
+description: Set up ReviewArc and work through pull requests with the relevant code and evidence beside you.
 template: splash
 hero:
-  tagline: A focused macOS workspace for understanding pull requests before you approve them.
+  tagline: Set up ReviewArc, choose your repositories, and work through a pull request with the relevant code and evidence beside you.
   actions:
-    - text: Get started
+    - text: Set up ReviewArc
       link: /docs/getting-started/
       icon: right-arrow
       variant: primary
-    - text: Understand the analysis
-      link: /docs/analysis-and-reanalysis/
-      icon: open-book
+    - text: Return to product home
+      link: /
+      icon: external
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+ReviewArc opens to one queue of pull requests from the repositories you choose. Open a pull request to create an isolated copy, analyze the exact revision, and organize the change into focused review chapters.
 
-ReviewArc opens to a unified inbox of real GitHub pull requests. It creates isolated, application-managed Git caches only when you open a pull request, then uses Codex in read-only mode to organize the change into a guided review.
+## From inbox to published review
 
-<CardGrid>
-  <Card title="One review inbox" icon="list-format">
-    Bring review-requested, assigned, and authored pull requests from selected repositories into one place.
-  </Card>
-  <Card title="Evidence, not verdicts" icon="magnifier">
-    Separate facts, inferences, risks, unknowns, and tests—and trace claims back to the reviewed revision.
-  </Card>
-  <Card title="Local by design" icon="padlock">
-    Keep managed repositories, analysis, progress, drafts, and private notes on your Mac.
-  </Card>
-</CardGrid>
+<div class="docs-path">
+  <a href="/docs/inbox-and-sources/"><strong>Choose your repositories</strong><span>Build one review queue from the repositories and organizations you follow.</span></a>
+  <a href="/docs/analysis-and-reanalysis/"><strong>Analyze the pull request</strong><span>See how ReviewArc validates evidence and separates facts, inferences, and unknowns.</span></a>
+  <a href="/docs/guided-review/"><strong>Work through the chapters</strong><span>Review the code, risks, tests, questions, and your progress in one place.</span></a>
+  <a href="/docs/publishing-reviews/"><strong>Publish your review</strong><span>Keep notes and drafts local until you preview and confirm exactly what goes to GitHub.</span></a>
+</div>
 
-ReviewArc helps you move through a review deliberately. It does not approve code for you, and it never publishes to GitHub without an explicit confirmation.
+## What stays local
+
+ReviewArc works in its own copy of the repository and does not modify your checkout. Analysis, progress, private notes, and drafts stay on your Mac until you publish a review.
+
+[Read about security, local data, and publishing](/docs/security-and-local-data/).

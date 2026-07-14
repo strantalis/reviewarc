@@ -2,9 +2,12 @@ import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import vercel from "@astrojs/vercel";
 
+const isDev = process.argv.includes("dev");
+
 export default defineConfig({
   site: "https://www.reviewarc.dev",
   output: "static",
+  devToolbar: { enabled: false },
   markdown: { syntaxHighlight: "prism" },
   adapter: vercel({ staticHeaders: true }),
   security: {
@@ -28,13 +31,17 @@ export default defineConfig({
         ]
       },
       styleDirective: {
-        resources: ["'self'", "https://fonts.googleapis.com"]
+        resources: [
+          "'self'",
+          "https://fonts.googleapis.com",
+          ...(isDev ? ["'unsafe-inline'"] : [])
+        ]
       }
     }
   },
   integrations: [
     starlight({
-      title: "ReviewArc",
+      title: "ReviewArc docs",
       description: "Evidence-backed pull request review for macOS.",
       favicon: "/favicon.svg",
       logo: {
@@ -44,10 +51,17 @@ export default defineConfig({
       head: [
         { tag: "link", attrs: { rel: "preconnect", href: "https://fonts.googleapis.com" } },
         { tag: "link", attrs: { rel: "preconnect", href: "https://fonts.gstatic.com", crossorigin: "anonymous" } },
-        { tag: "link", attrs: { rel: "stylesheet", href: "https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&display=swap" } }
+        { tag: "link", attrs: { rel: "stylesheet", href: "https://fonts.googleapis.com/css2?family=Commissioner:wght@400;500;600;650;700&display=swap" } }
       ],
       lastUpdated: true,
       sidebar: [
+        {
+          label: "ReviewArc",
+          items: [
+            { label: "Product home", link: "/" },
+            { label: "Download for macOS", link: "/#download" }
+          ]
+        },
         {
           label: "Start here",
           items: [

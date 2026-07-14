@@ -36,13 +36,13 @@ const pageTitle = manifest ? `ReviewArc ${manifest.version} release notes` : "Re
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#f3f5f8" />
+    <meta name="theme-color" content="#f6f8fb" />
     <meta name="description" content={manifest ? `Release notes and signed download details for ReviewArc ${manifest.version}.` : "ReviewArc release information."} />
     <title>{pageTitle}</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
-    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&amp;family=Newsreader:opsz,wght@6..72,500;6..72,600&amp;display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Commissioner:wght@400;500;600;650;700&amp;display=swap" rel="stylesheet" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to main content</a>
@@ -52,8 +52,9 @@ const pageTitle = manifest ? `ReviewArc ${manifest.version} release notes` : "Re
         <span>ReviewArc</span>
       </a>
       <nav aria-label="Primary navigation">
+        <a class="wide-nav-link" href="/#review-arc">How it works</a>
         <a href="/docs/">Docs</a>
-        <a href="/">Download</a>
+        <a class="header-download" href="/#download">Download</a>
       </nav>
     </header>
 
@@ -61,14 +62,14 @@ const pageTitle = manifest ? `ReviewArc ${manifest.version} release notes` : "Re
       {manifest ? (
         <article>
           <header class="release-heading">
-            <a class="back-link" href="/">← ReviewArc</a>
-            <p class="eyebrow"><span class="status-dot"></span>{manifest.channel === "beta" ? "Beta release" : "General release"}</p>
-            <h1>ReviewArc <em>{manifest.version}</em></h1>
-            <p class="release-summary">{notes?.summary ?? "Signed publication details for this ReviewArc release."}</p>
+            <a class="back-link" href="/">← ReviewArc home</a>
+            <p class="release-chip"><span class="status-dot" aria-hidden="true"></span>{manifest.channel === "beta" ? "Beta release" : "Stable release"}</p>
+            <h1>ReviewArc <span>{manifest.version}</span></h1>
+            <p class="release-summary">{notes?.summary ?? "Download this signed build and review what changed."}</p>
             <div class="release-actions">
               <a class="download-button" href={manifest.macOS.downloadUrl}>
                 <span>Download for macOS</span>
-                <small>Universal build · {size}</small>
+                <small>Universal build · {size} · macOS {manifest.macOS.minimumVersion}+</small>
               </a>
               <span>Published {published}</span>
             </div>
@@ -76,19 +77,19 @@ const pageTitle = manifest ? `ReviewArc ${manifest.version} release notes` : "Re
 
           <div class="release-body">
             <section aria-labelledby="changes-title">
-              <p class="section-kicker">What changed</p>
-              <h2 id="changes-title">Built for a more dependable review workflow.</h2>
+              <p class="section-label">What changed</p>
+              <h2 id="changes-title">Changes in this release.</h2>
               {notes ? (
                 <ul class="change-list">
                   {notes.changes.map((change) => <li>{change}</li>)}
                 </ul>
               ) : (
-                <p class="muted-copy">Detailed notes were not published for this build. The signed artifact information remains available below.</p>
+                <p class="muted-copy">No detailed notes were published for this build. The signed download and checksum are still available.</p>
               )}
             </section>
 
             <aside class="release-details" aria-labelledby="details-title">
-              <p class="section-kicker" id="details-title">Release details</p>
+              <p class="section-label" id="details-title">Release details</p>
               <dl>
                 <div><dt>Version</dt><dd>{manifest.version}</dd></div>
                 <div><dt>Build</dt><dd>{manifest.buildNumber}</dd></div>
@@ -98,7 +99,7 @@ const pageTitle = manifest ? `ReviewArc ${manifest.version} release notes` : "Re
                 <div><dt>Notarization</dt><dd>Accepted by Apple</dd></div>
               </dl>
               <div class="checksum">
-                <span>SHA-256</span>
+                <span>SHA-256 checksum</span>
                 <code>{manifest.macOS.sha256}</code>
               </div>
             </aside>
@@ -106,18 +107,25 @@ const pageTitle = manifest ? `ReviewArc ${manifest.version} release notes` : "Re
         </article>
       ) : (
         <section class="release-unavailable">
-          <p class="eyebrow">Release information</p>
-          <h1>{loadFailed ? "Temporarily unavailable." : "Release not found."}</h1>
-          <p>{loadFailed ? "ReviewArc could not load the signed release details. Try again shortly." : "This version does not have a published ReviewArc release."}</p>
-          <a class="quiet-link" href="/">Return to ReviewArc →</a>
+          <p class="section-label">Release information</p>
+          <h1>{loadFailed ? "Release details are temporarily unavailable." : "Release not found."}</h1>
+          <p>{loadFailed ? "We couldn’t load the signed release details. Check your connection and try again, or continue to the setup guide." : "This version does not have a published ReviewArc release."}</p>
+          <div class="unavailable-actions">
+            {loadFailed && <a class="download-button compact-button" href={Astro.url.pathname}><span>Try again</span><small>Reload signed release details</small></a>}
+            <a class="secondary-action" href="/docs/getting-started/">Open the setup guide <span aria-hidden="true">→</span></a>
+            <a class="secondary-action" href="/">Return home</a>
+          </div>
         </section>
       )}
     </main>
 
     <footer>
-      <span>ReviewArc</span>
-      <span>Built for careful reviewers.</span>
-      <a href="/docs/security-and-local-data/">Security and privacy</a>
+      <a class="brand footer-brand" href="/" aria-label="ReviewArc home">
+        <img class="brand-mark" src={reviewArcMark.src} alt="" width="31" height="25" />
+        <span>ReviewArc</span>
+      </a>
+      <span>A focused pull request reviewer for macOS.</span>
+      <nav aria-label="Footer navigation"><a href="/docs/">Docs</a><a href="/docs/security-and-local-data/">Security</a><a href="/#download">Download</a></nav>
     </footer>
   </body>
 </html>

@@ -2,7 +2,9 @@ type ReleaseManifest = {
   schemaVersion: 1;
   channel: "beta" | "stable";
   version: string;
+  releaseNotesUrl: string;
   macOS: {
+    minimumVersion: string;
     sizeBytes: number;
     sha256: string;
     downloadUrl: string;
@@ -10,34 +12,146 @@ type ReleaseManifest = {
   };
 };
 
-const download = document.querySelector<HTMLAnchorElement>("#download");
+const releaseActions = Array.from(document.querySelectorAll<HTMLAnchorElement>("[data-release-action]"));
+const availabilityLine = document.querySelector<HTMLElement>(".availability-line");
 const releaseMeta = document.querySelector<HTMLElement>("#release-meta");
-const channelCopy = document.querySelector<HTMLElement>("#channel-copy");
+const releaseStatus = document.querySelector<HTMLElement>("#release-status");
+const retryRelease = document.querySelector<HTMLButtonElement>("#retry-release");
+const releaseDetails = document.querySelector<HTMLAnchorElement>("#release-details");
+const releaseSecondary = document.querySelector<HTMLAnchorElement>("[data-release-secondary]");
 
 const formatBytes = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 
+type ReleaseActionState = "loading" | "ready" | "recovery";
+
+const updateReleaseActions = ({
+  titleCopy,
+  detailCopy,
+  compactCopy,
+  state,
+  href,
+  accessibleLabel,
+}: {
+  titleCopy: string;
+  detailCopy: string;
+  compactCopy: string;
+  state: ReleaseActionState;
+  href?: string;
+  accessibleLabel: string;
+}) => {
+  for (const action of releaseActions) {
+    const title = action.querySelector<HTMLElement>("[data-release-title]");
+    const detail = action.querySelector<HTMLElement>("[data-release-detail]");
+    if (title) title.textContent = titleCopy;
+    if (detail) detail.textContent = detailCopy;
+    if (!title) action.textContent = compactCopy;
+
+    action.classList.toggle("is-loading", state === "loading");
+    action.classList.toggle("is-recovery", state === "recovery");
+    action.setAttribute("aria-label", accessibleLabel);
+
+    if (href) {
+      action.href = href;
+      action.removeAttribute("aria-disabled");
+    } else {
+      action.removeAttribute("href");
+      action.setAttribute("aria-disabled", "true");
+    }
+  }
+  if (releaseSecondary) releaseSecondary.hidden = state === "recovery";
+};
+
+const setStatus = (state: "loading" | "ready" | "empty" | "error", message: string) => {
+  if (releaseStatus) {
+    releaseStatus.dataset.state = state;
+    releaseStatus.setAttribute("aria-busy", state === "loading" ? "true" : "false");
+  }
+  if (availabilityLine) availabilityLine.dataset.state = state;
+  if (releaseMeta) releaseMeta.textContent = message;
+};
+
 const renderRelease = (release: ReleaseManifest) => {
-  if (!download || !releaseMeta || !channelCopy) return;
   const artifact = release.macOS;
-  download.href = artifact.downloadUrl;
-  download.removeAttribute("aria-disabled");
-  download.classList.remove("is-loading");
-  const title = download.querySelector("span");
-  const detail = download.querySelector("small");
-  if (title) title.textContent = `Download ReviewArc ${release.version}`;
-  if (detail) detail.textContent = `Universal macOS · ${formatBytes(artifact.sizeBytes)}`;
-  channelCopy.textContent = "ReviewArc for macOS";
-  releaseMeta.textContent = `SHA-256 ${artifact.sha256.slice(0, 12)}…`;
+  updateReleaseActions({
+    titleCopy: `Download ReviewArc ${release.version}`,
+    detailCopy: `Universal macOS · ${formatBytes(artifact.sizeBytes)}`,
+    compactCopy: "Download",
+    state: "ready",
+    href: artifact.downloadUrl,
+    accessibleLabel: `Download ReviewArc ${release.version} for macOS`,
+  });
+  setStatus("ready", `macOS ${artifact.minimumVersion}+ · Apple notarized · SHA-256 ${artifact.sha256.slice(0, 12)}…`);
+  if (releaseDetails) {
+    releaseDetails.href = `/releases/v${release.version}`;
+    releaseDetails.textContent = "Release notes and checksum";
+    releaseDetails.hidden = false;
+  }
+  if (retryRelease) retryRelease.hidden = true;
 };
 
-const renderUnavailable = () => {
-  if (releaseMeta) releaseMeta.textContent = "The first ReviewArc release is being prepared.";
+const renderNoRelease = () => {
+  updateReleaseActions({
+    titleCopy: "View setup requirements",
+    detailCopy: "Public macOS release coming soon",
+    compactCopy: "Setup",
+    state: "recovery",
+    href: "/docs/getting-started/",
+    accessibleLabel: "View ReviewArc setup requirements",
+  });
+  setStatus("empty", "A public macOS build isn’t available yet.");
+  if (releaseDetails) releaseDetails.hidden = true;
+  if (retryRelease) retryRelease.hidden = true;
 };
 
-fetch("/api/release.json", { cache: "no-store" })
-  .then((response) => {
+const renderReleaseError = () => {
+  const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+  updateReleaseActions({
+    titleCopy: "View setup requirements",
+    detailCopy: "Download temporarily unavailable",
+    compactCopy: "Setup",
+    state: "recovery",
+    href: "/docs/getting-started/",
+    accessibleLabel: "View ReviewArc setup requirements",
+  });
+  setStatus(
+    "error",
+    offline
+      ? "You appear to be offline. Reconnect, then try again."
+      : "The latest signed build couldn’t be verified."
+  );
+  if (releaseDetails) releaseDetails.hidden = true;
+  if (retryRelease) retryRelease.hidden = false;
+};
+
+let activeRequest: AbortController | null = null;
+
+const loadRelease = async () => {
+  activeRequest?.abort();
+  activeRequest = new AbortController();
+  updateReleaseActions({
+    titleCopy: "Checking signed release",
+    detailCopy: "Universal macOS build",
+    compactCopy: "Checking…",
+    state: "loading",
+    accessibleLabel: "Checking ReviewArc release availability",
+  });
+  setStatus("loading", "Checking the latest signed build…");
+  if (releaseDetails) releaseDetails.hidden = true;
+  if (retryRelease) retryRelease.hidden = true;
+
+  try {
+    const response = await fetch("/api/release.json", { cache: "no-store", signal: activeRequest.signal });
+    if (response.status === 404) {
+      renderNoRelease();
+      return;
+    }
     if (!response.ok) throw new Error(`release endpoint returned ${response.status}`);
-    return response.json() as Promise<ReleaseManifest>;
-  })
-  .then(renderRelease)
-  .catch(renderUnavailable);
+    renderRelease(await response.json() as ReleaseManifest);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") return;
+    renderReleaseError();
+  }
+};
+
+retryRelease?.addEventListener("click", loadRelease);
+void loadRelease();
