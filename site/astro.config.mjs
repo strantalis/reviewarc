@@ -16,7 +16,7 @@ export default defineConfig({
         "default-src 'self'",
         "base-uri 'none'",
         "connect-src 'self'",
-        "font-src 'self' https://fonts.gstatic.com",
+        "font-src 'self'",
         "form-action 'none'",
         "frame-ancestors 'none'",
         "img-src 'self' data:",
@@ -35,7 +35,6 @@ export default defineConfig({
       styleDirective: {
         resources: [
           "'self'",
-          "https://fonts.googleapis.com",
           ...(isDev ? ["'unsafe-inline'"] : [])
         ]
       }
@@ -49,11 +48,14 @@ export default defineConfig({
       logo: {
         src: "./src/assets/reviewarc-mark.svg"
       },
-      customCss: ["./src/styles/starlight.css"],
+      customCss: ["./src/styles/fonts.css", "./src/styles/starlight.css"],
       head: [
-        { tag: "link", attrs: { rel: "preconnect", href: "https://fonts.googleapis.com" } },
-        { tag: "link", attrs: { rel: "preconnect", href: "https://fonts.gstatic.com", crossorigin: "anonymous" } },
-        { tag: "link", attrs: { rel: "stylesheet", href: "https://fonts.googleapis.com/css2?family=Commissioner:wght@400;500;600;650;700&display=swap" } }
+        { tag: "meta", attrs: { property: "og:image", content: "https://www.reviewarc.dev/images/og/reviewarc-og.png" } },
+        { tag: "meta", attrs: { property: "og:image:width", content: "1200" } },
+        { tag: "meta", attrs: { property: "og:image:height", content: "630" } },
+        { tag: "meta", attrs: { name: "twitter:image", content: "https://www.reviewarc.dev/images/og/reviewarc-og.png" } },
+        { tag: "link", attrs: { rel: "preload", href: "/fonts/commissioner-latin.woff2", as: "font", type: "font/woff2", crossorigin: "anonymous" } },
+        { tag: "link", attrs: { rel: "preload", href: "/fonts/spline-sans-mono-latin.woff2", as: "font", type: "font/woff2", crossorigin: "anonymous" } }
       ],
       lastUpdated: true,
       sidebar: [

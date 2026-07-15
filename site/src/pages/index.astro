@@ -3,6 +3,23 @@ import "../styles/landing.css";
 import reviewArcMark from "../assets/reviewarc-mark.svg";
 import ThemeControl from "../components/ThemeControl.astro";
 import ThemeBootstrap from "../components/ThemeBootstrap.astro";
+
+const title = "ReviewArc — Review the change. Follow the evidence.";
+const description =
+  "ReviewArc is a guided pull request review app for macOS. It breaks large GitHub pull requests into focused chapters, with the relevant diff, risks, tests, and evidence kept together.";
+const canonical = new URL("/", Astro.site);
+const ogImage = new URL("/images/og/reviewarc-og.png", Astro.site);
+const structuredData = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  name: "ReviewArc",
+  operatingSystem: "macOS",
+  applicationCategory: "DeveloperApplication",
+  description,
+  url: canonical.href,
+  image: ogImage.href,
+  offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+};
 ---
 
 <!doctype html>
@@ -10,15 +27,26 @@ import ThemeBootstrap from "../components/ThemeBootstrap.astro";
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="description" content="ReviewArc breaks large GitHub pull requests into focused chapters, with the relevant diff, risks, tests, and evidence kept together." />
-    <title>ReviewArc — Review the change with the evidence in view</title>
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f6f8fb" />
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#171d26" />
+    <meta name="description" content={description} />
+    <title>{title}</title>
+    <link rel="canonical" href={canonical.href} />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="ReviewArc" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical.href} />
+    <meta property="og:image" content={ogImage.href} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="ReviewArc — Review the change. Follow the evidence. Guided pull request review for macOS." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <script type="application/ld+json" is:inline set:html={JSON.stringify(structuredData)} />
     <ThemeBootstrap />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
-    <link href="https://fonts.googleapis.com/css2?family=Commissioner:wght@400;500;600;650;700&amp;display=swap" rel="stylesheet" />
+    <link rel="preload" href="/fonts/commissioner-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/spline-sans-mono-latin.woff2" as="font" type="font/woff2" crossorigin />
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to main content</a>
@@ -40,7 +68,7 @@ import ThemeBootstrap from "../components/ThemeBootstrap.astro";
         <div class="hero-panel">
           <div class="hero-copy">
             <div class="hero-message">
-              <p class="availability-line" data-state="loading"><span class="status-dot" aria-hidden="true"></span>Pull request review for macOS</p>
+              <p class="availability-line" data-state="loading"><span class="status-dot" aria-hidden="true"></span>Guided pull request review for macOS</p>
               <h1 id="hero-title">Review the change. <span>Follow the evidence.</span></h1>
               <p class="lede">ReviewArc breaks a pull request into focused chapters, with the relevant diff, risks, tests, and open questions kept together.</p>
 
@@ -50,6 +78,13 @@ import ThemeBootstrap from "../components/ThemeBootstrap.astro";
                   <small data-release-detail>Universal macOS build</small>
                 </a>
               </div>
+
+              <noscript>
+                <p class="noscript-download">
+                  JavaScript is off, so the live download check can't run.
+                  <a href="/releases/">Browse releases and signed downloads</a>.
+                </p>
+              </noscript>
 
               <div class="release-status" id="release-status" data-state="loading" aria-busy="true">
                 <p id="release-meta" role="status">Loading the latest signed release details…</p>
@@ -62,7 +97,7 @@ import ThemeBootstrap from "../components/ThemeBootstrap.astro";
 
             <aside class="evidence-specimen" aria-label="Example ReviewArc finding with supporting code">
               <div class="specimen-heading">
-                <span>Example finding</span>
+                <span>Example claim</span>
                 <strong><span aria-hidden="true">✓</span> Backed by code</strong>
               </div>
               <p class="specimen-claim">The audit recorder is optional; existing callers do not need to configure one.</p>
@@ -89,14 +124,14 @@ import ThemeBootstrap from "../components/ThemeBootstrap.astro";
               fetchpriority="high"
             />
           </div>
-          <figcaption><strong>Story mode keeps the chapter, code, and evidence in one view.</strong></figcaption>
+          <figcaption><strong>The guided review keeps the chapter, code, and evidence in one view.</strong></figcaption>
         </figure>
       </section>
 
       <section class="review-arc" id="review-arc" aria-labelledby="review-arc-title">
         <header class="section-intro">
           <p class="section-label">How a review works</p>
-          <h2 id="review-arc-title">Start with the change, then work into the code.</h2>
+          <h2 id="review-arc-title">Start with the change, then move into the code.</h2>
           <p>ReviewArc organizes each pull request around the questions a reviewer needs to answer—not the order of files in the diff.</p>
         </header>
         <div class="arc-flow">
@@ -124,7 +159,7 @@ import ThemeBootstrap from "../components/ThemeBootstrap.astro";
           <figcaption><strong>Your review queue, across the repositories you choose.</strong></figcaption>
         </figure>
         <div class="story-copy">
-          <h2 id="product-story-title">Keep the next review in view.</h2>
+          <h2 id="product-story-title">One inbox for the repositories you review.</h2>
           <p>The inbox keeps selected repositories, analysis state, and reviewer context visible. Open a pull request and return to the guided review where you left off.</p>
           <ul class="proof-list">
             <li><strong>Repositories</strong><span>See only the repositories you chose to review.</span></li>

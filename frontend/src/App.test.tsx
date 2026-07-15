@@ -160,7 +160,7 @@ describe('App startup', () => {
     expect(screen.queryByText('Documentation change')).not.toBeInTheDocument()
     const search = screen.getByPlaceholderText('Search title, repository, author, PR number, or label')
     fireEvent.change(search, {target: {value: 'Security'}})
-    const walkthroughReady = screen.getByRole('button', {name: 'Walkthrough ready'})
+    const walkthroughReady = screen.getByRole('button', {name: 'Guided review ready'})
     fireEvent.click(walkthroughReady)
     const allOpen = screen.getByRole('button', {name: 'All open'})
     expect(allOpen).toHaveAttribute('aria-pressed', 'false')

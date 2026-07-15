@@ -11,7 +11,7 @@
   --sl-color-gray-6: #edf1f5;
   --sl-color-black: #f6f8fb;
   --sl-font: "Commissioner", "Avenir Next", "Segoe UI", sans-serif;
-  --sl-font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --sl-font-mono: "Spline Sans Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
 :root[data-theme="dark"] {

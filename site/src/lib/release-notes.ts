@@ -34,3 +34,7 @@ const releaseNotes: Record<string, PublicReleaseNotes> = {
 export function releaseNotesFor(version: string): PublicReleaseNotes | null {
   return releaseNotes[version] ?? null;
 }
+
+export function releaseNoteVersions(): string[] {
+  return Object.keys(releaseNotes);
+}

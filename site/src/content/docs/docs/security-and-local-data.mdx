@@ -15,9 +15,20 @@ Git hooks are disabled for managed operations. ReviewArc never runs project buil
 
 GitHub authentication is delegated to your installed `gh` CLI. ReviewArc does not store a separate GitHub token. The Git transport follows the active account's `gh` protocol setting.
 
-Codex runs in read-only mode with structured output. ReviewArc validates AI-provided paths and line ranges before displaying them and labels unsupported claims as unverified.
+Network access is limited to the services required for the workflow: GitHub for repository and pull request data, managed Git remotes for revision fetches, Codex for the analysis you explicitly start, and `reviewarc.dev` for signed update checks.
 
-Network access is limited to the services required for the workflow: GitHub for repository and pull request data, managed Git remotes for revision fetches, and Codex for the analysis you explicitly start.
+## What leaves your machine
+
+Analysis runs through your installed `codex` CLI under your own Codex account, so the analysis prompt is sent to the model provider that account is configured for. When you start an analysis, that prompt contains:
+
+- the pull request metadata, including its title, description, and existing review discussion
+- the base and head revisions and the list of changed files
+- the unified diff of the change
+- bounded excerpts of repository files needed for context, plus any repository instruction files
+
+ReviewArc invokes Codex in its read-only sandbox with an ephemeral session, no shell environment, and no command tools, against an isolated snapshot of the reviewed revision. Codex returns structured JSON; ReviewArc validates every AI-provided path and line range against the reviewed revision before displaying it, and labels unsupported claims as unverified.
+
+Nothing else is sent anywhere. Your notes, drafts, chapter progress, and the rest of the analysis stay in local storage until you explicitly publish a review to GitHub.
 
 ## Publishing boundary
 

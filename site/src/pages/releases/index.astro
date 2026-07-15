@@ -1,0 +1,124 @@
+---
+import "../../styles/landing.css";
+import "../../styles/release.css";
+import reviewArcMark from "../../assets/reviewarc-mark.svg";
+import ThemeControl from "../../components/ThemeControl.astro";
+import ThemeBootstrap from "../../components/ThemeBootstrap.astro";
+import { releaseNotesFor, releaseNoteVersions } from "../../lib/release-notes";
+import { releaseChannelForVersion } from "../../lib/release-manifest";
+
+const compareVersionsDesc = (a: string, b: string) => {
+  const parse = (v: string) => {
+    const [core, pre = ""] = v.split("-", 2);
+    return { core: core.split(".").map(Number), pre: pre.split(".") };
+  };
+  const va = parse(a);
+  const vb = parse(b);
+  for (let i = 0; i < 3; i += 1) {
+    if (va.core[i] !== vb.core[i]) return vb.core[i] - va.core[i];
+  }
+  for (let i = 0; i < Math.max(va.pre.length, vb.pre.length); i += 1) {
+    const pa = va.pre[i] ?? "";
+    const pb = vb.pre[i] ?? "";
+    if (pa === pb) continue;
+    const na = Number(pa);
+    const nb = Number(pb);
+    if (Number.isFinite(na) && Number.isFinite(nb)) return nb - na;
+    return pa < pb ? 1 : -1;
+  }
+  return 0;
+};
+
+const releases = releaseNoteVersions()
+  .slice()
+  .sort(compareVersionsDesc)
+  .map((version) => ({
+    version,
+    channel: releaseChannelForVersion(version),
+    notes: releaseNotesFor(version),
+  }));
+
+const description = "Release notes and signed macOS downloads for every published ReviewArc build.";
+const canonical = new URL("/releases/", Astro.site);
+const ogImage = new URL("/images/og/reviewarc-og.png", Astro.site);
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f6f8fb" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#171d26" />
+    <meta name="description" content={description} />
+    <title>ReviewArc releases</title>
+    <link rel="canonical" href={canonical.href} />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="ReviewArc" />
+    <meta property="og:title" content="ReviewArc releases" />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical.href} />
+    <meta property="og:image" content={ogImage.href} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <ThemeBootstrap />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preload" href="/fonts/commissioner-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/spline-sans-mono-latin.woff2" as="font" type="font/woff2" crossorigin />
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to main content</a>
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="ReviewArc home">
+        <img class="brand-mark" src={reviewArcMark.src} alt="" width="31" height="25" />
+        <span>ReviewArc</span>
+      </a>
+      <nav aria-label="Primary navigation">
+        <a class="wide-nav-link" href="/#review-arc">How it works</a>
+        <a href="/docs/">Docs</a>
+        <a class="header-download" href="/#download">Download</a>
+        <ThemeControl />
+      </nav>
+    </header>
+
+    <main id="main-content" class="release-page">
+      <header class="release-heading">
+        <a class="back-link" href="/">← ReviewArc home</a>
+        <h1>ReviewArc <span>releases</span></h1>
+        <p class="release-summary">
+          Every published build, newest first. Each release page carries the signed
+          universal macOS download, its SHA-256 checksum, and what changed.
+        </p>
+      </header>
+
+      <section class="release-index" aria-label="Published releases">
+        <ol class="release-index-list">
+          {releases.map(({ version, channel, notes }) => (
+            <li>
+              <a href={`/releases/v${version}/`}>
+                <span class="release-index-version">
+                  <strong>{version}</strong>
+                  <span class="release-index-channel">{channel === "beta" ? "Beta" : "Stable"}</span>
+                </span>
+                {notes && <span class="release-index-summary">{notes.summary}</span>}
+              </a>
+            </li>
+          ))}
+        </ol>
+        <p class="muted-copy release-index-note">
+          The download on the <a href="/#download">home page</a> always points at the latest signed build.
+        </p>
+      </section>
+    </main>
+
+    <footer>
+      <a class="brand footer-brand" href="/" aria-label="ReviewArc home">
+        <img class="brand-mark" src={reviewArcMark.src} alt="" width="31" height="25" />
+        <span>ReviewArc</span>
+      </a>
+      <span>A focused pull request reviewer for macOS.</span>
+      <nav aria-label="Footer navigation"><a href="/docs/">Docs</a><a href="/docs/security-and-local-data/">Security</a><a href="/#download">Download</a></nav>
+    </footer>
+  </body>
+</html>

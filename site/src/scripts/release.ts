@@ -82,7 +82,7 @@ const renderRelease = (release: ReleaseManifest) => {
   });
   setStatus("ready", `macOS ${artifact.minimumVersion}+ · Apple notarized · SHA-256 ${artifact.sha256.slice(0, 12)}…`);
   if (releaseDetails) {
-    releaseDetails.href = `/releases/v${release.version}`;
+    releaseDetails.href = `/releases/v${release.version}/`;
     releaseDetails.textContent = "Release notes and checksum";
     releaseDetails.hidden = false;
   }
