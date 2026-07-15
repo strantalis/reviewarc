@@ -7,6 +7,13 @@ import type { AnalysisConfiguration, BootstrapState, EnvironmentState, Repositor
 const paths = {root: '/tmp/reviewarc', repositories: '/tmp/reviewarc/repos', worktrees: '/tmp/reviewarc/worktrees', database: '/tmp/reviewarc/db.sqlite', logs: '/tmp/reviewarc/logs', cache: '/tmp/reviewarc/cache'}
 const idleUpdate: SoftwareUpdateStatus = {currentVersion: '0.1.0', currentBuild: '7', state: 'idle', channel: 'stable'}
 const analysisConfiguration: AnalysisConfiguration = {defaultProfile: {harness: 'codex', model: 'gpt-5', reasoning: 'medium'}, harnesses: [{id: 'codex', label: 'Codex', availability: 'available', eligible: true, version: '1.2.3', capabilities: {jsonSchema: true, readOnly: true, progress: true, contextTransport: ['reviewarcTools']}, models: [{id: 'gpt-5', label: 'GPT-5', reasoningLevels: [{id: 'medium', label: 'Medium'}, {id: 'high', label: 'High'}]}, {id: 'gpt-5-mini', label: 'GPT-5 mini', reasoningLevels: [{id: 'low', label: 'Low'}]}]}]}
+const dualHarnessConfiguration: AnalysisConfiguration = {
+  defaultProfile: {harness: 'claude', model: 'sonnet', reasoning: 'high'},
+  harnesses: [
+    ...analysisConfiguration.harnesses,
+    {id: 'claude', label: 'Claude Code', availability: 'available', eligible: true, version: '2.1.0', capabilities: {jsonSchema: true, readOnly: true, progress: true, contextTransport: ['reviewarcTools']}, models: [{id: 'sonnet', label: 'Sonnet', reasoningLevels: [{id: 'medium', label: 'Medium'}, {id: 'high', label: 'High'}]}]},
+  ],
+}
 
 function reviewSession(): ReviewSession {
   const evidence = {id: 'evidence-1', path: 'src/limiter.ts', revision: 'head' as const, startLine: 10, endLine: 13, validationStatus: 'valid' as const}
@@ -532,6 +539,46 @@ describe('Repository sources', () => {
 })
 
 describe('Analysis setup', () => {
+  it('does not expose a fake Codex profile while the saved Claude configuration is loading', async () => {
+    const session = reviewSession()
+    installBackend({dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: [session.pullRequest]})
+    let resolveConfiguration!: (configuration: AnalysisConfiguration) => void
+    const getConfiguration = vi.fn(() => new Promise<AnalysisConfiguration>((resolve) => { resolveConfiguration = resolve }))
+    const start = vi.fn().mockResolvedValue({id: 'operation-1', sessionId: session.id, kind: 'analysis', stage: 'preparingContext', message: 'Preparing context', state: 'running'})
+    Object.assign(window.go!.main!.App!, {
+      GetAnalysisConfiguration: getConfiguration,
+      OpenPullRequest: vi.fn().mockResolvedValue(session),
+      RefreshPullRequestContext: vi.fn().mockResolvedValue(session),
+      StartAnalysisWithProfile: start,
+    })
+    window.runtime = {EventsOn: vi.fn(() => () => {})}
+
+    render(<App/>)
+    fireEvent.click(await screen.findByRole('button', {name: /Record quota decisions/}))
+    expect(await screen.findByText('Loading AI analysis setup…')).toBeInTheDocument()
+    expect(screen.queryByRole('button', {name: 'Reanalyze'})).not.toBeInTheDocument()
+    expect(start).not.toHaveBeenCalled()
+
+    resolveConfiguration(dualHarnessConfiguration)
+    expect(await screen.findByLabelText('Analysis profile: Claude Code, Sonnet, High')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Reanalyze'}))
+    await waitFor(() => expect(start).toHaveBeenCalledWith(session.id, {profile: {harness: 'claude', model: 'sonnet', reasoning: 'high'}, saveAsDefault: false}))
+  })
+
+  it('replaces the legacy toolbar profile with the persisted profile when configuration resolves', async () => {
+    const session = reviewSession()
+    const start = vi.fn().mockResolvedValue({id: 'operation-1', sessionId: session.id, kind: 'analysis', stage: 'preparingContext', message: 'Preparing context', state: 'running'})
+    window.go = {main: {App: {StartAnalysisWithProfile: start}}}
+    window.runtime = {EventsOn: vi.fn(() => () => {})}
+    const {rerender} = render(<OverviewScreen session={session} analysisConfiguration={analysisConfiguration} legacyAnalysis onBack={vi.fn()} onSession={vi.fn()} onReview={vi.fn()}/>)
+
+    expect(screen.getByLabelText('Analysis profile: Codex, GPT-5, Medium')).toBeInTheDocument()
+    rerender(<OverviewScreen session={session} analysisConfiguration={dualHarnessConfiguration} legacyAnalysis={false} onBack={vi.fn()} onSession={vi.fn()} onReview={vi.fn()}/>)
+    expect(await screen.findByLabelText('Analysis profile: Claude Code, Sonnet, High')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Reanalyze'}))
+    await waitFor(() => expect(start).toHaveBeenCalledWith(session.id, {profile: {harness: 'claude', model: 'sonnet', reasoning: 'high'}, saveAsDefault: false}))
+  })
+
   it('configures the recommended profile inline on the first analysis', async () => {
     const base = reviewSession()
     const session: ReviewSession = {...base, analysis: undefined, analysisStatus: 'notStarted', chapters: [], progress: {total: 0, reviewed: 0, blocked: 0, clarify: 0, percent: 0}, pullRequest: {...base.pullRequest, analysisStatus: 'notStarted', progress: {total: 0, reviewed: 0, blocked: 0, clarify: 0, percent: 0}}}

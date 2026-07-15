@@ -122,8 +122,8 @@ export function App() {
   useEffect(() => {
     if (!bootstrap || (screen !== 'settings' && screen !== 'overview') || analysisConfiguration || typeof window.go?.main?.App?.GetAnalysisConfiguration !== 'function') return
     void (async () => {
-      try { setAnalysisConfiguration(await backend.getAnalysisConfiguration()) }
-      catch { /* A pre-harness backend remains usable through the legacy Codex profile. */ }
+      try { setAnalysisConfigurationError(''); setAnalysisConfiguration(await backend.getAnalysisConfiguration()) }
+      catch (err) { setAnalysisConfigurationError(errorText(err)) }
     })()
   }, [analysisConfiguration, bootstrap, screen])
   useEffect(() => {
@@ -203,18 +203,24 @@ export function App() {
   const missingRequired = bootstrap.dependencies.filter((dep) => dep.name !== 'codex' && dep.state !== 'available')
   if (missingRequired.length || !bootstrap.account) return <DependencyGate state={bootstrap} onRefresh={() => void refreshEnvironment(true)} refreshing={loading} error={error}/>
 
+  const configurableAnalysisBackend = typeof window.go?.main?.App?.GetAnalysisConfiguration === 'function'
+  const effectiveAnalysisConfiguration = analysisConfiguration ?? (configurableAnalysisBackend ? undefined : legacyAnalysisConfiguration(bootstrap.dependencies))
+
   return <div className="app-shell">
     <AppHeader state={bootstrap} screen={screen} onNavigate={(next) => { setScreen(next); if (next === 'inbox') { openRequest.current++; setSession(undefined); setOpeningPR(undefined) } }}/>
     {(softwareUpdate?.state === 'available' || softwareUpdate?.state === 'ready') && softwareUpdate.release && softwareUpdate.release.build !== dismissedUpdateBuild && <UpdateBanner update={softwareUpdate} busy={updateBusy} onLater={() => setDismissedUpdateBuild(softwareUpdate.release!.build)} onInstall={() => setInstallUpdateOpen(true)}/>}
     {error && <div className="global-error"><ErrorBanner message={error} onRetry={() => setError('')} actionLabel="Dismiss"/></div>}
     {screen === 'sources' && <SourceSelector state={bootstrap} onDone={async () => { const next = await backend.bootstrap(); setBootstrap({...next, account: bootstrap.account}); setScreen('inbox') }} />}
     {screen === 'settings' && (
-      <SettingsScreen state={bootstrap} theme={theme.preference} onThemeChange={theme.setPreference} update={softwareUpdate} updateBusy={updateBusy} onCheckUpdate={checkForUpdates} onSetUpdateChannel={setUpdateChannel} onInstallUpdate={() => setInstallUpdateOpen(true)} onSources={() => setScreen('sources')} analysisConfiguration={analysisConfiguration ?? legacyAnalysisConfiguration(bootstrap.dependencies)} analysisConfigurationBusy={analysisConfigurationBusy} analysisConfigurationError={analysisConfigurationError} onRefreshAnalysis={refreshAnalysisHarnesses} onSaveAnalysisDefaults={saveAnalysisDefaults}/>
+      <SettingsScreen state={bootstrap} theme={theme.preference} onThemeChange={theme.setPreference} update={softwareUpdate} updateBusy={updateBusy} onCheckUpdate={checkForUpdates} onSetUpdateChannel={setUpdateChannel} onInstallUpdate={() => setInstallUpdateOpen(true)} onSources={() => setScreen('sources')} analysisConfiguration={effectiveAnalysisConfiguration} analysisConfigurationLoading={configurableAnalysisBackend && !analysisConfiguration && !analysisConfigurationError} analysisConfigurationBusy={analysisConfigurationBusy} analysisConfigurationError={analysisConfigurationError} onRefreshAnalysis={refreshAnalysisHarnesses} onSaveAnalysisDefaults={saveAnalysisDefaults}/>
     )}
     {screen === 'inbox' && <InboxScreen state={bootstrap} onUpdate={(inbox) => setBootstrap({...bootstrap, inbox})} onOpen={openPR}/>}
     {openingPR && screen === 'overview' && <OpeningPullRequest pr={openingPR} onBack={() => { openRequest.current++; setOpeningPR(undefined); setScreen('inbox') }}/>}
-    {session && screen === 'overview' && (
-      <OverviewScreen session={session} analysisConfiguration={analysisConfiguration ?? legacyAnalysisConfiguration(bootstrap.dependencies)} legacyAnalysis={!analysisConfiguration} onAnalysisConfiguration={(configuration) => setAnalysisConfiguration(configuration)} onRefreshHarnesses={refreshAnalysisHarnesses} onOpenSettings={() => setScreen('settings')} onBack={() => { openRequest.current++; setSession(undefined); setReviewChapterId(''); setScreen('inbox') }} onSession={setSession} onReview={(chapterId) => { setReviewChapterId(chapterId ?? ''); setScreen('review') }}/>
+    {session && screen === 'overview' && !effectiveAnalysisConfiguration && (
+      <AnalysisConfigurationGate session={session} error={analysisConfigurationError} busy={analysisConfigurationBusy} onRetry={refreshAnalysisHarnesses} onBack={() => { openRequest.current++; setSession(undefined); setReviewChapterId(''); setScreen('inbox') }}/>
+    )}
+    {session && screen === 'overview' && effectiveAnalysisConfiguration && (
+      <OverviewScreen session={session} analysisConfiguration={effectiveAnalysisConfiguration} legacyAnalysis={!configurableAnalysisBackend} onAnalysisConfiguration={(configuration) => setAnalysisConfiguration(configuration)} onRefreshHarnesses={refreshAnalysisHarnesses} onOpenSettings={() => setScreen('settings')} onBack={() => { openRequest.current++; setSession(undefined); setReviewChapterId(''); setScreen('inbox') }} onSession={setSession} onReview={(chapterId) => { setReviewChapterId(chapterId ?? ''); setScreen('review') }}/>
     )}
     {session && screen === 'review' && (
       <ReviewWorkspace session={session} initialChapterId={reviewChapterId} onSession={setSession} onBack={() => setScreen('overview')}/>
@@ -222,6 +228,11 @@ export function App() {
     {commandOpen && <CommandPalette items={bootstrap.inbox} onClose={() => setCommandOpen(false)} onOpen={(pr) => { setCommandOpen(false); void openPR(pr) }}/>}
     {installUpdateOpen && softwareUpdate?.release && <UpdateInstallConfirmation update={softwareUpdate} busy={updateBusy} onCancel={() => setInstallUpdateOpen(false)} onConfirm={() => { setInstallUpdateOpen(false); void installUpdate() }}/>}
   </div>
+}
+
+function AnalysisConfigurationGate({session, error, busy, onRetry, onBack}: {session: ReviewSession; error: string; busy: boolean; onRetry: () => void; onBack: () => void}) {
+  const pr = session.pullRequest
+  return <main className="detail-page opening-pr" aria-busy={!error || busy}><div className="detail-top"><button className="button text" onClick={onBack}><ArrowLeft size={16}/>Inbox</button></div><header className="pr-hero"><div><span className="repo-label">{repoName(pr)}</span><h1><span>#{pr.ref.number}</span> {pr.title}</h1></div><div className="opening-status">{!error || busy ? <><LoaderCircle className="spin" size={17}/><span>Loading AI analysis setup…</span></> : <><AlertTriangle size={17}/><span>AI analysis setup could not be loaded.</span><button className="button secondary small" onClick={onRetry}>Try again</button></>}</div></header>{error && !busy && <ErrorBanner message={error}/>}<section className="opening-detail"><Skeleton rows={4}/></section></main>
 }
 
 function OpeningPullRequest({pr, onBack}: {pr: PullRequestSummary; onBack: () => void}) {
@@ -540,7 +551,7 @@ function operationFailure(message: string, hasPreviousAnalysis: boolean): Analys
 
 export function OverviewScreen({session, analysisConfiguration = legacyOverviewAnalysisConfiguration, legacyAnalysis = true, onAnalysisConfiguration = () => {}, onRefreshHarnesses = () => {}, onOpenSettings = () => {}, onBack, onSession, onReview}: {session: ReviewSession; analysisConfiguration?: AnalysisConfiguration; legacyAnalysis?: boolean; onAnalysisConfiguration?: (configuration: AnalysisConfiguration) => void; onRefreshHarnesses?: () => void; onOpenSettings?: () => void; onBack: () => void; onSession: (session: ReviewSession) => void; onReview: (chapterId?: string) => void}) {
   const pr = session.pullRequest; const analysis = session.analysis; const [operation, setOperation] = useState<Operation>(); const [events, setEvents] = useState<OperationEvent[]>([]); const [failure, setFailure] = useState<AnalysisFailure>(); const [profile, setProfile] = useState<AnalysisProfile | undefined>(() => recommendedProfile(analysisConfiguration)); const [profileOpen, setProfileOpen] = useState(false)
-  useEffect(() => { setProfile((current) => current && analysisConfiguration.harnesses.some((harness) => harness.id === current.harness) ? current : recommendedProfile(analysisConfiguration)) }, [analysisConfiguration])
+  useEffect(() => { setProfile(recommendedProfile(analysisConfiguration)); setProfileOpen(false) }, [analysisConfiguration])
   useEffect(() => { const offOperation = backend.on('reviewarc:operation:v1', (raw) => { const op = raw as Operation; if (op.sessionId && op.sessionId !== session.id) return; setOperation(op); const completed = op.state === 'complete' || op.state === 'completed'; const failed = op.state === 'failed'; const cancelled = op.state === 'cancelled'; const terminal = completed || failed || cancelled; const event: OperationEvent = {stage: op.stage, message: op.message, progress: op.progress, status: completed ? 'complete' : failed ? 'failed' : cancelled ? 'complete' : 'running'}; setEvents((current) => [...current.slice(-7), event]); if (failed) setFailure(op.failure ?? operationFailure(op.message || 'The analysis process stopped unexpectedly.', Boolean(analysis))); if (terminal) backend.getSession(session.id).then(onSession).catch((err) => setFailure({code: 'session_reload_failed', title: 'Analysis state could not be refreshed', message: 'Return to the inbox and reopen this pull request.', action: 'none', technicalDetails: errorText(err)})) }); const offSession = backend.on('reviewarc:session:v1', (raw) => { const value = raw as {sessionId?: string}; if (value.sessionId === session.id) backend.getSession(session.id).then(onSession).catch(() => {}) }); return () => { offOperation(); offSession() } }, [analysis, session.id, onSession])
   const analyze = async () => {
     const selected = profile ?? recommendedProfile(analysisConfiguration)
@@ -974,7 +985,7 @@ function UpdateInstallConfirmation({update, busy, onCancel, onConfirm}: {update:
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel() }}><section className="publish-modal" role="dialog" aria-modal="true" aria-labelledby="update-install-title"><header><div><span><Download size={17}/></span><div><h2 id="update-install-title">Install ReviewArc {update.release?.version}?</h2><p>{ready ? 'The update is downloaded and ready.' : 'ReviewArc will download the signed update.'}</p></div></div><button className="icon-button" aria-label="Close" disabled={busy} onClick={onCancel}><X size={17}/></button></header><div className="publish-comments"><article><p>ReviewArc will close and reopen to finish the update. macOS may ask for an administrator username and password to replace the app in Applications.</p></article></div><footer><button className="button secondary" disabled={busy} onClick={onCancel}>Cancel</button><button className="button primary" disabled={busy} onClick={onConfirm}>{busy ? <LoaderCircle className="spin" size={15}/> : <Download size={15}/>} {ready ? 'Install and restart' : 'Install update'}</button></footer></section></div>
 }
 
-export function SettingsScreen({state, theme = 'system', onThemeChange = () => {}, update, updateBusy = false, onCheckUpdate = () => {}, onSetUpdateChannel = () => {}, onInstallUpdate = () => {}, onSources, analysisConfiguration, analysisConfigurationBusy = false, analysisConfigurationError = '', onRefreshAnalysis = () => {}, onSaveAnalysisDefaults = () => {}}: {state: BootstrapState; theme?: ThemePreference; onThemeChange?: (theme: ThemePreference) => void; update?: SoftwareUpdateStatus; updateBusy?: boolean; onCheckUpdate?: () => void; onSetUpdateChannel?: (channel: UpdateChannel) => void; onInstallUpdate?: () => void; onSources: () => void; analysisConfiguration?: AnalysisConfiguration; analysisConfigurationBusy?: boolean; analysisConfigurationError?: string; onRefreshAnalysis?: () => void; onSaveAnalysisDefaults?: (profile: AnalysisProfile) => Promise<void> | void}) {
+export function SettingsScreen({state, theme = 'system', onThemeChange = () => {}, update, updateBusy = false, onCheckUpdate = () => {}, onSetUpdateChannel = () => {}, onInstallUpdate = () => {}, onSources, analysisConfiguration, analysisConfigurationLoading = false, analysisConfigurationBusy = false, analysisConfigurationError = '', onRefreshAnalysis = () => {}, onSaveAnalysisDefaults = () => {}}: {state: BootstrapState; theme?: ThemePreference; onThemeChange?: (theme: ThemePreference) => void; update?: SoftwareUpdateStatus; updateBusy?: boolean; onCheckUpdate?: () => void; onSetUpdateChannel?: (channel: UpdateChannel) => void; onInstallUpdate?: () => void; onSources: () => void; analysisConfiguration?: AnalysisConfiguration; analysisConfigurationLoading?: boolean; analysisConfigurationBusy?: boolean; analysisConfigurationError?: string; onRefreshAnalysis?: () => void; onSaveAnalysisDefaults?: (profile: AnalysisProfile) => Promise<void> | void}) {
   const protocol = (state.gitProtocol || 'https').toUpperCase()
   const selectedSources = state.selections.filter((selection) => selection.enabled).length
   const themeOptions = [
@@ -992,7 +1003,7 @@ export function SettingsScreen({state, theme = 'system', onThemeChange = () => {
           <p className="theme-preference-help">System follows the appearance selected in macOS and updates when it changes.</p>
         </div>
       </section>
-      <AIAnalysisSettings configuration={analysisConfiguration ?? legacyAnalysisConfiguration(state.dependencies)} busy={analysisConfigurationBusy} error={analysisConfigurationError} onRefresh={onRefreshAnalysis} onSave={onSaveAnalysisDefaults}/>
+      <AIAnalysisSettings configuration={analysisConfiguration ?? {harnesses: []}} loading={analysisConfigurationLoading} busy={analysisConfigurationBusy} error={analysisConfigurationError} onRefresh={onRefreshAnalysis} onSave={onSaveAnalysisDefaults}/>
       <section>
         <div className="settings-section-heading"><h2>Connections</h2><p>Tool readiness, GitHub identity, and Git transport.</p></div>
         <div className="settings-section-body settings-rows">

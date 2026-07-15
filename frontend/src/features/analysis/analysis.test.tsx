@@ -21,6 +21,18 @@ describe('analysis configuration components', () => {
     expect(recommendedProfile(configuration)).toEqual({harness: 'codex', model: 'gpt-5', reasoning: 'medium'})
   })
 
+  it('prefers Codex for a first run but honors a saved Claude default', () => {
+    const claude = {
+      id: 'claude', label: 'Claude Code', availability: 'available' as const, eligible: true,
+      capabilities: {jsonSchema: true, readOnly: true, progress: true, contextTransport: ['reviewarcTools' as const]},
+      models: [{id: 'sonnet', label: 'Sonnet', recommended: true, reasoningLevels: [{id: 'high', label: 'High', recommended: true}]}],
+    }
+    const harnesses = [claude, ...configuration.harnesses]
+    expect(recommendedProfile({harnesses})).toEqual({harness: 'codex', model: 'gpt-5', reasoning: 'medium'})
+    expect(recommendedProfile({harnesses: [claude]})).toEqual({harness: 'claude', model: 'sonnet', reasoning: 'high'})
+    expect(recommendedProfile({harnesses, defaultProfile: {harness: 'claude', model: 'sonnet', reasoning: 'high'}})).toEqual({harness: 'claude', model: 'sonnet', reasoning: 'high'})
+  })
+
   it('saves the three-part default from the single AI Analysis section', async () => {
     const onSave = vi.fn().mockResolvedValue(undefined)
     render(<AIAnalysisSettings configuration={configuration} onRefresh={vi.fn()} onSave={onSave}/>)
@@ -31,6 +43,13 @@ describe('analysis configuration components', () => {
     fireEvent.click(screen.getByRole('button', {name: 'Save defaults'}))
     await waitFor(() => expect(onSave).toHaveBeenCalledWith({harness: 'codex', model: 'gpt-5', reasoning: 'medium'}))
     expect(await screen.findByRole('status')).toHaveTextContent('Defaults saved.')
+  })
+
+  it('does not show a fallback harness while settings are still loading', () => {
+    render(<AIAnalysisSettings configuration={{harnesses: []}} loading onRefresh={vi.fn()} onSave={vi.fn()}/>)
+    expect(screen.getByRole('status')).toHaveTextContent('Loading installed analysis harnesses')
+    expect(screen.queryByRole('combobox', {name: 'Analysis harness'})).not.toBeInTheDocument()
+    expect(screen.queryByText('No compatible AI harness found')).not.toBeInTheDocument()
   })
 
   it('keeps provider output behind technical details and suppresses unchanged retry', () => {

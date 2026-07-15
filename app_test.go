@@ -46,6 +46,25 @@ func (appAnalysisAdapter) AnalyzeChange(context.Context, agent.AnalyzeInput) (<-
 	return nil, errors.New("analysis should not start before pull request context is loaded")
 }
 
+type selectableAppAnalysisAdapter struct{ id domain.HarnessID }
+
+func (a selectableAppAnalysisAdapter) ID() domain.HarnessID { return a.id }
+func (a selectableAppAnalysisAdapter) Capabilities(context.Context) (domain.HarnessCapabilities, error) {
+	name := "Codex"
+	if a.id == domain.HarnessClaude {
+		name = "Claude Code"
+	}
+	return domain.HarnessCapabilities{
+		ID: a.id, Name: name, State: domain.HarnessAvailable, Version: "fixture",
+		SupportsJSONSchema: true, EnforcesReadOnly: true, SupportsProgress: true, SupportsCancellation: true,
+		ContextTransports: []domain.ContextTransport{domain.ContextReviewArcTools}, DefaultModel: "fixture",
+		Models: []domain.ModelCapability{{ID: "fixture", Name: "Fixture", ReasoningLevels: []domain.ReasoningLevel{domain.ReasoningMedium}, DefaultReasoningLevel: domain.ReasoningMedium}},
+	}, nil
+}
+func (a selectableAppAnalysisAdapter) AnalyzeChange(context.Context, agent.AnalyzeInput) (<-chan agent.Event, error) {
+	return nil, fmt.Errorf("%s analysis should not start before pull request context is loaded", a.id)
+}
+
 type pullRequestFixtureRunner struct {
 	mu          sync.Mutex
 	metadata    []byte
@@ -810,6 +829,59 @@ func TestStartAnalysisLoadsFullContextBeforePreparingSnapshot(t *testing.T) {
 		if !strings.Contains(endpoint, "/reviews") && !strings.Contains(endpoint, "/comments") && !strings.Contains(endpoint, "/check-runs") {
 			t.Fatalf("analysis reached non-context endpoint before context completed: %q", endpoint)
 		}
+	}
+}
+
+func TestStartAnalysisWithProfilePersistsTheExplicitHarnessInsteadOfTheSavedDefault(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	headSHA := strings.Repeat("b", 40)
+	session := domain.ReviewSession{ID: "explicit-profile", PullRequest: domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}, Number: 7}}, HeadSHA: headSHA}, BaseSHA: strings.Repeat("a", 40), HeadSHA: headSHA, Status: domain.SessionReady, AnalysisStatus: domain.AnalysisNotStarted}
+	if err := store.SaveSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveAnalysisProfile(ctx, domain.AnalysisProfile{Harness: domain.HarnessCodex, Model: "fixture", Reasoning: domain.ReasoningMedium}); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := agent.NewRegistry(selectableAppAnalysisAdapter{id: domain.HarnessCodex}, selectableAppAnalysisAdapter{id: domain.HarnessClaude})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &pullRequestFixtureRunner{contextErr: errors.New("discussion unavailable")}
+	app := &App{github: githubclient.New(runner), store: store, runner: runner, harnesses: registry, prepared: map[string]preparedState{}, active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}}
+	profile := domain.AnalysisProfile{Harness: domain.HarnessClaude, Model: "fixture", Reasoning: domain.ReasoningMedium}
+
+	if _, err := app.StartAnalysisWithProfile(session.ID, AnalysisRequest{Profile: &profile}); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.ListAnalysisRuns(ctx, session.ID)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("runs=%+v err=%v", runs, err)
+	}
+	if runs[0].Profile != profile {
+		t.Fatalf("analysis run profile=%+v, want explicit profile %+v", runs[0].Profile, profile)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		current, loadErr := store.GetSession(ctx, session.ID)
+		if loadErr != nil {
+			t.Fatal(loadErr)
+		}
+		if current.AnalysisStatus == domain.AnalysisFailed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("analysis did not finish after the fixture context failure")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	saved, err := store.GetAnalysisProfile(ctx)
+	if err != nil || saved.Harness != domain.HarnessCodex {
+		t.Fatalf("saved default=%+v err=%v, want Codex unchanged", saved, err)
 	}
 }
 

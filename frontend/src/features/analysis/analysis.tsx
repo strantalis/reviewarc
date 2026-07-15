@@ -8,7 +8,8 @@ import type {
 
 export function recommendedProfile(configuration: AnalysisConfiguration): AnalysisProfile | undefined {
   if (configuration.defaultProfile) return configuration.defaultProfile
-  const harness = configuration.harnesses.find((item) => item.eligible && item.availability === 'available')
+  const available = configuration.harnesses.filter((item) => item.eligible && item.availability === 'available')
+  const harness = available.find((item) => item.id === 'codex') ?? available[0]
   const model = harness?.models.find((item) => item.recommended) ?? harness?.models[0]
   const reasoning = model?.reasoningLevels.find((item) => item.recommended) ?? model?.reasoningLevels[0]
   return harness && model && reasoning ? {harness: harness.id, model: model.id, reasoning: reasoning.id} : undefined
@@ -133,7 +134,7 @@ export function AnalysisRunDetails({run, configuration}: {run: AnalysisRun; conf
   </dl>{run.coverage.omittedPaths.length ? <details><summary>Files not inspected</summary><ul>{run.coverage.omittedPaths.map((path) => <li key={path}><code>{path}</code></li>)}</ul></details> : null}</div></details>
 }
 
-export function AIAnalysisSettings({configuration, busy = false, error = '', onRefresh, onSave}: {configuration: AnalysisConfiguration; busy?: boolean; error?: string; onRefresh: () => void; onSave: (profile: AnalysisProfile) => Promise<void> | void}) {
+export function AIAnalysisSettings({configuration, loading = false, busy = false, error = '', onRefresh, onSave}: {configuration: AnalysisConfiguration; loading?: boolean; busy?: boolean; error?: string; onRefresh: () => void; onSave: (profile: AnalysisProfile) => Promise<void> | void}) {
   const initial = useMemo(() => recommendedProfile(configuration), [configuration])
   const [profile, setProfile] = useState(initial)
   const [saving, setSaving] = useState(false)
@@ -147,7 +148,7 @@ export function AIAnalysisSettings({configuration, busy = false, error = '', onR
     try { await onSave(profile); setSaved(true) } finally { setSaving(false) }
   }
   return <section className="ai-analysis-settings"><div className="settings-section-heading"><h2>AI Analysis</h2><p>Choose the local AI harness ReviewArc uses for guided reviews.</p></div><div className="settings-section-body">
-    {available.length > 0 && profile ? <>
+    {loading ? <div className="analysis-settings-status" role="status"><LoaderCircle className="spin" size={14}/><div><strong>Loading installed analysis harnesses…</strong><small>ReviewArc will show the saved default when inspection completes.</small></div></div> : available.length > 0 && profile ? <>
       <AnalysisProfilePicker configuration={configuration} value={profile} onChange={(next) => { setProfile(next); setSaved(false) }} disabled={busy || saving} id="settings-analysis-profile"/>
       <div className="analysis-settings-status"><span className="setup-status available"><Check size={14}/></span><div><strong>{selected?.label} {selected?.version || 'detected'}</strong><small>Structured output and read-only analysis are available.</small></div><button className="button secondary small" disabled={busy || saving} onClick={() => void save()}>{saving ? <LoaderCircle className="spin" size={13}/> : <Check size={13}/>}Save defaults</button></div>
     </> : <NoHarnessState configuration={configuration} onRefresh={onRefresh}/>}
