@@ -832,6 +832,40 @@ func TestStartAnalysisLoadsFullContextBeforePreparingSnapshot(t *testing.T) {
 	}
 }
 
+func TestActiveAnalysisOperationRestoresHistoryAndCancelIdentity(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	cancelled := false
+	app := &App{
+		store:             store,
+		active:            map[string]context.CancelFunc{"operation-1": func() { cancelled = true }},
+		analysisBySession: map[string]string{"session-1": "operation-1"},
+		operationHistory:  map[string][]Operation{},
+	}
+	first := Operation{ID: "operation-1", SessionID: "session-1", RunID: "run-1", Kind: "analysis", Stage: "preparingContext", State: "running", Message: "Preparing bounded review context"}
+	second := first
+	second.Stage = "analyzingChange"
+	second.Message = "Reading src/greet.go lines 1–20"
+	app.emitOperation(first)
+	app.emitOperation(second)
+
+	snapshot, err := app.GetActiveAnalysisOperation("session-1")
+	if err != nil || snapshot == nil || snapshot.Operation != second || len(snapshot.Events) != 2 || snapshot.Events[0] != first {
+		t.Fatalf("snapshot=%+v err=%v", snapshot, err)
+	}
+	if err := app.CancelOperation(snapshot.Operation.ID); err != nil || !cancelled {
+		t.Fatalf("cancelled=%t err=%v", cancelled, err)
+	}
+	second.State = "failed"
+	app.emitOperation(second)
+	if snapshot, err := app.GetActiveAnalysisOperation("session-1"); err != nil || snapshot != nil {
+		t.Fatalf("terminal snapshot=%+v err=%v", snapshot, err)
+	}
+}
+
 func TestStartAnalysisWithProfilePersistsTheExplicitHarnessInsteadOfTheSavedDefault(t *testing.T) {
 	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
 	if err != nil {

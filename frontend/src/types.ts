@@ -120,6 +120,7 @@ export interface RepositoryPage { items: Repository[]; totalCount: number; endCu
 export interface SelectedRepositoryRefresh { repositories: Repository[]; archivedKeys: string[]; errors: Record<string, string> }
 export interface InboxResult { items: PullRequestSummary[]; errors?: Record<string, string>; partial?: boolean }
 export interface Operation { id: string; sessionId?: string; kind: string; stage: string; message: string; state: string; progress?: number; runId?: string; failure?: AnalysisFailure }
+export interface OperationSnapshot { operation: Operation; events: Operation[] }
 export interface PublishItem { draftId: string; kind: 'general' | 'inline'; body: string; path?: string; startLine?: number; startSide?: 'LEFT' | 'RIGHT'; line?: number; side?: 'LEFT' | 'RIGHT' }
 export type ReviewEvent = 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES'
 export interface PublishPreview { token: string; digest: string; repository: string; number: number; headSha: string; items: PublishItem[]; event: ReviewEvent; expiresAt: string }

@@ -622,6 +622,30 @@ describe('Analysis setup', () => {
 })
 
 describe('Reanalysis state', () => {
+  it('reattaches to a running analysis with history and a working cancel action', async () => {
+    const current = reviewSession()
+    const session: ReviewSession = {...current, analysis: undefined, analysisStatus: 'running', chapters: []}
+    const cancel = vi.fn().mockResolvedValue(undefined)
+    window.go = {main: {App: {
+      GetActiveAnalysisOperation: vi.fn().mockResolvedValue({
+        operation: {id: 'operation-1', sessionId: session.id, runId: 'run-1', kind: 'analysis', stage: 'analyzingChange', state: 'running', message: 'Reading src/limiter.ts lines 10–24'},
+        events: [
+          {id: 'operation-1', sessionId: session.id, runId: 'run-1', kind: 'analysis', stage: 'preparingContext', state: 'running', message: 'Preparing bounded review context'},
+          {id: 'operation-1', sessionId: session.id, runId: 'run-1', kind: 'analysis', stage: 'analyzingChange', state: 'running', message: 'Reading src/limiter.ts lines 10–24'},
+        ],
+      }),
+      CancelOperation: cancel,
+      GetSession: vi.fn().mockResolvedValue(session),
+    }}}
+    window.runtime = {EventsOn: vi.fn(() => () => {})}
+    render(<OverviewScreen session={session} analysisConfiguration={dualHarnessConfiguration} legacyAnalysis={false} onBack={vi.fn()} onSession={vi.fn()} onReview={vi.fn()}/>)
+
+    expect(await screen.findByText('Preparing bounded review context')).toBeInTheDocument()
+    expect(screen.getByText('Reading src/limiter.ts lines 10–24')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Cancel'}))
+    await waitFor(() => expect(cancel).toHaveBeenCalledWith('operation-1'))
+  })
+
   it('restores the persisted harness failure after reopening a session', () => {
     const current = reviewSession()
     const session: ReviewSession = {

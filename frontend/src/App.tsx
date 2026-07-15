@@ -557,11 +557,48 @@ export function appendOperationEvent(current: OperationEvent[], event: Operation
   return [...current.slice(-7), event]
 }
 
+function eventForOperation(operation: Operation): OperationEvent {
+  const completed = operation.state === 'complete' || operation.state === 'completed'
+  const failed = operation.state === 'failed'
+  const cancelled = operation.state === 'cancelled'
+  return {stage: operation.stage, message: operation.message, progress: operation.progress, status: completed ? 'complete' : failed ? 'failed' : cancelled ? 'complete' : 'running'}
+}
+
+function mergeOperationEvents(history: Operation[], current: OperationEvent[]) {
+  return [...history.map(eventForOperation), ...current].reduce<OperationEvent[]>((events, event) => appendOperationEvent(events, event), [])
+}
+
 export function OverviewScreen({session, analysisConfiguration = legacyOverviewAnalysisConfiguration, legacyAnalysis = true, onAnalysisConfiguration = () => {}, onRefreshHarnesses = () => {}, onOpenSettings = () => {}, onBack, onSession, onReview}: {session: ReviewSession; analysisConfiguration?: AnalysisConfiguration; legacyAnalysis?: boolean; onAnalysisConfiguration?: (configuration: AnalysisConfiguration) => void; onRefreshHarnesses?: () => void; onOpenSettings?: () => void; onBack: () => void; onSession: (session: ReviewSession) => void; onReview: (chapterId?: string) => void}) {
   const pr = session.pullRequest; const analysis = session.analysis; const persistedFailure = session.latestAnalysisRun?.status === 'failed' ? session.latestAnalysisRun.failure : undefined; const [operation, setOperation] = useState<Operation>(); const [events, setEvents] = useState<OperationEvent[]>([]); const [failure, setFailure] = useState<AnalysisFailure | undefined>(persistedFailure); const [profile, setProfile] = useState<AnalysisProfile | undefined>(() => recommendedProfile(analysisConfiguration)); const [profileOpen, setProfileOpen] = useState(false)
   useEffect(() => { setProfile(recommendedProfile(analysisConfiguration)); setProfileOpen(false) }, [analysisConfiguration])
   useEffect(() => { setFailure(session.latestAnalysisRun?.status === 'failed' ? session.latestAnalysisRun.failure : undefined) }, [session.id, session.latestAnalysisRun?.id, session.latestAnalysisRun?.status, session.latestAnalysisRun?.failure])
-  useEffect(() => { const offOperation = backend.on('reviewarc:operation:v1', (raw) => { const op = raw as Operation; if (op.sessionId && op.sessionId !== session.id) return; setOperation(op); const completed = op.state === 'complete' || op.state === 'completed'; const failed = op.state === 'failed'; const cancelled = op.state === 'cancelled'; const terminal = completed || failed || cancelled; const event: OperationEvent = {stage: op.stage, message: op.message, progress: op.progress, status: completed ? 'complete' : failed ? 'failed' : cancelled ? 'complete' : 'running'}; setEvents((current) => appendOperationEvent(current, event)); if (failed) setFailure(op.failure ?? operationFailure(op.message || 'The analysis process stopped unexpectedly.', Boolean(analysis))); if (terminal) backend.getSession(session.id).then(onSession).catch((err) => setFailure({code: 'session_reload_failed', title: 'Analysis state could not be refreshed', message: 'Return to the inbox and reopen this pull request.', action: 'none', technicalDetails: errorText(err)})) }); const offSession = backend.on('reviewarc:session:v1', (raw) => { const value = raw as {sessionId?: string}; if (value.sessionId === session.id) backend.getSession(session.id).then(onSession).catch(() => {}) }); return () => { offOperation(); offSession() } }, [analysis, session.id, onSession])
+  useEffect(() => { setOperation(undefined); setEvents([]) }, [session.id])
+  useEffect(() => {
+    let disposed = false
+    let terminalSeen = false
+    let liveSeen = false
+    const reloadSession = () => backend.getSession(session.id).then((next) => { if (!disposed) onSession(next) }).catch((err) => { if (!disposed) setFailure({code: 'session_reload_failed', title: 'Analysis state could not be refreshed', message: 'Return to the inbox and reopen this pull request.', action: 'none', technicalDetails: errorText(err)}) })
+    const offOperation = backend.on('reviewarc:operation:v1', (raw) => {
+      const op = raw as Operation
+      if (op.sessionId && op.sessionId !== session.id) return
+      liveSeen = true
+      terminalSeen = ['complete', 'completed', 'failed', 'cancelled'].includes(op.state)
+      setOperation(op)
+      setEvents((current) => appendOperationEvent(current, eventForOperation(op)))
+      if (op.state === 'failed') setFailure(op.failure ?? operationFailure(op.message || 'The analysis process stopped unexpectedly.', Boolean(analysis)))
+      if (terminalSeen) void reloadSession()
+    })
+    const offSession = backend.on('reviewarc:session:v1', (raw) => { const value = raw as {sessionId?: string}; if (value.sessionId === session.id) void reloadSession() })
+    if (session.analysisStatus === 'running') {
+      backend.getActiveAnalysisOperation(session.id).then((snapshot) => {
+        if (disposed || terminalSeen) return
+        if (!snapshot) { void reloadSession(); return }
+        if (!liveSeen) setOperation(snapshot.operation)
+        setEvents((current) => mergeOperationEvents(snapshot.events, current))
+      }).catch((err) => { if (!disposed) setFailure(operationFailure(errorText(err), Boolean(analysis))) })
+    }
+    return () => { disposed = true; offOperation(); offSession() }
+  }, [analysis, session.id, session.analysisStatus, onSession])
   const analyze = async () => {
     const selected = profile ?? recommendedProfile(analysisConfiguration)
     if (!selected) return

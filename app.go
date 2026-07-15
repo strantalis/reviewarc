@@ -79,6 +79,10 @@ type Operation struct {
 	RunID     string                  `json:"runId,omitempty"`
 	Failure   *domain.AnalysisFailure `json:"failure,omitempty"`
 }
+type OperationSnapshot struct {
+	Operation Operation   `json:"operation"`
+	Events    []Operation `json:"events"`
+}
 type AnalysisRequest struct {
 	Profile       *domain.AnalysisProfile `json:"profile,omitempty"`
 	SaveAsDefault bool                    `json:"saveAsDefault"`
@@ -203,6 +207,7 @@ type App struct {
 	prepared          map[string]preparedState
 	active            map[string]context.CancelFunc
 	analysisBySession map[string]string
+	operationHistory  map[string][]Operation
 	publish           map[string]pendingPublish
 	threadReplies     map[string]pendingThreadReply
 	gitProtocol       func() string
@@ -231,7 +236,7 @@ func NewApp() (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	app := &App{paths: paths, detector: dependencies.New(runner), github: githubclient.New(runner), store: store, repos: gitcache.NewManager(paths.Repositories, paths.Worktrees, runner, gitcache.Options{RemoteURL: remoteURL}), runner: runner, harnesses: registry, prepared: map[string]preparedState{}, active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}, publish: map[string]pendingPublish{}, threadReplies: map[string]pendingThreadReply{}, gitProtocol: gitProtocol}
+	app := &App{paths: paths, detector: dependencies.New(runner), github: githubclient.New(runner), store: store, repos: gitcache.NewManager(paths.Repositories, paths.Worktrees, runner, gitcache.Options{RemoteURL: remoteURL}), runner: runner, harnesses: registry, prepared: map[string]preparedState{}, active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}, operationHistory: map[string][]Operation{}, publish: map[string]pendingPublish{}, threadReplies: map[string]pendingThreadReply{}, gitProtocol: gitProtocol}
 	app.configureUpdater()
 	return app, nil
 }
@@ -972,6 +977,19 @@ func (a *App) CancelOperation(id string) error {
 	cancel()
 	return nil
 }
+func (a *App) GetActiveAnalysisOperation(sessionID string) (*OperationSnapshot, error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return nil, errors.New("session ID is required")
+	}
+	a.mu.RLock()
+	operationID := a.analysisBySession[sessionID]
+	history := append([]Operation(nil), a.operationHistory[operationID]...)
+	a.mu.RUnlock()
+	if operationID == "" || len(history) == 0 {
+		return nil, nil
+	}
+	return &OperationSnapshot{Operation: history[len(history)-1], Events: history}, nil
+}
 func (a *App) SetChapterStatus(sessionID, chapterID string, status domain.ChapterStatus) (domain.ReviewSession, error) {
 	if err := a.store.SetChapterStatus(a.appContext(), sessionID, chapterID, status); err != nil {
 		return domain.ReviewSession{}, err
@@ -1455,10 +1473,28 @@ func persistenceFailure(err error) domain.AnalysisFailure {
 
 func ptrAnalysisFailure(failure domain.AnalysisFailure) *domain.AnalysisFailure { return &failure }
 func (a *App) emitOperation(op Operation) {
+	a.mu.Lock()
+	if a.operationHistory == nil {
+		a.operationHistory = map[string][]Operation{}
+	}
+	history := append(a.operationHistory[op.ID], op)
+	if len(history) > 100 {
+		history = append([]Operation(nil), history[len(history)-100:]...)
+	}
+	if operationTerminal(op) {
+		delete(a.operationHistory, op.ID)
+	} else {
+		a.operationHistory[op.ID] = history
+	}
+	a.mu.Unlock()
 	_ = a.store.SaveOperation(a.appContext(), persistence.Operation{ID: op.ID, Kind: op.Kind, Subject: op.SessionID, Status: op.State, Detail: op.Message, UpdatedAt: time.Now().UTC()})
 	if a.ctx != nil {
 		runtime.EventsEmit(a.appContext(), "reviewarc:operation:v1", op)
 	}
+}
+
+func operationTerminal(op Operation) bool {
+	return op.State == "complete" || op.State == "completed" || op.State == "failed" || op.State == "cancelled"
 }
 
 type inlineRange struct {
