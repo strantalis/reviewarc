@@ -203,6 +203,58 @@ func TestExecutableSearchDirsIncludesInstalledNVMVersion(t *testing.T) {
 	}
 }
 
+func TestExecutableSearchDirsPrefersFNMDefaultThenNewestSemanticVersion(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, ".local", "share", "fnm")
+	v9 := filepath.Join(root, "node-versions", "v9.10.0", "installation", "bin")
+	v24 := filepath.Join(root, "node-versions", "v24.1.0", "installation", "bin")
+	defaultBin := filepath.Join(root, "aliases", "default", "bin")
+	for _, dir := range []string{v9, v24, defaultBin} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dirs := executableSearchDirs([]string{"PATH=/usr/bin:/bin"}, home)
+	defaultIndex, v24Index, v9Index := -1, -1, -1
+	for index, dir := range dirs {
+		switch dir {
+		case defaultBin:
+			defaultIndex = index
+		case v24:
+			v24Index = index
+		case v9:
+			v9Index = index
+		}
+	}
+	if defaultIndex < 0 || v24Index < 0 || v9Index < 0 || !(defaultIndex < v24Index && v24Index < v9Index) {
+		t.Fatalf("fnm search order=%v", dirs)
+	}
+}
+
+func TestRefreshPathsRunsNodeCLIWithItsResolvedFNMRuntime(t *testing.T) {
+	home := t.TempDir()
+	bin := filepath.Join(home, "Library", "Application Support", "fnm", "aliases", "default", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "node"), []byte("#!/bin/sh\nprintf 'fnm-default-node\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "codex"), []byte("#!/usr/bin/env node\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runner := &ExecRunner{source: []string{"PATH=/usr/bin:/bin", "HOME=" + home}, home: home}
+	runner.RefreshPaths()
+	resolved, err := runner.ResolvedPath(Codex)
+	if err != nil || resolved != filepath.Join(bin, "codex") {
+		t.Fatalf("resolved=(%q, %v)", resolved, err)
+	}
+	result, err := runner.Run(context.Background(), Command{Tool: Codex, Timeout: time.Second})
+	if err != nil || string(result.Stdout) != "fnm-default-node\n" {
+		t.Fatalf("stdout=%q err=%v", result.Stdout, err)
+	}
+}
+
 func TestRefreshPathsDiscoversToolInstalledAfterRunnerStarts(t *testing.T) {
 	dir := t.TempDir()
 	runner := &ExecRunner{source: []string{"PATH=" + dir, "HOME=" + t.TempDir()}, home: t.TempDir()}

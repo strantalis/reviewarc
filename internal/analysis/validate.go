@@ -25,6 +25,7 @@ type Snapshot struct {
 
 func Validate(ctx context.Context, document Document, snapshot Snapshot) (domain.ReviewAnalysis, error) {
 	raw := document.raw
+	normalizeModelPresentation(&raw)
 	if raw.BaseSHA != snapshot.BaseSHA || raw.HeadSHA != snapshot.HeadSHA {
 		return domain.ReviewAnalysis{}, errors.New("analysis revisions do not match the prepared snapshot")
 	}
@@ -34,7 +35,7 @@ func Validate(ctx context.Context, document Document, snapshot Snapshot) (domain
 	if err := validateModelIdentity(raw); err != nil {
 		return domain.ReviewAnalysis{}, err
 	}
-	v := validator{ctx: ctx, files: snapshot.Files, cache: map[string][]byte{}, ids: map[string]rawEvidence{}}
+	v := validator{ctx: ctx, files: snapshot.Files, cache: map[string][]byte{}}
 	result := v.convert(raw)
 	if err := validateAnalysisSubstance(result); err != nil {
 		return domain.ReviewAnalysis{}, err
@@ -44,108 +45,83 @@ func Validate(ctx context.Context, document Document, snapshot Snapshot) (domain
 }
 
 func validateModelIdentity(raw rawAnalysis) error {
-	if strings.TrimSpace(raw.Summary) == "" {
-		return errors.New("analysis returned an empty review summary")
-	}
 	if len(raw.Chapters) == 0 {
 		return errors.New("analysis returned no review chapters")
 	}
-	unique := func(ids []string, kind, scope string) error {
-		seen := map[string]bool{}
-		for _, id := range ids {
-			id = strings.TrimSpace(id)
-			if id == "" {
-				return fmt.Errorf("analysis returned an empty %s ID", kind)
-			}
-			if seen[id] {
-				return fmt.Errorf("analysis reused %s ID %q within %s", kind, id, scope)
-			}
-			seen[id] = true
-		}
-		return nil
-	}
-	claims := func(values []rawClaim, scope string) error {
-		ids := make([]string, len(values))
-		for i, value := range values {
-			ids[i] = value.ID
-		}
-		return unique(ids, "claim", scope)
-	}
-	risks := func(values []rawRisk, scope string) error {
-		ids := make([]string, len(values))
-		for i, value := range values {
-			ids[i] = value.ID
-		}
-		return unique(ids, "risk", scope)
-	}
-	behaviors := func(values []rawBehavior, scope string) error {
-		ids := make([]string, len(values))
-		for i, value := range values {
-			ids[i] = value.ID
-		}
-		return unique(ids, "behavior", scope)
-	}
-	for _, collection := range []struct {
-		values []rawClaim
-		scope  string
-	}{{raw.Facts, "top-level facts"}, {raw.Inferences, "top-level inferences"}, {raw.Unknowns, "top-level unknowns"}} {
-		if err := claims(collection.values, collection.scope); err != nil {
-			return err
-		}
-	}
-	if err := risks(raw.Risks, "top-level risks"); err != nil {
-		return err
-	}
-	if err := behaviors(raw.BehavioralChanges, "top-level behavioral changes"); err != nil {
-		return err
-	}
-	chapterIDs, orders := map[string]bool{}, map[int]bool{}
 	for _, chapter := range raw.Chapters {
 		if strings.TrimSpace(chapter.Title) == "" || strings.TrimSpace(chapter.Purpose) == "" {
 			return fmt.Errorf("analysis returned an empty title or purpose for chapter %q", chapter.ID)
 		}
-		chapterID := strings.TrimSpace(chapter.ID)
-		if chapterID == "" {
-			return errors.New("analysis returned an empty chapter ID")
-		}
-		if chapterIDs[chapterID] {
-			return fmt.Errorf("analysis reused chapter ID %q", chapterID)
-		}
-		chapterIDs[chapterID] = true
-		if chapter.Order < 1 || orders[chapter.Order] {
-			return fmt.Errorf("analysis returned invalid or duplicate chapter order %d", chapter.Order)
-		}
-		orders[chapter.Order] = true
-		for _, collection := range []struct {
-			values []rawClaim
-			scope  string
-		}{{chapter.Facts, "chapter facts"}, {chapter.Inferences, "chapter inferences"}, {chapter.Unknowns, "chapter unknowns"}} {
-			if err := claims(collection.values, collection.scope); err != nil {
-				return err
-			}
-		}
-		if err := risks(chapter.Risks, "chapter risks"); err != nil {
-			return err
-		}
-		if err := behaviors(chapter.BehavioralChanges, "chapter behavioral changes"); err != nil {
-			return err
-		}
-		testIDs := make([]string, len(chapter.RelatedTests))
-		for i, test := range chapter.RelatedTests {
-			testIDs[i] = test.ID
-		}
-		if err := unique(testIDs, "test", "chapter related tests"); err != nil {
-			return err
-		}
-		questionIDs := make([]string, len(chapter.SuggestedQuestions))
-		for i, question := range chapter.SuggestedQuestions {
-			questionIDs[i] = question.ID
-		}
-		if err := unique(questionIDs, "question", "chapter suggested questions"); err != nil {
-			return err
-		}
 	}
 	return nil
+}
+
+func normalizeModelPresentation(raw *rawAnalysis) {
+	if strings.TrimSpace(raw.Summary) == "" {
+		raw.Summary = "Review the evidence-backed changes in this pull request."
+	}
+	normalizeClaims := func(values []rawClaim, prefix string) {
+		seen := map[string]bool{}
+		for i := range values {
+			values[i].ID = normalizedID(values[i].ID, prefix, i, seen)
+		}
+	}
+	normalizeRisks := func(values []rawRisk, prefix string) {
+		seen := map[string]bool{}
+		for i := range values {
+			values[i].ID = normalizedID(values[i].ID, prefix, i, seen)
+		}
+	}
+	normalizeBehaviors := func(values []rawBehavior, prefix string) {
+		seen := map[string]bool{}
+		for i := range values {
+			values[i].ID = normalizedID(values[i].ID, prefix, i, seen)
+		}
+	}
+	normalizeClaims(raw.Facts, "fact")
+	normalizeClaims(raw.Inferences, "inference")
+	normalizeClaims(raw.Unknowns, "unknown")
+	normalizeRisks(raw.Risks, "risk")
+	normalizeBehaviors(raw.BehavioralChanges, "behavior")
+	chapterIDs := map[string]bool{}
+	for i := range raw.Chapters {
+		chapter := &raw.Chapters[i]
+		chapter.ID = normalizedID(chapter.ID, "chapter", i, chapterIDs)
+		chapter.Order = i + 1
+		if strings.TrimSpace(chapter.Title) == "" {
+			chapter.Title = fmt.Sprintf("Review area %d", i+1)
+		}
+		if strings.TrimSpace(chapter.Purpose) == "" {
+			chapter.Purpose = "Review the evidence-backed changes in this area."
+		}
+		normalizeClaims(chapter.Facts, "fact")
+		normalizeClaims(chapter.Inferences, "inference")
+		normalizeClaims(chapter.Unknowns, "unknown")
+		normalizeRisks(chapter.Risks, "risk")
+		normalizeBehaviors(chapter.BehavioralChanges, "behavior")
+		testIDs := map[string]bool{}
+		for j := range chapter.RelatedTests {
+			chapter.RelatedTests[j].ID = normalizedID(chapter.RelatedTests[j].ID, "test", j, testIDs)
+		}
+		questionIDs := map[string]bool{}
+		for j := range chapter.SuggestedQuestions {
+			chapter.SuggestedQuestions[j].ID = normalizedID(chapter.SuggestedQuestions[j].ID, "question", j, questionIDs)
+		}
+	}
+}
+
+func normalizedID(value, prefix string, index int, seen map[string]bool) string {
+	value = strings.TrimSpace(value)
+	if value != "" && !seen[value] {
+		seen[value] = true
+		return value
+	}
+	for candidate := fmt.Sprintf("%s-%d", prefix, index+1); ; candidate = candidate + "-copy" {
+		if !seen[candidate] {
+			seen[candidate] = true
+			return candidate
+		}
+	}
 }
 
 func validateAnalysisSubstance(result domain.ReviewAnalysis) error {
@@ -186,33 +162,25 @@ type validator struct {
 	ctx    context.Context
 	files  FileReader
 	cache  map[string][]byte
-	ids    map[string]rawEvidence
 	issues []domain.ValidationIssue
 }
 
 func (v *validator) evidence(values []rawEvidence) []domain.EvidenceReference {
 	out := make([]domain.EvidenceReference, 0, len(values))
-	for _, raw := range values {
-		evidence := domain.EvidenceReference{ID: raw.ID, Path: filepath.ToSlash(raw.Path), Revision: domain.Revision(raw.Revision), StartLine: raw.StartLine, EndLine: raw.EndLine, Symbol: raw.Symbol, ValidationStatus: domain.ValidationInvalid}
+	seen := map[string]bool{}
+	for index, raw := range values {
+		revision := strings.ToLower(strings.TrimSpace(raw.Revision))
+		evidence := domain.EvidenceReference{ID: normalizedID(raw.ID, "evidence", index, seen), Path: filepath.ToSlash(raw.Path), Revision: domain.Revision(revision), StartLine: raw.StartLine, EndLine: raw.EndLine, Symbol: raw.Symbol, ValidationStatus: domain.ValidationInvalid}
 		reason := ""
-		if raw.ID == "" {
-			reason = "evidence ID is empty"
-		} else if existing, ok := v.ids[raw.ID]; ok && existing != raw {
-			reason = "evidence ID is reused for a different location"
-		} else {
-			v.ids[raw.ID] = raw
-		}
-		if reason == "" {
-			reason = validatePath(raw.Path)
-		}
-		if raw.Revision != string(domain.RevisionBase) && raw.Revision != string(domain.RevisionHead) && reason == "" {
+		reason = validatePath(raw.Path)
+		if revision != string(domain.RevisionBase) && revision != string(domain.RevisionHead) && reason == "" {
 			reason = "revision must be base or head"
 		}
 		if reason == "" && (raw.StartLine < 1 || raw.EndLine < raw.StartLine) {
 			reason = "line range must be 1-based and inclusive"
 		}
 		if reason == "" {
-			key := raw.Revision + ":" + evidence.Path
+			key := revision + ":" + evidence.Path
 			content, ok := v.cache[key]
 			if !ok {
 				var err error
@@ -344,7 +312,7 @@ func (v *validator) behaviors(values []rawBehavior) []domain.BehavioralChange {
 func (v *validator) risks(values []rawRisk) []domain.ReviewRisk {
 	out := make([]domain.ReviewRisk, 0, len(values))
 	for _, raw := range values {
-		level := domain.RiskLevel(raw.Level)
+		level := domain.RiskLevel(strings.ToLower(strings.TrimSpace(raw.Level)))
 		if level != domain.RiskLow && level != domain.RiskMedium && level != domain.RiskHigh && level != domain.RiskCritical {
 			level = domain.RiskUnknown
 		}

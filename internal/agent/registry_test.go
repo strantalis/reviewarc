@@ -102,3 +102,13 @@ func TestRegistryCapabilitiesAreStableAndSanitizeInspectionErrors(t *testing.T) 
 		t.Fatalf("capabilities=%+v", capabilities)
 	}
 }
+
+func TestRegistryCapabilitiesPreserveSafeProviderGuidance(t *testing.T) {
+	capabilities := eligibleCapabilities()
+	capabilities.Message = "Sign in to Codex before using it for analysis"
+	registry, _ := NewRegistry(fixtureAdapter{id: domain.HarnessCodex, caps: capabilities, err: errors.New("credential detail")})
+	got := registry.Capabilities(context.Background())
+	if len(got) != 1 || got[0].Message != capabilities.Message {
+		t.Fatalf("capabilities=%+v", got)
+	}
+}

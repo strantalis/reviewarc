@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -83,11 +85,13 @@ func (r *ExecRunner) RefreshPaths() {
 		paths[tool] = resolveExecutable(tool, search)
 	}
 	pathValue := strings.Join(search, string(os.PathListSeparator))
-	environments := map[Tool][]string{
-		Git:    minimalEnvironment(r.source, Git, pathValue),
-		GH:     minimalEnvironment(r.source, GH, pathValue),
-		Codex:  minimalEnvironment(r.source, Codex, pathValue),
-		Claude: minimalEnvironment(r.source, Claude, pathValue),
+	environments := make(map[Tool][]string, len(paths))
+	for tool, path := range paths {
+		environment := minimalEnvironment(r.source, tool, pathValue)
+		if path != "" {
+			environment = prependPath(environment, filepath.Dir(path))
+		}
+		environments[tool] = environment
 	}
 	r.mu.Lock()
 	r.paths = paths
@@ -298,8 +302,21 @@ func executableSearchDirs(source []string, home string) []string {
 		}
 		break
 	}
-	candidates = append(candidates, "/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin")
 	if filepath.IsAbs(home) {
+		fnmRoots := []string{
+			filepath.Join(home, "Library", "Application Support", "fnm"),
+			filepath.Join(home, ".local", "share", "fnm"),
+			filepath.Join(home, ".fnm"),
+		}
+		if root := absoluteEnvironmentPath(source, "FNM_DIR"); root != "" {
+			fnmRoots = append([]string{root}, fnmRoots...)
+		}
+		if dataHome := absoluteEnvironmentPath(source, "XDG_DATA_HOME"); dataHome != "" {
+			fnmRoots = append([]string{filepath.Join(dataHome, "fnm")}, fnmRoots...)
+		}
+		for _, root := range fnmRoots {
+			candidates = append(candidates, filepath.Join(root, "aliases", "default", "bin"))
+		}
 		candidates = append(candidates,
 			filepath.Join(home, ".local", "bin"),
 			filepath.Join(home, ".nix-profile", "bin"),
@@ -311,18 +328,22 @@ func executableSearchDirs(source []string, home string) []string {
 			filepath.Join(home, ".local", "share", "pnpm"),
 			filepath.Join(home, "Library", "pnpm"),
 		)
-		for _, pattern := range []string{
+		patterns := []string{
 			filepath.Join(home, ".config", "nvm", "versions", "node", "*", "bin"),
 			filepath.Join(home, ".nvm", "versions", "node", "*", "bin"),
-			filepath.Join(home, ".local", "share", "fnm", "node-versions", "*", "installation", "bin"),
-			filepath.Join(home, ".fnm", "node-versions", "*", "installation", "bin"),
-		} {
+		}
+		for _, root := range fnmRoots {
+			patterns = append(patterns, filepath.Join(root, "node-versions", "*", "installation", "bin"))
+		}
+		for _, pattern := range patterns {
 			matches, _ := filepath.Glob(pattern)
-			for i := len(matches) - 1; i >= 0; i-- {
-				candidates = append(candidates, matches[i])
-			}
+			sort.SliceStable(matches, func(i, j int) bool { return compareVersionPath(matches[i], matches[j]) > 0 })
+			candidates = append(candidates, matches...)
 		}
 	}
+	// Prefer the user's version-manager selection over machine-wide fallback
+	// installations when the desktop launch environment omitted shell setup.
+	candidates = append(candidates, "/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin")
 	// These directories provide interpreters and system helpers used by CLI
 	// script shebangs (for example, #!/usr/bin/env node).
 	candidates = append(candidates, "/usr/bin", "/bin", "/usr/sbin", "/sbin")
@@ -337,6 +358,58 @@ func executableSearchDirs(source []string, home string) []string {
 		dirs = append(dirs, candidate)
 	}
 	return dirs
+}
+
+func absoluteEnvironmentPath(source []string, key string) string {
+	prefix := key + "="
+	for _, entry := range source {
+		if value, ok := strings.CutPrefix(entry, prefix); ok && filepath.IsAbs(value) {
+			return filepath.Clean(value)
+		}
+	}
+	return ""
+}
+
+func compareVersionPath(left, right string) int {
+	a, b := versionParts(left), versionParts(right)
+	for i := 0; i < len(a) || i < len(b); i++ {
+		var av, bv int
+		if i < len(a) {
+			av = a[i]
+		}
+		if i < len(b) {
+			bv = b[i]
+		}
+		if av < bv {
+			return -1
+		}
+		if av > bv {
+			return 1
+		}
+	}
+	return strings.Compare(left, right)
+}
+
+func versionParts(path string) []int {
+	parts := strings.FieldsFunc(filepath.ToSlash(path), func(r rune) bool { return r == '/' })
+	for i := len(parts) - 1; i >= 0; i-- {
+		value := strings.TrimPrefix(parts[i], "v")
+		if value == parts[i] || value == "" || value[0] < '0' || value[0] > '9' {
+			continue
+		}
+		var numbers []int
+		for _, component := range strings.Split(value, ".") {
+			number, err := strconv.Atoi(component)
+			if err != nil {
+				break
+			}
+			numbers = append(numbers, number)
+		}
+		if len(numbers) > 0 {
+			return numbers
+		}
+	}
+	return nil
 }
 
 func resolveExecutable(tool Tool, search []string) string {

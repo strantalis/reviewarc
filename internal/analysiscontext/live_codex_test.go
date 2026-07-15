@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	sharedanalysis "reviewarc/internal/analysis"
 	"reviewarc/internal/analysisbundle"
 	"reviewarc/internal/domain"
 	gitcache "reviewarc/internal/git"
@@ -91,10 +92,7 @@ func TestLiveCodexUsesOnlyRequiredReviewArcMCP(t *testing.T) {
 		model["experimental_supported_tools"] = []any{}
 	}
 	catalogPath := writePrivateJSON(t, catalog)
-	schemaPath := writePrivateJSON(t, map[string]any{
-		"type": "object", "properties": map[string]any{"marker": map[string]any{"type": "string", "const": "TOOL_OK"}},
-		"required": []string{"marker"}, "additionalProperties": false,
-	})
+	schemaPath := writePrivateJSON(t, json.RawMessage(sharedanalysis.Schema()))
 	testBinary, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +109,7 @@ func TestLiveCodexUsesOnlyRequiredReviewArcMCP(t *testing.T) {
 		{"model_catalog_json", strconv.Quote(catalogPath)},
 		{"mcp_servers.reviewarc.command", strconv.Quote(testBinary)},
 		{"mcp_servers.reviewarc.required", "true"},
-		{"mcp_servers.reviewarc.enabled_tools", `["list_changes"]`},
+		{"mcp_servers.reviewarc.enabled_tools", `["list_changes","read_diff"]`},
 		{"mcp_servers.reviewarc.default_tools_approval_mode", strconv.Quote("approve")},
 		{"mcp_servers.reviewarc.startup_timeout_sec", "15"},
 		{"mcp_servers.reviewarc.env." + liveContextHelperEnv, strconv.Quote("1")},
@@ -122,13 +120,14 @@ func TestLiveCodexUsesOnlyRequiredReviewArcMCP(t *testing.T) {
 		args = append(args, config(setting[0], setting[1])...)
 	}
 	args = append(args, "-C", dataRoot, "-")
-	prompt := "Call the reviewarc list_changes tool exactly once. Do not call any other tool. After it succeeds, return the JSON object required by the output schema with marker TOOL_OK."
+	prompt := `Call reviewarc.list_changes exactly once, then call reviewarc.read_diff exactly once for fileId f000001 with cursor 0. Do not call any other tool. Return a concise review matching the output schema. Use schemaVersion 1, baseSha ` + strings.Repeat("1", 40) + `, headSha ` + strings.Repeat("2", 40) + `, summary "The fixture changes old to new.", and one chapter with one fact citing src/main.go at head line 1. Use unique non-empty IDs and no other claims.`
 	result, err := runner.Run(ctx, processpkg.Command{Tool: processpkg.Codex, Args: args, Dir: dataRoot, Stdin: []byte(prompt), Timeout: 2 * time.Minute, MaxOutput: 8 << 20})
 	if err != nil {
 		t.Fatalf("live Codex MCP invocation: %v\nstderr: %s\nstdout: %s", err, result.Stderr, result.Stdout)
 	}
 
-	var called, marker bool
+	completedTools := map[string]bool{}
+	var structured []byte
 	scanner := bufio.NewScanner(strings.NewReader(string(result.Stdout)))
 	scanner.Buffer(make([]byte, 64<<10), 2<<20)
 	for scanner.Scan() {
@@ -149,19 +148,26 @@ func TestLiveCodexUsesOnlyRequiredReviewArcMCP(t *testing.T) {
 		case "command_execution", "file_change", "web_search":
 			t.Fatalf("forbidden Codex event %q: %s", event.Item.Type, scanner.Bytes())
 		case "mcp_tool_call":
-			if event.Item.Server != "reviewarc" || event.Item.Tool != "list_changes" || (event.Item.Status != "completed" && event.Item.Status != "success") {
+			if event.Item.Server != "reviewarc" || (event.Item.Tool != "list_changes" && event.Item.Tool != "read_diff") {
 				t.Fatalf("unexpected MCP call: %s", scanner.Bytes())
 			}
-			called = true
+			if event.Item.Status == "completed" || event.Item.Status == "success" {
+				completedTools[event.Item.Tool] = true
+			} else if event.Item.Status != "in_progress" && event.Item.Status != "started" {
+				t.Fatalf("unsuccessful MCP call: %s", scanner.Bytes())
+			}
 		case "agent_message":
-			marker = marker || strings.Contains(event.Item.Text, "TOOL_OK")
+			structured = []byte(event.Item.Text)
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if !called || !marker {
-		t.Fatalf("missing successful MCP call or structured marker: called=%t marker=%t\n%s", called, marker, result.Stdout)
+	if !completedTools["list_changes"] || !completedTools["read_diff"] {
+		t.Fatalf("missing successful MCP calls: completed=%v\n%s", completedTools, result.Stdout)
+	}
+	if _, err := sharedanalysis.Decode(structured); err != nil {
+		t.Fatalf("live Codex did not return ReviewArc's structured schema: %v\n%s", err, result.Stdout)
 	}
 }
 

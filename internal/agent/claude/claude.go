@@ -77,6 +77,15 @@ func (p *Provider) Capabilities(ctx context.Context) (domain.HarnessCapabilities
 			return capabilities, fmt.Errorf("Claude Code does not expose required flag %s", required)
 		}
 	}
+	auth, authErr := p.runner.Run(ctx, processpkg.Command{Tool: processpkg.Claude, Args: []string{"auth", "status"}, Timeout: 5 * time.Second, MaxOutput: 64 << 10})
+	var status struct {
+		LoggedIn bool `json:"loggedIn"`
+	}
+	if json.Unmarshal(auth.Stdout, &status) != nil || authErr != nil || !status.LoggedIn {
+		capabilities.State = domain.HarnessBroken
+		capabilities.Message = "Sign in to Claude Code before using it for analysis"
+		return capabilities, errors.New("Claude Code authentication is required")
+	}
 	reasoning := []domain.ReasoningLevel{domain.ReasoningLow, domain.ReasoningMedium, domain.ReasoningHigh, domain.ReasoningXHigh, domain.ReasoningMax}
 	capabilities.Models = []domain.ModelCapability{
 		{ID: "sonnet", Name: "Sonnet", ReasoningLevels: reasoning, DefaultReasoningLevel: domain.ReasoningMedium, Recommended: true},
@@ -179,7 +188,7 @@ func (p *Provider) analyze(parent context.Context, input agent.AnalyzeInput, bun
 			emit(failureEvent(domain.FailureTimeout, "Analysis timed out", "The analysis harness did not finish in time.", domain.RetrySamePlan, ctx.Err()))
 			return
 		}
-		emit(providerFailure(runErr, result.Stderr))
+		emit(providerFailure(runErr, result.Stdout, result.Stderr))
 		return
 	}
 	if !emit(agent.Event{Kind: agent.EventValidating, Message: "Validating structured output"}) {
@@ -279,7 +288,7 @@ func parseStream(data []byte, tracker *agent.AccessTracker) (sharedanalysis.Docu
 	var final json.RawMessage
 	var structuredToolOutput json.RawMessage
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
-	scanner.Buffer(make([]byte, 64<<10), 8<<20)
+	scanner.Buffer(make([]byte, 64<<10), 32<<20)
 	line := 0
 	for scanner.Scan() {
 		line++
@@ -362,8 +371,11 @@ func progressMessage(line []byte, manifest analysisbundle.Manifest) string {
 	return ""
 }
 
-func providerFailure(err error, stderr []byte) agent.Event {
+func providerFailure(err error, stdout, stderr []byte) agent.Event {
 	detail := strings.TrimSpace(string(stderr))
+	if detail == "" {
+		detail = claudeStreamError(stdout)
+	}
 	if detail == "" && err != nil {
 		detail = err.Error()
 	}
@@ -380,6 +392,20 @@ func providerFailure(err error, stderr []byte) agent.Event {
 	default:
 		return failureEvent(domain.FailureProvider, "Analysis did not complete", "The selected harness stopped before ReviewArc received a valid review.", domain.RetrySamePlan, fmt.Errorf("%w: %s", err, detail))
 	}
+}
+
+func claudeStreamError(data []byte) string {
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	scanner.Buffer(make([]byte, 64<<10), 32<<20)
+	for scanner.Scan() {
+		var event streamEvent
+		if json.Unmarshal(scanner.Bytes(), &event) == nil && event.Type == "result" && event.IsError {
+			if detail := strings.TrimSpace(event.Result); detail != "" {
+				return detail
+			}
+		}
+	}
+	return ""
 }
 
 func failureEvent(code domain.AnalysisFailureCode, title, message string, action domain.AnalysisRetryAction, err error) agent.Event {

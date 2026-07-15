@@ -66,6 +66,11 @@ func (p *Provider) Capabilities(ctx context.Context) (domain.HarnessCapabilities
 		return capabilities, err
 	}
 	capabilities.Version = strings.TrimSpace(string(version.Stdout))
+	if _, err := p.runner.Run(ctx, processpkg.Command{Tool: processpkg.Codex, Args: []string{"login", "status"}, Timeout: 5 * time.Second, MaxOutput: 64 << 10}); err != nil {
+		capabilities.State = domain.HarnessBroken
+		capabilities.Message = "Sign in to Codex before using it for analysis"
+		return capabilities, errors.New("Codex authentication is required")
+	}
 	catalog, err := p.loadModelCatalog(ctx)
 	if err != nil {
 		capabilities.State = domain.HarnessUnsupported
@@ -369,7 +374,7 @@ func parseJSONL(data []byte, tracker *agent.AccessTracker) (sharedanalysis.Docum
 	var final string
 	var warnings []string
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
-	scanner.Buffer(make([]byte, 64<<10), 8<<20)
+	scanner.Buffer(make([]byte, 64<<10), 32<<20)
 	lineNo := 0
 	for scanner.Scan() {
 		lineNo++

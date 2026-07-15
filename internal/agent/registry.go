@@ -47,7 +47,9 @@ func (r *Registry) Capabilities(ctx context.Context) []domain.HarnessCapabilitie
 			if capabilities.State == "" {
 				capabilities.State = domain.HarnessBroken
 			}
-			capabilities.Message = "ReviewArc could not inspect this harness"
+			if strings.TrimSpace(capabilities.Message) == "" {
+				capabilities.Message = "ReviewArc could not inspect this harness"
+			}
 		}
 		if capabilities.Models == nil {
 			capabilities.Models = []domain.ModelCapability{}

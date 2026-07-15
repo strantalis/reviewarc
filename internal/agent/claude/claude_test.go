@@ -26,6 +26,7 @@ type fixtureRunner struct {
 	result    processpkg.Result
 	err       error
 	wait      bool
+	loggedOut bool
 	mcpConfig []byte
 }
 
@@ -35,6 +36,12 @@ func (r *fixtureRunner) Run(ctx context.Context, command processpkg.Command) (pr
 	}
 	if len(command.Args) == 1 && command.Args[0] == "--help" {
 		return processpkg.Result{Stdout: []byte(strings.Join([]string{"--json-schema", "--strict-mcp-config", "--mcp-config", "--tools", "--permission-mode", "--effort", "--no-session-persistence"}, "\n"))}, nil
+	}
+	if len(command.Args) == 2 && command.Args[0] == "auth" && command.Args[1] == "status" {
+		if r.loggedOut {
+			return processpkg.Result{Stdout: []byte(`{"loggedIn":false,"authMethod":"none"}`)}, errors.New("exit 1")
+		}
+		return processpkg.Result{Stdout: []byte(`{"loggedIn":true,"authMethod":"oauth"}`)}, nil
 	}
 	r.mu.Lock()
 	r.command = command
@@ -194,6 +201,26 @@ func TestParseStreamRejectsMalformedUnknownToolsAndMissingStructuredOutput(t *te
 	}
 }
 
+func TestParseStreamAcceptsOfficialResultStructuredOutput(t *testing.T) {
+	payload, err := os.ReadFile("../codex/testdata/analysis.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var structured any
+	if err := json.Unmarshal(payload, &structured); err != nil {
+		t.Fatal(err)
+	}
+	result, err := json.Marshal(map[string]any{
+		"type": "result", "subtype": "success", "is_error": false, "structured_output": structured,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseStream(append(result, '\n'), agent.NewAccessTracker(analysisbundle.Manifest{})); err != nil {
+		t.Fatalf("official structured_output result rejected: %v", err)
+	}
+}
+
 func TestCancellationTerminatesClaudeAnalysis(t *testing.T) {
 	runner := &fixtureRunner{wait: true}
 	provider := New(runner, Config{Timeout: time.Minute, ContextServerExecutable: "/usr/bin/true"})
@@ -217,8 +244,25 @@ func TestCancellationTerminatesClaudeAnalysis(t *testing.T) {
 }
 
 func TestOversizedProviderFailureDoesNotOfferUnchangedRetry(t *testing.T) {
-	event := providerFailure(errors.New("exit 1"), []byte("input exceeds maximum length"))
+	event := providerFailure(errors.New("exit 1"), nil, []byte("input exceeds maximum length"))
 	if event.Failure == nil || event.Failure.Code != domain.FailureInputTooLarge || event.Failure.Action != domain.RetryChangeProfile || event.Failure.Retryable {
 		t.Fatalf("failure=%+v", event.Failure)
+	}
+}
+
+func TestProviderFailureUsesClaudeJSONLStdoutWhenStderrIsEmpty(t *testing.T) {
+	stdout := []byte("{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Not logged in\"}]}}\n{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":true,\"result\":\"Not logged in · Please run /login\"}\n")
+	event := providerFailure(errors.New("exit 1"), stdout, nil)
+	if event.Failure == nil || event.Failure.Code != domain.FailureAuthentication || event.Failure.Action != domain.RetryAuthenticate || !strings.Contains(event.Failure.TechnicalDetails, "Not logged in") {
+		t.Fatalf("failure=%+v", event.Failure)
+	}
+}
+
+func TestCapabilitiesRejectLoggedOutClaude(t *testing.T) {
+	runner := &fixtureRunner{loggedOut: true}
+	provider := New(runner, Config{})
+	capabilities, err := provider.Capabilities(context.Background())
+	if err == nil || capabilities.State != domain.HarnessBroken || !strings.Contains(capabilities.Message, "Sign in") {
+		t.Fatalf("capabilities=%+v err=%v", capabilities, err)
 	}
 }

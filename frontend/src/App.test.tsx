@@ -622,6 +622,31 @@ describe('Analysis setup', () => {
 })
 
 describe('Reanalysis state', () => {
+  it('restores the persisted harness failure after reopening a session', () => {
+    const current = reviewSession()
+    const session: ReviewSession = {
+      ...current,
+      analysis: undefined,
+      analysisStatus: 'failed',
+      chapters: [],
+      progress: {total: 0, reviewed: 0, blocked: 0, clarify: 0, percent: 0},
+      latestAnalysisRun: {
+        id: 'failed-run', sessionId: current.id, profile: {harness: 'claude', model: 'sonnet', reasoning: 'high'}, harnessVersion: '2.1.210', contextTransport: 'reviewarcTools', schemaVersion: 1, inputFingerprint: 'fixture',
+        coverage: {changedFilesTotal: 1, diffFilesFullyRead: 0, diffFilesPartiallyRead: 0, diffFilesUnread: 1, diffBytesTotal: 100, diffBytesRead: 0, segments: 0, omittedPaths: ['src/file.go'], accesses: []},
+        status: 'failed', startedAt: '2026-07-15T12:00:00Z', completedAt: '2026-07-15T12:00:01Z', updatedAt: '2026-07-15T12:00:01Z',
+        failure: {code: 'authentication_required', title: 'The analysis harness needs authentication', message: 'Sign in to the selected harness, then check the analysis setup again.', action: 'authenticate', retryable: false, technicalDetails: 'Not logged in · Please run /login'},
+      },
+    }
+    const onOpenSettings = vi.fn()
+    window.runtime = {EventsOn: vi.fn(() => () => {})}
+    render(<OverviewScreen session={session} analysisConfiguration={dualHarnessConfiguration} legacyAnalysis={false} onOpenSettings={onOpenSettings} onBack={vi.fn()} onSession={vi.fn()} onReview={vi.fn()}/>)
+
+    expect(screen.getByRole('alert')).toHaveTextContent('The analysis harness needs authentication')
+    expect(screen.getByText('Technical details').closest('details')).not.toHaveAttribute('open')
+    fireEvent.click(screen.getByRole('button', {name: 'Open settings'}))
+    expect(onOpenSettings).toHaveBeenCalledOnce()
+  })
+
   it('gives stale analysis one primary recovery action without hiding the old walkthrough', async () => {
     const current = reviewSession()
     const session: ReviewSession = {...current, headSha: 'old-head', isStale: true, staleReason: '', pullRequest: {...current.pullRequest, headSha: 'new-head'}}

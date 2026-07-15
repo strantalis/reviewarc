@@ -26,6 +26,7 @@ type fixtureRunner struct {
 	result           processpkg.Result
 	err              error
 	wait             bool
+	loggedOut        bool
 	commands         []processpkg.Command
 	catalogShellType string
 }
@@ -39,6 +40,12 @@ func (r *fixtureRunner) Run(ctx context.Context, command processpkg.Command) (pr
 	}
 	if len(command.Args) == 1 && command.Args[0] == "--version" {
 		return processpkg.Result{Stdout: []byte("codex-cli fixture\n")}, nil
+	}
+	if len(command.Args) == 2 && command.Args[0] == "login" && command.Args[1] == "status" {
+		if r.loggedOut {
+			return processpkg.Result{Stderr: []byte("Not logged in")}, errors.New("exit 1")
+		}
+		return processpkg.Result{Stdout: []byte("Logged in using ChatGPT\n")}, nil
 	}
 	r.mu.Lock()
 	r.command = command
@@ -199,6 +206,13 @@ func TestCapabilitiesDiscoverModelsAndControlledTransport(t *testing.T) {
 	}
 	if !capabilities.SupportsProgress {
 		t.Fatal("Codex progress capability missing")
+	}
+}
+
+func TestCapabilitiesRejectLoggedOutCodex(t *testing.T) {
+	capabilities, err := New(&fixtureRunner{loggedOut: true}, Config{}).Capabilities(context.Background())
+	if err == nil || capabilities.State != domain.HarnessBroken || !strings.Contains(capabilities.Message, "Sign in") {
+		t.Fatalf("capabilities=%+v err=%v", capabilities, err)
 	}
 }
 

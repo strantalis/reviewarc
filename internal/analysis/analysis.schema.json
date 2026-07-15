@@ -1,6 +1,7 @@
 {
 	"$id": "https://reviewarc.dev/schemas/analysis-v1.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A complete ReviewArc guided review. Use repository-relative canonical paths, direct base/head evidence, and non-empty human-readable text. Opaque IDs are local labels; ReviewArc repairs empty or repeated labels.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "baseSha", "headSha", "summary", "summaryEvidence", "affectedAreas", "chapters", "behavioralChanges", "risks", "facts", "inferences", "unknowns"],
@@ -8,10 +9,10 @@
     "schemaVersion": {"type": "integer", "const": 1},
     "baseSha": {"type": "string"},
     "headSha": {"type": "string"},
-    "summary": {"type": "string"},
+    "summary": {"type": "string", "description": "A non-empty concise summary of the reviewed change."},
     "summaryEvidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}},
     "affectedAreas": {"type": "array", "items": {"$ref": "#/$defs/affectedArea"}},
-    "chapters": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/chapter"}},
+    "chapters": {"type": "array", "description": "At least one review chapter. ReviewArc verifies this after generation.", "items": {"$ref": "#/$defs/chapter"}},
     "behavioralChanges": {"type": "array", "items": {"$ref": "#/$defs/behavior"}},
     "risks": {"type": "array", "items": {"$ref": "#/$defs/risk"}},
     "facts": {"type": "array", "items": {"$ref": "#/$defs/claim"}},
@@ -23,15 +24,15 @@
       "type": "object", "additionalProperties": false,
       "required": ["id", "path", "revision", "startLine", "endLine", "symbol"],
       "properties": {
-        "id": {"type": "string"}, "path": {"type": "string"},
-        "revision": {"type": "string", "enum": ["base", "head"]},
-        "startLine": {"type": "integer", "minimum": 1}, "endLine": {"type": "integer", "minimum": 1},
+        "id": {"type": "string", "description": "An opaque local label for this evidence reference."}, "path": {"type": "string", "description": "A canonical repository-relative path using forward slashes."},
+        "revision": {"type": "string", "enum": ["base", "head"], "description": "The pinned revision containing the cited lines."},
+        "startLine": {"type": "integer", "description": "The 1-based inclusive starting line; must be at least 1."}, "endLine": {"type": "integer", "description": "The 1-based inclusive ending line; must be greater than or equal to startLine."},
         "symbol": {"type": "string"}
       }
     },
     "claim": {
       "type": "object", "additionalProperties": false, "required": ["id", "text", "evidence"],
-      "properties": {"id": {"type": "string"}, "text": {"type": "string"}, "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}}}
+      "properties": {"id": {"type": "string", "description": "An opaque local label."}, "text": {"type": "string", "description": "A non-empty review statement."}, "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}}}
     },
     "behavior": {
       "type": "object", "additionalProperties": false, "required": ["id", "summary", "before", "after", "evidence"],
@@ -65,8 +66,8 @@
       "type": "object", "additionalProperties": false,
       "required": ["id", "order", "title", "description", "purpose", "evidence", "files", "symbols", "behavioralChanges", "risks", "facts", "inferences", "unknowns", "relatedTests", "suggestedQuestions"],
       "properties": {
-        "id": {"type": "string"}, "order": {"type": "integer"}, "title": {"type": "string"},
-        "description": {"type": "string"}, "purpose": {"type": "string"},
+        "id": {"type": "string", "description": "An opaque chapter label."}, "order": {"type": "integer", "description": "A positive display order. ReviewArc normalizes chapter order to the array sequence."}, "title": {"type": "string", "description": "A non-empty chapter title."},
+        "description": {"type": "string"}, "purpose": {"type": "string", "description": "A non-empty explanation of what the reviewer should verify."},
         "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}},
         "files": {"type": "array", "items": {"$ref": "#/$defs/file"}},
         "symbols": {"type": "array", "items": {"$ref": "#/$defs/symbol"}},
