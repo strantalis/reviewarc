@@ -4,6 +4,7 @@ import { PatchDiff } from '@pierre/diffs/react'
 import type { DiffBasePropsReact, DiffLineAnnotation, SelectedLineRange } from '@pierre/diffs/react'
 import { ExternalLink, LoaderCircle, MessageSquare, Reply } from 'lucide-react'
 import { backend } from './bridge'
+import { useTheme } from './theme'
 import type { CommentRange, DiffFile, EvidenceReference, FileContent, PullRequestReviewComment } from './types'
 
 interface ReviewThread { root: PullRequestReviewComment; replies: PullRequestReviewComment[] }
@@ -12,6 +13,8 @@ interface ReplyReset { rootId: number; version: number }
 type ReplyHandler = (root: PullRequestReviewComment, body: string) => Promise<boolean>
 
 export function PierreCodeExcerpt({file, firstLine, lastLine, focusStart, focusEnd}: {file: FileContent; firstLine: number; lastLine: number; focusStart: number; focusEnd: number}) {
+  const {resolvedTheme} = useTheme()
+  const pierreTheme = resolvedTheme === 'dark' ? 'pierre-dark' : 'pierre-light'
   const code = useMemo(() => file.content.split(/\r?\n/).slice(firstLine - 1, lastLine).join('\n'), [file.content, firstLine, lastLine])
   const [tokens, setTokens] = useState<ThemedToken[][]>()
   const [failed, setFailed] = useState(false)
@@ -20,18 +23,20 @@ export function PierreCodeExcerpt({file, firstLine, lastLine, focusStart, focusE
     setTokens(undefined)
     setFailed(false)
     const language = getFiletypeFromFileName(file.path)
-    void getSharedHighlighter({themes: ['pierre-light'], langs: [language]}).then((highlighter) => {
-      const highlighted = highlighter.codeToTokensBase(code, {lang: language, theme: 'pierre-light'})
+    void getSharedHighlighter({themes: [pierreTheme], langs: [language]}).then((highlighter) => {
+      const highlighted = highlighter.codeToTokensBase(code, {lang: language, theme: pierreTheme})
       if (active) setTokens(highlighted)
     }).catch(() => { if (active) setFailed(true) })
     return () => { active = false }
-  }, [code, file.path])
+  }, [code, file.path, pierreTheme])
   if (!tokens && !failed) return <div className="inline-evidence-highlight-loading"><LoaderCircle className="spin" size={14}/>Highlighting code…</div>
   const lines = tokens ?? code.split('\n').map((line) => [{content: line} as ThemedToken])
   return <pre aria-label={`Code excerpt from ${file.path}`}>{lines.map((line, index) => { const number = firstLine + index; return <span className={number >= focusStart && number <= focusEnd ? 'focus' : ''} key={number}><i>{number}</i><code>{line.length ? line.map((token, tokenIndex) => <span key={`${number}-${tokenIndex}`} style={token.color ? {color: token.color} : undefined}>{token.content}</span>) : ' '}</code></span> })}</pre>
 }
 
 export function PierreFileRenderer({file, focus, comments, onCommentRange, onReply, replyReset}: {file: FileContent; focus: EvidenceReference; comments: PullRequestReviewComment[]; onCommentRange: (range: CommentRange) => void; onReply?: ReplyHandler; replyReset?: ReplyReset}) {
+  const {resolvedTheme} = useTheme()
+  const pierreTheme = resolvedTheme === 'dark' ? 'pierre-dark' : 'pierre-light'
   const side = file.revision === 'base' ? 'LEFT' : 'RIGHT'
   const focusedLines = useMemo<SelectedLineRange>(() => ({start: focus.startLine, end: focus.endLine}), [focus.startLine, focus.endLine])
   const [selectedLines, setSelectedLines] = useState<SelectedLineRange | null>(focusedLines)
@@ -48,12 +53,12 @@ export function PierreFileRenderer({file, focus, comments, onCommentRange, onRep
     setTokens(undefined)
     setHighlightFailed(false)
     const language = getFiletypeFromFileName(file.path)
-    void getSharedHighlighter({themes: ['pierre-light'], langs: [language]}).then((highlighter) => {
-      const highlighted = highlighter.codeToTokensBase(file.content, {lang: language, theme: 'pierre-light'})
+    void getSharedHighlighter({themes: [pierreTheme], langs: [language]}).then((highlighter) => {
+      const highlighted = highlighter.codeToTokensBase(file.content, {lang: language, theme: pierreTheme})
       if (active) setTokens(highlighted)
     }).catch(() => { if (active) setHighlightFailed(true) })
     return () => { active = false }
-  }, [file.content, file.path])
+  }, [file.content, file.path, pierreTheme])
   useEffect(() => {
     if (!tokens && !highlightFailed) return
     requestAnimationFrame(() => focusRow.current?.scrollIntoView?.({block: 'center'}))
@@ -124,6 +129,8 @@ export function PierreFileRenderer({file, focus, comments, onCommentRange, onRep
 }
 
 export function PierreDiffRenderer({diff, focus, comments, layout, onCommentRange, onReply, replyReset}: {diff: DiffFile; focus?: EvidenceReference; comments: PullRequestReviewComment[]; layout: 'unified' | 'split'; onCommentRange: (range: CommentRange) => void; onReply?: ReplyHandler; replyReset?: ReplyReset}) {
+  const {resolvedTheme} = useTheme()
+  const pierreTheme = resolvedTheme === 'dark' ? 'pierre-dark' : 'pierre-light'
   const focusedLines = useMemo<SelectedLineRange | null>(() => focus?.path === diff.file.path ? ({start: focus.startLine, end: focus.endLine, side: focus.revision === 'base' ? 'deletions' : 'additions'}) : null, [diff.file.path, focus])
   const [selectedLines, setSelectedLines] = useState<SelectedLineRange | null>(focusedLines)
   const [replyDrafts, setReplyDrafts] = useState<Record<number, ReplyDraft>>({})
@@ -131,13 +138,13 @@ export function PierreDiffRenderer({diff, focus, comments, layout, onCommentRang
   useEffect(() => { if (replyReset) setReplyDrafts((current) => { const next = {...current}; delete next[replyReset.rootId]; return next }) }, [replyReset])
   const annotations = useMemo<DiffLineAnnotation<ReviewThread>[]>(() => reviewThreads(comments, diff.file.path).flatMap((thread) => thread.root.line ? [{lineNumber: thread.root.line, side: thread.root.side === 'LEFT' ? 'deletions' : 'additions', metadata: thread}] : []), [comments, diff.file.path])
   const options = useMemo<NonNullable<DiffBasePropsReact<ReviewThread>['options']>>(() => ({
-    theme: 'pierre-light', themeType: 'light', diffStyle: layout, diffIndicators: 'bars', lineDiffType: 'word-alt', overflow: 'scroll', disableFileHeader: true, hunkSeparators: 'metadata', lineHoverHighlight: 'number',
+    theme: pierreTheme, themeType: resolvedTheme, diffStyle: layout, diffIndicators: 'bars', lineDiffType: 'word-alt', overflow: 'scroll', disableFileHeader: true, hunkSeparators: 'metadata', lineHoverHighlight: 'number',
     enableLineSelection: true,
     onLineSelectionChange: setSelectedLines,
     onLineNumberClick: ({lineNumber, annotationSide}) => { const side = annotationSide === 'deletions' ? 'LEFT' : 'RIGHT'; onCommentRange({startLine: lineNumber, startSide: side, endLine: lineNumber, endSide: side}) },
     onLineSelectionEnd: (range) => { setSelectedLines(range); if (range) onCommentRange(toCommentRange(range)) },
     onPostRender: (node) => { if (focus?.path === diff.file.path) scrollLineIntoView(node, focus.startLine, focus.revision === 'base' ? 'deletions' : 'additions') },
-  }), [diff.file.path, focus, layout, onCommentRange])
+  }), [diff.file.path, focus, layout, onCommentRange, pierreTheme, resolvedTheme])
   return <PatchDiff patch={diff.patch} options={options} selectedLines={selectedLines} lineAnnotations={annotations} renderAnnotation={(annotation) => annotation.metadata ? <ReviewThreadAnnotation thread={annotation.metadata} onReply={onReply} draft={replyDrafts[annotation.metadata.root.id] ?? {open: false, body: ''}} onDraft={(draft) => setReplyDrafts((current) => ({...current, [annotation.metadata!.root.id]: draft}))}/> : null} disableWorkerPool/>
 }
 

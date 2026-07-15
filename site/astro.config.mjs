@@ -22,12 +22,14 @@ export default defineConfig({
         "img-src 'self' data:",
         "object-src 'none'"
       ],
-      // Starlight emits three inline bootstraps outside Astro's automatic hash collection.
+      // Starlight emits three inline bootstraps outside Astro's automatic hash
+      // collection; the fourth hash is src/components/ThemeBootstrap.astro.
       scriptDirective: {
         hashes: [
           "sha256-VWo5Wp4aqSj6nSgMpeAp9cKieaoIfwFUAunAVugI5gA=",
           "sha256-f/zAUE74ucc3JYp4r4QQvkJofoQdkOIhHYK+jeZ6eko=",
-          "sha256-GkZBRnvSuhtx/cvzvukVkX2JJZW+DdPlVr7BX8Tefqo="
+          "sha256-GkZBRnvSuhtx/cvzvukVkX2JJZW+DdPlVr7BX8Tefqo=",
+          "sha256-0zxizHhQLZjHe2H7CJG/7oRnpRAAnOpd31G96KN8O20="
         ]
       },
       styleDirective: {

@@ -2,13 +2,14 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState, type KeyboardEven
 import {
   AlertTriangle, ArrowLeft, ArrowRight, BookOpen, Check, ChevronRight, CircleHelp, Code2, Download,
   Columns2, Command, ExternalLink, FileCode2, FileDiff, Filter, GitPullRequest, Inbox, ListFilter, LoaderCircle,
-  Maximize2, MessageSquare, Minimize2, PanelRight, Pencil, Plus, RefreshCw, Reply, Search, Settings, ShieldCheck,
-  SlidersHorizontal, Sparkles, Trash2, X,
+  Maximize2, MessageSquare, Minimize2, Monitor, Moon, PanelRight, Pencil, Plus, RefreshCw, Reply, Search, Settings, ShieldCheck,
+  SlidersHorizontal, Sparkles, Sun, Trash2, X,
 } from 'lucide-react'
 import { backend, BridgeUnavailableError } from './bridge'
 import { AnalysisBadge, DependencyPills, EmptyState, ErrorBanner, Logo, Markdown, RiskBadge, SelectControl, Skeleton, StatusDot, WindowControls } from './components'
 import { WindowToggleMaximise } from '../wailsjs/runtime/runtime'
 import { analysisLabel, chapterStatusLabel, filterInbox, normalizeProgress, primaryRelationship, relationshipLabel, relativeTime, repoName } from './lib'
+import { useTheme, type ThemePreference } from './theme'
 import type {
   AnalysisStatus, BootstrapState, ChangedFile, ChapterStatus, CommentRange, DependencyStatus, DiffFile, EnvironmentState, EvidenceReference, FileContent, Operation,
   OperationEvent, PublishPreview, PullRequestRef, PullRequestReviewComment, PullRequestSummary, Relationship, ReviewChapter, ReviewRisk,
@@ -63,6 +64,7 @@ function withEnvironment(state: BootstrapState, environment: EnvironmentState): 
 }
 
 export function App() {
+  const theme = useTheme()
   const [bootstrap, setBootstrap] = useState<BootstrapState>()
   const [screen, setScreen] = useState<Screen>('inbox')
   const [session, setSession] = useState<ReviewSession>()
@@ -178,7 +180,9 @@ export function App() {
     {(softwareUpdate?.state === 'available' || softwareUpdate?.state === 'ready') && softwareUpdate.release && softwareUpdate.release.build !== dismissedUpdateBuild && <UpdateBanner update={softwareUpdate} busy={updateBusy} onLater={() => setDismissedUpdateBuild(softwareUpdate.release!.build)} onInstall={() => setInstallUpdateOpen(true)}/>}
     {error && <div className="global-error"><ErrorBanner message={error} onRetry={() => setError('')} actionLabel="Dismiss"/></div>}
     {screen === 'sources' && <SourceSelector state={bootstrap} onDone={async () => { const next = await backend.bootstrap(); setBootstrap({...next, account: bootstrap.account}); setScreen('inbox') }} />}
-    {screen === 'settings' && <SettingsScreen state={bootstrap} update={softwareUpdate} updateBusy={updateBusy} onCheckUpdate={checkForUpdates} onSetUpdateChannel={setUpdateChannel} onInstallUpdate={() => setInstallUpdateOpen(true)} onSources={() => setScreen('sources')}/>}
+    {screen === 'settings' && (
+      <SettingsScreen state={bootstrap} theme={theme.preference} onThemeChange={theme.setPreference} update={softwareUpdate} updateBusy={updateBusy} onCheckUpdate={checkForUpdates} onSetUpdateChannel={setUpdateChannel} onInstallUpdate={() => setInstallUpdateOpen(true)} onSources={() => setScreen('sources')}/>
+    )}
     {screen === 'inbox' && <InboxScreen state={bootstrap} onUpdate={(inbox) => setBootstrap({...bootstrap, inbox})} onOpen={openPR}/>}
     {openingPR && screen === 'overview' && <OpeningPullRequest pr={openingPR} onBack={() => { openRequest.current++; setOpeningPR(undefined); setScreen('inbox') }}/>}
     {session && screen === 'overview' && (
@@ -912,8 +916,37 @@ function UpdateInstallConfirmation({update, busy, onCancel, onConfirm}: {update:
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel() }}><section className="publish-modal" role="dialog" aria-modal="true" aria-labelledby="update-install-title"><header><div><span><Download size={17}/></span><div><h2 id="update-install-title">Install ReviewArc {update.release?.version}?</h2><p>{ready ? 'The update is downloaded and ready.' : 'ReviewArc will download the signed update.'}</p></div></div><button className="icon-button" aria-label="Close" disabled={busy} onClick={onCancel}><X size={17}/></button></header><div className="publish-comments"><article><p>ReviewArc will close and reopen to finish the update. macOS may ask for an administrator username and password to replace the app in Applications.</p></article></div><footer><button className="button secondary" disabled={busy} onClick={onCancel}>Cancel</button><button className="button primary" disabled={busy} onClick={onConfirm}>{busy ? <LoaderCircle className="spin" size={15}/> : <Download size={15}/>} {ready ? 'Install and restart' : 'Install update'}</button></footer></section></div>
 }
 
-export function SettingsScreen({state, update, updateBusy = false, onCheckUpdate = () => {}, onSetUpdateChannel = () => {}, onInstallUpdate = () => {}, onSources}: {state: BootstrapState; update?: SoftwareUpdateStatus; updateBusy?: boolean; onCheckUpdate?: () => void; onSetUpdateChannel?: (channel: UpdateChannel) => void; onInstallUpdate?: () => void; onSources: () => void}) {
+export function SettingsScreen({state, theme = 'system', onThemeChange = () => {}, update, updateBusy = false, onCheckUpdate = () => {}, onSetUpdateChannel = () => {}, onInstallUpdate = () => {}, onSources}: {state: BootstrapState; theme?: ThemePreference; onThemeChange?: (theme: ThemePreference) => void; update?: SoftwareUpdateStatus; updateBusy?: boolean; onCheckUpdate?: () => void; onSetUpdateChannel?: (channel: UpdateChannel) => void; onInstallUpdate?: () => void; onSources: () => void}) {
   const protocol = (state.gitProtocol || 'https').toUpperCase()
   const selectedSources = state.selections.filter((selection) => selection.enabled).length
-  return <main className="page settings-page"><div className="page-heading"><div><h1>Settings</h1><p>Configure the local tools and GitHub sources ReviewArc uses for pull-request review.</p></div></div><div className="settings-layout"><section><div className="settings-section-heading"><h2>Connections</h2><p>Tool readiness, GitHub identity, and Git transport.</p></div><div className="settings-section-body settings-rows">{state.dependencies.map((dep) => <div key={dep.name}><span className={`setup-status ${dep.state}`}>{dep.state === 'available' ? <Check size={14}/> : <X size={14}/>}</span><div><strong>{dependencyLabel(dep.name)}</strong><small>{dep.version || dep.message || (dep.state === 'available' ? 'Available' : 'Not detected by ReviewArc')}</small>{dep.state !== 'available' && <p className="dependency-help">{missingDependencyHelp(dep.name)}</p>}</div><code title={dep.path}>{dep.path || 'Not found'}</code></div>)}<div><span className="setup-status available"><Check size={14}/></span><div><strong>Authenticated as @{state.account?.login || 'unknown'}</strong><small>Credentials are managed by GitHub CLI.</small></div><code>gh</code></div><div><span className="setup-status available"><GitPullRequest size={14}/></span><div><strong>Git operations: {protocol}</strong><small>Managed repository fetches follow your <code>gh</code> protocol setting.</small></div><code>{state.gitProtocol || 'https'}</code></div></div></section><section><div className="settings-section-heading"><h2>Review sources</h2><p>Choose which organizations and repositories feed your inbox.</p></div><div className="settings-section-body settings-rows"><div className="settings-action-row"><span className="setup-status available"><GitPullRequest size={14}/></span><div><strong>{selectedSources} source{selectedSources === 1 ? '' : 's'} selected</strong><small>Open pull requests are loaded only from enabled sources.</small></div><button className="button secondary" onClick={onSources}><SlidersHorizontal size={15}/>Manage sources</button></div></div></section>{update && <SoftwareUpdateSettings update={update} busy={updateBusy} onCheck={onCheckUpdate} onSetChannel={onSetUpdateChannel} onInstall={onInstallUpdate}/>}<section><div className="settings-section-heading"><h2>Local data</h2><p>Application-owned storage used for repository analysis and saved review state.</p></div><div className="settings-section-body"><dl className="path-list"><div><dt>Application data</dt><dd>{state.paths.root}</dd></div><div><dt>Repository caches</dt><dd>{state.paths.repositories}</dd></div><div><dt>Analysis worktrees</dt><dd>{state.paths.worktrees}</dd></div><div><dt>Database</dt><dd>{state.paths.database}</dd></div><div><dt>Logs</dt><dd>{state.paths.logs}</dd></div><div><dt>Temporary cache</dt><dd>{state.paths.cache}</dd></div></dl><p className="safety-copy"><CircleHelp size={16}/><span>PR analysis uses the repository cache and isolated worktree listed above. ReviewArc also invokes your installed <code>git</code>, <code>gh</code>, and <code>codex</code> tools, which may read their own configuration and credentials.</span></p></div></section></div></main>
+  const themeOptions = [
+    {value: 'system' as const, label: 'System', icon: <Monitor size={15}/>},
+    {value: 'light' as const, label: 'Light', icon: <Sun size={15}/>},
+    {value: 'dark' as const, label: 'Dark', icon: <Moon size={15}/>},
+  ]
+  return <main className="page settings-page">
+    <div className="page-heading"><div><h1>Settings</h1><p>Configure ReviewArc’s appearance, local tools, and GitHub sources.</p></div></div>
+    <div className="settings-layout">
+      <section>
+        <div className="settings-section-heading"><h2>Appearance</h2><p>Use a fixed theme or match your Mac.</p></div>
+        <div className="settings-section-body">
+          <div className="theme-preference" role="group" aria-label="Appearance">{themeOptions.map((option) => <button type="button" key={option.value} aria-pressed={theme === option.value} onClick={() => onThemeChange(option.value)}>{option.icon}<span>{option.label}</span></button>)}</div>
+          <p className="theme-preference-help">System follows the appearance selected in macOS and updates when it changes.</p>
+        </div>
+      </section>
+      <section>
+        <div className="settings-section-heading"><h2>Connections</h2><p>Tool readiness, GitHub identity, and Git transport.</p></div>
+        <div className="settings-section-body settings-rows">
+          {state.dependencies.map((dep) => <div key={dep.name}><span className={`setup-status ${dep.state}`}>{dep.state === 'available' ? <Check size={14}/> : <X size={14}/>}</span><div><strong>{dependencyLabel(dep.name)}</strong><small>{dep.version || dep.message || (dep.state === 'available' ? 'Available' : 'Not detected by ReviewArc')}</small>{dep.state !== 'available' && <p className="dependency-help">{missingDependencyHelp(dep.name)}</p>}</div><code title={dep.path}>{dep.path || 'Not found'}</code></div>)}
+          <div><span className="setup-status available"><Check size={14}/></span><div><strong>Authenticated as @{state.account?.login || 'unknown'}</strong><small>Credentials are managed by GitHub CLI.</small></div><code>gh</code></div>
+          <div><span className="setup-status available"><GitPullRequest size={14}/></span><div><strong>Git operations: {protocol}</strong><small>Managed repository fetches follow your <code>gh</code> protocol setting.</small></div><code>{state.gitProtocol || 'https'}</code></div>
+        </div>
+      </section>
+      <section><div className="settings-section-heading"><h2>Review sources</h2><p>Choose which organizations and repositories feed your inbox.</p></div><div className="settings-section-body settings-rows"><div className="settings-action-row"><span className="setup-status available"><GitPullRequest size={14}/></span><div><strong>{selectedSources} source{selectedSources === 1 ? '' : 's'} selected</strong><small>Open pull requests are loaded only from enabled sources.</small></div><button className="button secondary" onClick={onSources}><SlidersHorizontal size={15}/>Manage sources</button></div></div></section>
+      {update && (
+        <SoftwareUpdateSettings update={update} busy={updateBusy} onCheck={onCheckUpdate} onSetChannel={onSetUpdateChannel} onInstall={onInstallUpdate}/>
+      )}
+      <section><div className="settings-section-heading"><h2>Local data</h2><p>Application-owned storage used for repository analysis and saved review state.</p></div><div className="settings-section-body"><dl className="path-list"><div><dt>Application data</dt><dd>{state.paths.root}</dd></div><div><dt>Repository caches</dt><dd>{state.paths.repositories}</dd></div><div><dt>Analysis worktrees</dt><dd>{state.paths.worktrees}</dd></div><div><dt>Database</dt><dd>{state.paths.database}</dd></div><div><dt>Logs</dt><dd>{state.paths.logs}</dd></div><div><dt>Temporary cache</dt><dd>{state.paths.cache}</dd></div></dl><p className="safety-copy"><CircleHelp size={16}/><span>PR analysis uses the repository cache and isolated worktree listed above. ReviewArc also invokes your installed <code>git</code>, <code>gh</code>, and <code>codex</code> tools, which may read their own configuration and credentials.</span></p></div></section>
+    </div>
+  </main>
 }

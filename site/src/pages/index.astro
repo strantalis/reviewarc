@@ -1,6 +1,8 @@
 ---
 import "../styles/landing.css";
 import reviewArcMark from "../assets/reviewarc-mark.svg";
+import ThemeControl from "../components/ThemeControl.astro";
+import ThemeBootstrap from "../components/ThemeBootstrap.astro";
 ---
 
 <!doctype html>
@@ -8,9 +10,11 @@ import reviewArcMark from "../assets/reviewarc-mark.svg";
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#f6f8fb" />
     <meta name="description" content="ReviewArc breaks large GitHub pull requests into focused chapters, with the relevant diff, risks, tests, and evidence kept together." />
     <title>ReviewArc — Review the change with the evidence in view</title>
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f6f8fb" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#171d26" />
+    <ThemeBootstrap />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
@@ -27,6 +31,7 @@ import reviewArcMark from "../assets/reviewarc-mark.svg";
         <a class="wide-nav-link" href="#review-arc">How it works</a>
         <a href="/docs/">Docs</a>
         <a class="header-download is-loading" data-release-action aria-disabled="true">Checking…</a>
+        <ThemeControl />
       </nav>
     </header>
 
@@ -73,7 +78,16 @@ import reviewArcMark from "../assets/reviewarc-mark.svg";
 
         <figure class="product-visual hero-visual">
           <div class="visual-stage">
-            <img src="/images/reviewarc-guided-review.webp" width="1586" height="992" alt="ReviewArc's focused story mode showing one review chapter with a validated risk, collapsed code evidence, an open question, and a behavioral change" fetchpriority="high" />
+            <img
+              src="/images/reviewarc-guided-review.webp"
+              data-theme-image
+              data-light-src="/images/reviewarc-guided-review.webp"
+              data-dark-src="/images/reviewarc-guided-review-dark.webp"
+              width="1586"
+              height="992"
+              alt="ReviewArc's guided review showing one chapter with a validated risk, collapsed code evidence, an open question, and a behavioral change"
+              fetchpriority="high"
+            />
           </div>
           <figcaption><strong>Story mode keeps the chapter, code, and evidence in one view.</strong></figcaption>
         </figure>
@@ -96,7 +110,16 @@ import reviewArcMark from "../assets/reviewarc-mark.svg";
       <section class="product-story" aria-labelledby="product-story-title">
         <figure class="product-visual review-visual">
           <div class="visual-stage">
-            <img src="/images/reviewarc-inbox.webp" width="1586" height="992" alt="ReviewArc's pull request inbox showing saved views, repository filters, review relationships, and analysis state" loading="lazy" />
+            <img
+              src="/images/reviewarc-inbox.webp"
+              data-theme-image
+              data-light-src="/images/reviewarc-inbox.webp"
+              data-dark-src="/images/reviewarc-inbox-dark.webp"
+              width="1586"
+              height="992"
+              alt="ReviewArc's pull request inbox showing saved views, repository filters, review relationships, and analysis state"
+              loading="lazy"
+            />
           </div>
           <figcaption><strong>Your review queue, across the repositories you choose.</strong></figcaption>
         </figure>

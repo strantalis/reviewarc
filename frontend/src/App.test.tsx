@@ -292,6 +292,16 @@ describe('App startup', () => {
 })
 
 describe('Settings', () => {
+  it('offers system, light, and dark appearance preferences', () => {
+    const onThemeChange = vi.fn()
+    render(<SettingsScreen state={{dependencies: [], paths, selections: [], inbox: []}} theme="dark" onThemeChange={onThemeChange} onSources={vi.fn()}/>)
+    expect(screen.getByRole('button', {name: 'Dark'})).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', {name: 'System'})).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(screen.getByRole('button', {name: 'Light'}))
+    expect(onThemeChange).toHaveBeenCalledWith('light')
+    expect(screen.getByText(/updates when it changes/)).toBeInTheDocument()
+  })
+
   it('shows the authenticated account and effective SSH protocol used for managed Git operations', () => {
     render(<SettingsScreen state={{dependencies: [{name: 'git', state: 'available', path: '/usr/bin/git'}, {name: 'gh', state: 'available', path: '/opt/homebrew/bin/gh'}, {name: 'codex', state: 'available', path: '/Users/sean/.local/bin/codex'}], paths, account: {login: 'strantalis', name: 'Sean', avatarUrl: ''}, gitProtocol: 'ssh', selections: [], inbox: []}} onSources={vi.fn()}/>)
     expect(screen.getByText('Authenticated as @strantalis')).toBeInTheDocument()

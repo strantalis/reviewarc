@@ -1,0 +1,6 @@
+{/*
+  Applies the stored or system theme before first paint so a dark-preference
+  visit never flashes light. Must stay byte-identical wherever it is used:
+  its sha256 is allowlisted in astro.config.mjs `scriptDirective.hashes`.
+*/}
+<script is:inline>(()=>{try{const e=localStorage.getItem("starlight-theme"),t=e==="light"||e==="dark"?e:matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light",d=document.documentElement;d.dataset.theme=t;d.style.colorScheme=t}catch{}})();</script>
