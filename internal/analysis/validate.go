@@ -50,84 +50,99 @@ func validateModelIdentity(raw rawAnalysis) error {
 	if len(raw.Chapters) == 0 {
 		return errors.New("analysis returned no review chapters")
 	}
-	ids, orders := map[string]bool{}, map[int]bool{}
-	add := func(id, kind string) error {
-		id = strings.TrimSpace(id)
-		if id == "" {
-			return fmt.Errorf("analysis returned an empty %s ID", kind)
-		}
-		if ids[id] {
-			return fmt.Errorf("analysis reused structured ID %q", id)
-		}
-		ids[id] = true
-		return nil
-	}
-	claims := func(values []rawClaim) error {
-		for _, value := range values {
-			if err := add(value.ID, "claim"); err != nil {
-				return err
+	unique := func(ids []string, kind, scope string) error {
+		seen := map[string]bool{}
+		for _, id := range ids {
+			id = strings.TrimSpace(id)
+			if id == "" {
+				return fmt.Errorf("analysis returned an empty %s ID", kind)
 			}
-		}
-		return nil
-	}
-	risks := func(values []rawRisk) error {
-		for _, value := range values {
-			if err := add(value.ID, "risk"); err != nil {
-				return err
+			if seen[id] {
+				return fmt.Errorf("analysis reused %s ID %q within %s", kind, id, scope)
 			}
+			seen[id] = true
 		}
 		return nil
 	}
-	behaviors := func(values []rawBehavior) error {
-		for _, value := range values {
-			if err := add(value.ID, "behavior"); err != nil {
-				return err
-			}
+	claims := func(values []rawClaim, scope string) error {
+		ids := make([]string, len(values))
+		for i, value := range values {
+			ids[i] = value.ID
 		}
-		return nil
+		return unique(ids, "claim", scope)
 	}
-	for _, values := range [][]rawClaim{raw.Facts, raw.Inferences, raw.Unknowns} {
-		if err := claims(values); err != nil {
+	risks := func(values []rawRisk, scope string) error {
+		ids := make([]string, len(values))
+		for i, value := range values {
+			ids[i] = value.ID
+		}
+		return unique(ids, "risk", scope)
+	}
+	behaviors := func(values []rawBehavior, scope string) error {
+		ids := make([]string, len(values))
+		for i, value := range values {
+			ids[i] = value.ID
+		}
+		return unique(ids, "behavior", scope)
+	}
+	for _, collection := range []struct {
+		values []rawClaim
+		scope  string
+	}{{raw.Facts, "top-level facts"}, {raw.Inferences, "top-level inferences"}, {raw.Unknowns, "top-level unknowns"}} {
+		if err := claims(collection.values, collection.scope); err != nil {
 			return err
 		}
 	}
-	if err := risks(raw.Risks); err != nil {
+	if err := risks(raw.Risks, "top-level risks"); err != nil {
 		return err
 	}
-	if err := behaviors(raw.BehavioralChanges); err != nil {
+	if err := behaviors(raw.BehavioralChanges, "top-level behavioral changes"); err != nil {
 		return err
 	}
+	chapterIDs, orders := map[string]bool{}, map[int]bool{}
 	for _, chapter := range raw.Chapters {
 		if strings.TrimSpace(chapter.Title) == "" || strings.TrimSpace(chapter.Purpose) == "" {
 			return fmt.Errorf("analysis returned an empty title or purpose for chapter %q", chapter.ID)
 		}
-		if err := add(chapter.ID, "chapter"); err != nil {
-			return err
+		chapterID := strings.TrimSpace(chapter.ID)
+		if chapterID == "" {
+			return errors.New("analysis returned an empty chapter ID")
 		}
+		if chapterIDs[chapterID] {
+			return fmt.Errorf("analysis reused chapter ID %q", chapterID)
+		}
+		chapterIDs[chapterID] = true
 		if chapter.Order < 1 || orders[chapter.Order] {
 			return fmt.Errorf("analysis returned invalid or duplicate chapter order %d", chapter.Order)
 		}
 		orders[chapter.Order] = true
-		for _, values := range [][]rawClaim{chapter.Facts, chapter.Inferences, chapter.Unknowns} {
-			if err := claims(values); err != nil {
+		for _, collection := range []struct {
+			values []rawClaim
+			scope  string
+		}{{chapter.Facts, "chapter facts"}, {chapter.Inferences, "chapter inferences"}, {chapter.Unknowns, "chapter unknowns"}} {
+			if err := claims(collection.values, collection.scope); err != nil {
 				return err
 			}
 		}
-		if err := risks(chapter.Risks); err != nil {
+		if err := risks(chapter.Risks, "chapter risks"); err != nil {
 			return err
 		}
-		if err := behaviors(chapter.BehavioralChanges); err != nil {
+		if err := behaviors(chapter.BehavioralChanges, "chapter behavioral changes"); err != nil {
 			return err
 		}
-		for _, test := range chapter.RelatedTests {
-			if err := add(test.ID, "test"); err != nil {
-				return err
-			}
+		testIDs := make([]string, len(chapter.RelatedTests))
+		for i, test := range chapter.RelatedTests {
+			testIDs[i] = test.ID
 		}
-		for _, question := range chapter.SuggestedQuestions {
-			if err := add(question.ID, "question"); err != nil {
-				return err
-			}
+		if err := unique(testIDs, "test", "chapter related tests"); err != nil {
+			return err
+		}
+		questionIDs := make([]string, len(chapter.SuggestedQuestions))
+		for i, question := range chapter.SuggestedQuestions {
+			questionIDs[i] = question.ID
+		}
+		if err := unique(questionIDs, "question", "chapter suggested questions"); err != nil {
+			return err
 		}
 	}
 	return nil

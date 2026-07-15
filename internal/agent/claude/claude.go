@@ -252,6 +252,7 @@ var errPolicyViolation = errors.New("analysis harness policy violation")
 
 type streamEvent struct {
 	Type             string          `json:"type"`
+	Subtype          string          `json:"subtype"`
 	IsError          bool            `json:"is_error"`
 	Result           string          `json:"result"`
 	StructuredOutput json.RawMessage `json:"structured_output"`
@@ -276,6 +277,7 @@ type pendingCall struct {
 func parseStream(data []byte, tracker *agent.AccessTracker) (sharedanalysis.Document, error) {
 	pending := map[string]pendingCall{}
 	var final json.RawMessage
+	var structuredToolOutput json.RawMessage
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	scanner.Buffer(make([]byte, 64<<10), 8<<20)
 	line := 0
@@ -288,6 +290,12 @@ func parseStream(data []byte, tracker *agent.AccessTracker) (sharedanalysis.Docu
 		for _, block := range event.Message.Content {
 			switch block.Type {
 			case "tool_use":
+				if block.Name == "StructuredOutput" {
+					if len(block.Input) > 0 && string(block.Input) != "null" && json.Valid(block.Input) {
+						structuredToolOutput = append(json.RawMessage(nil), block.Input...)
+					}
+					continue
+				}
 				const prefix = "mcp__reviewarc__"
 				if !strings.HasPrefix(block.Name, prefix) {
 					return sharedanalysis.Document{}, fmt.Errorf("%w: unapproved tool %s", errPolicyViolation, block.Name)
@@ -309,10 +317,15 @@ func parseStream(data []byte, tracker *agent.AccessTracker) (sharedanalysis.Docu
 		}
 		if event.Type == "result" {
 			if event.IsError {
+				if event.Subtype == "error_max_structured_output_retries" {
+					return sharedanalysis.Document{}, errors.New("Claude could not produce output matching ReviewArc's schema")
+				}
 				return sharedanalysis.Document{}, errors.New("Claude returned an error result")
 			}
 			if len(event.StructuredOutput) > 0 && string(event.StructuredOutput) != "null" {
 				final = event.StructuredOutput
+			} else if len(structuredToolOutput) > 0 {
+				final = structuredToolOutput
 			} else if json.Valid([]byte(event.Result)) {
 				final = json.RawMessage(event.Result)
 			}

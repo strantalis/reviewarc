@@ -49,6 +49,26 @@ func TestValidateModelIdentityRejectsDuplicateChapterIDs(t *testing.T) {
 	}
 }
 
+func TestValidateModelIdentityScopesFindingIDsToTheirCollections(t *testing.T) {
+	raw := rawAnalysis{
+		Summary: "Review summary",
+		Facts:   []rawClaim{{ID: "f1", Text: "Top-level fact"}},
+		Risks:   []rawRisk{{ID: "f1", Title: "Top-level risk"}},
+		Chapters: []rawChapter{{
+			ID: "chapter", Order: 1, Title: "One", Purpose: "Review one",
+			Facts: []rawClaim{{ID: "f1", Text: "Chapter fact"}},
+			Risks: []rawRisk{{ID: "f1", Title: "Chapter risk"}},
+		}},
+	}
+	if err := validateModelIdentity(raw); err != nil {
+		t.Fatalf("collection-scoped ID reuse rejected: %v", err)
+	}
+	raw.Chapters[0].Facts = append(raw.Chapters[0].Facts, rawClaim{ID: "f1", Text: "Duplicate chapter fact"})
+	if err := validateModelIdentity(raw); err == nil || !strings.Contains(err.Error(), "within chapter facts") {
+		t.Fatalf("same-collection duplicate error=%v", err)
+	}
+}
+
 func TestValidateRejectsEmptyOrUnsupportedWalkthrough(t *testing.T) {
 	for _, raw := range []rawAnalysis{
 		{Chapters: []rawChapter{{ID: "chapter", Order: 1, Title: "Title", Purpose: "Purpose"}}},

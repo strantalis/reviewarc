@@ -109,8 +109,11 @@ func fixtureStream(t *testing.T) []byte {
 	if err := json.Unmarshal(payload, &structured); err != nil {
 		t.Fatal(err)
 	}
-	result, _ := json.Marshal(map[string]any{"type": "result", "is_error": false, "structured_output": structured})
-	return []byte(string(toolUse) + "\n" + string(toolResult) + "\n" + string(result) + "\n")
+	structuredOutput, _ := json.Marshal(map[string]any{"type": "assistant", "message": map[string]any{"content": []any{map[string]any{
+		"type": "tool_use", "id": "structured_1", "name": "StructuredOutput", "input": structured,
+	}}}})
+	result, _ := json.Marshal(map[string]any{"type": "result", "subtype": "success", "is_error": false})
+	return []byte(string(toolUse) + "\n" + string(toolResult) + "\n" + string(structuredOutput) + "\n" + string(result) + "\n")
 }
 
 func TestProgressMessageDescribesApprovedContextActivity(t *testing.T) {
@@ -185,6 +188,9 @@ func TestParseStreamRejectsMalformedUnknownToolsAndMissingStructuredOutput(t *te
 	}
 	if _, err := parseStream([]byte(`{"type":"result","is_error":false}`), tracker); err == nil {
 		t.Fatal("missing structured output accepted")
+	}
+	if _, err := parseStream([]byte(`{"type":"result","subtype":"error_max_structured_output_retries","is_error":true}`), tracker); err == nil || !strings.Contains(err.Error(), "matching ReviewArc's schema") {
+		t.Fatalf("structured output retry error=%v", err)
 	}
 }
 
