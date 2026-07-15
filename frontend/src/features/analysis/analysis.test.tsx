@@ -7,7 +7,7 @@ import type { AnalysisConfiguration, AnalysisRun } from '../../types'
 
 const configuration: AnalysisConfiguration = {
   harnesses: [{
-    id: 'codex', label: 'Codex', availability: 'available', eligible: true, version: '1.2.3',
+    id: 'codex', label: 'Codex', availability: 'available', eligible: true, version: '1.2.3', path: '/opt/homebrew/bin/codex',
     capabilities: {jsonSchema: true, readOnly: true, progress: true, contextTransport: ['reviewarcTools']},
     models: [
       {id: 'gpt-5', label: 'GPT-5', recommended: true, reasoningLevels: [{id: 'medium', label: 'Medium', recommended: true}, {id: 'high', label: 'High'}]},
@@ -40,6 +40,7 @@ describe('analysis configuration components', () => {
     expect(screen.getByRole('combobox', {name: 'Analysis harness'})).toHaveTextContent('Codex')
     expect(screen.getByRole('combobox', {name: 'Analysis model'})).toHaveTextContent('GPT-5')
     expect(screen.getByRole('combobox', {name: 'Analysis reasoning level'})).toHaveTextContent('Medium')
+    expect(screen.getByText('/opt/homebrew/bin/codex')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', {name: 'Save defaults'}))
     await waitFor(() => expect(onSave).toHaveBeenCalledWith({harness: 'codex', model: 'gpt-5', reasoning: 'medium'}))
     expect(await screen.findByRole('status')).toHaveTextContent('Defaults saved.')
