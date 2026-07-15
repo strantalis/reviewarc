@@ -17,9 +17,10 @@ import (
 type Tool string
 
 const (
-	Git   Tool = "git"
-	GH    Tool = "gh"
-	Codex Tool = "codex"
+	Git    Tool = "git"
+	GH     Tool = "gh"
+	Codex  Tool = "codex"
+	Claude Tool = "claude"
 )
 
 const defaultMaxOutput = 16 << 20
@@ -77,13 +78,16 @@ func NewExecRunner() *ExecRunner {
 
 func (r *ExecRunner) RefreshPaths() {
 	search := executableSearchDirs(r.source, r.home)
-	paths := make(map[Tool]string, 3)
-	for _, tool := range []Tool{Git, GH, Codex} {
+	paths := make(map[Tool]string, 4)
+	for _, tool := range []Tool{Git, GH, Codex, Claude} {
 		paths[tool] = resolveExecutable(tool, search)
 	}
 	pathValue := strings.Join(search, string(os.PathListSeparator))
 	environments := map[Tool][]string{
-		Git: minimalEnvironment(r.source, Git, pathValue), GH: minimalEnvironment(r.source, GH, pathValue), Codex: minimalEnvironment(r.source, Codex, pathValue),
+		Git:    minimalEnvironment(r.source, Git, pathValue),
+		GH:     minimalEnvironment(r.source, GH, pathValue),
+		Codex:  minimalEnvironment(r.source, Codex, pathValue),
+		Claude: minimalEnvironment(r.source, Claude, pathValue),
 	}
 	r.mu.Lock()
 	r.paths = paths
@@ -170,7 +174,7 @@ func (r *ExecRunner) Run(ctx context.Context, c Command) (Result, error) {
 	return result, nil
 }
 
-func validTool(t Tool) bool { return t == Git || t == GH || t == Codex }
+func validTool(t Tool) bool { return t == Git || t == GH || t == Codex || t == Claude }
 func exitCode(err error) int {
 	if err == nil {
 		return 0
@@ -244,6 +248,9 @@ func minimalEnvironment(source []string, tool Tool, pathValue string) []string {
 	}
 	if tool == Codex {
 		allowed["CODEX_HOME"], allowed["OPENAI_API_KEY"] = true, true
+	}
+	if tool == Claude {
+		allowed["ANTHROPIC_API_KEY"], allowed["CLAUDE_CONFIG_DIR"] = true, true
 	}
 	out := make([]string, 0, len(allowed))
 	for _, entry := range source {

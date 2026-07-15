@@ -25,6 +25,8 @@ var migrationFiles embed.FS
 
 var ErrNotFound = errors.New("persistence: not found")
 
+const analysisProfileSetting = "analysis_profile_v1"
+
 type Store struct{ db *sql.DB }
 
 type Operation struct {
@@ -61,11 +63,27 @@ func (s *Store) Close() error { return s.db.Close() }
 // RecoverInterruptedAnalyses clears process-local running state left behind by
 // a crash or quit. No analysis process can survive application startup.
 func (s *Store) RecoverInterruptedAnalyses(ctx context.Context) (int64, error) {
-	result, err := s.db.ExecContext(ctx, `UPDATE review_sessions SET analysis_status=?,updated_at=? WHERE analysis_status=?`, domain.AnalysisFailed, encodeTime(time.Now()), domain.AnalysisRunning)
+	now := encodeTime(time.Now())
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `UPDATE analysis_runs SET status=?,failure_code=?,failure_title=?,failure_message=?,failure_action=?,failure_retryable=1,completed_at=?,updated_at=? WHERE status IN (?,?)`, domain.AnalysisRunFailed, domain.FailureInterrupted, "Analysis interrupted", "ReviewArc closed before this analysis completed.", domain.RetrySamePlan, now, now, domain.AnalysisRunPreparing, domain.AnalysisRunRunning); err != nil {
+		return 0, wrap("recover interrupted analysis runs", err)
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE review_sessions SET analysis_status=?,updated_at=? WHERE analysis_status=?`, domain.AnalysisFailed, now, domain.AnalysisRunning)
 	if err != nil {
 		return 0, wrap("recover interrupted analyses", err)
 	}
-	return result.RowsAffected()
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func (s *Store) initialize(ctx context.Context) error {
@@ -133,6 +151,24 @@ func (s *Store) GetSetting(ctx context.Context, key string, target any) error {
 		return fmt.Errorf("load setting %q: corrupt JSON: %w", key, err)
 	}
 	return nil
+}
+
+func (s *Store) SaveAnalysisProfile(ctx context.Context, profile domain.AnalysisProfile) error {
+	if profile.Harness == "" || strings.TrimSpace(profile.Model) == "" || strings.ContainsRune(profile.Model, 0) || profile.Reasoning == "" {
+		return errors.New("save analysis profile: harness, model, and reasoning level are required")
+	}
+	return s.SetSetting(ctx, analysisProfileSetting, profile)
+}
+
+func (s *Store) GetAnalysisProfile(ctx context.Context) (domain.AnalysisProfile, error) {
+	var profile domain.AnalysisProfile
+	if err := s.GetSetting(ctx, analysisProfileSetting, &profile); err != nil {
+		return profile, err
+	}
+	if profile.Harness == "" || strings.TrimSpace(profile.Model) == "" || strings.ContainsRune(profile.Model, 0) || profile.Reasoning == "" {
+		return domain.AnalysisProfile{}, errors.New("load analysis profile: invalid profile")
+	}
+	return profile, nil
 }
 
 func (s *Store) ReplaceSelections(ctx context.Context, selections []domain.SourceSelection) error {
@@ -437,21 +473,27 @@ func (s *Store) SaveAnalysis(ctx context.Context, sessionID string, analysis dom
 // chapter progress. Callers use this after model generation has completed so
 // an operation cancellation cannot leave the two durable views out of sync.
 func (s *Store) SaveCompletedAnalysis(ctx context.Context, sessionID string, analysis domain.ReviewAnalysis) error {
-	b, err := json.Marshal(analysis)
-	if err != nil {
-		return fmt.Errorf("encode analysis: %w", err)
-	}
-	now := time.Now()
-	created := analysis.CreatedAt
-	if created.IsZero() {
-		created = now
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `INSERT INTO analyses(session_id,schema_version,base_sha,head_sha,analysis_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET schema_version=excluded.schema_version,base_sha=excluded.base_sha,head_sha=excluded.head_sha,analysis_json=excluded.analysis_json,created_at=excluded.created_at,updated_at=excluded.updated_at`, sessionID, analysis.SchemaVersion, analysis.BaseSHA, analysis.HeadSHA, b, encodeTime(created), encodeTime(now)); err != nil {
+	if err := saveCompletedAnalysisTx(ctx, tx, sessionID, analysis, time.Now()); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func saveCompletedAnalysisTx(ctx context.Context, tx *sql.Tx, sessionID string, analysis domain.ReviewAnalysis, now time.Time) error {
+	body, err := json.Marshal(analysis)
+	if err != nil {
+		return fmt.Errorf("encode analysis: %w", err)
+	}
+	created := analysis.CreatedAt
+	if created.IsZero() {
+		created = now
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO analyses(session_id,schema_version,base_sha,head_sha,analysis_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET schema_version=excluded.schema_version,base_sha=excluded.base_sha,head_sha=excluded.head_sha,analysis_json=excluded.analysis_json,created_at=excluded.created_at,updated_at=excluded.updated_at`, sessionID, analysis.SchemaVersion, analysis.BaseSHA, analysis.HeadSHA, body, encodeTime(created), encodeTime(now)); err != nil {
 		return err
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT chapter_id,status FROM chapter_progress WHERE session_id=?`, sessionID)
@@ -483,10 +525,216 @@ func (s *Store) SaveCompletedAnalysis(ctx context.Context, sessionID string, ana
 			return err
 		}
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE review_sessions SET analysis_status=?,is_stale=0,stale_reason='',updated_at=? WHERE id=?`, domain.AnalysisReady, encodeTime(now), sessionID); err != nil {
+	result, err := tx.ExecContext(ctx, `UPDATE review_sessions SET analysis_status=?,is_stale=0,stale_reason='',updated_at=? WHERE id=?`, domain.AnalysisReady, encodeTime(now), sessionID)
+	if err != nil {
+		return err
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return fmt.Errorf("complete analysis: session %q not found", sessionID)
+	}
+	return nil
+}
+
+func (s *Store) StartAnalysisRun(ctx context.Context, run domain.AnalysisRun) error {
+	if run.ID == "" || run.SessionID == "" || run.Profile.Harness == "" || strings.TrimSpace(run.Profile.Model) == "" || run.Profile.Reasoning == "" || run.ContextTransport == "" || run.SchemaVersion < 1 || run.InputFingerprint == "" {
+		return errors.New("start analysis run: incomplete provenance")
+	}
+	if run.Status == "" {
+		run.Status = domain.AnalysisRunPreparing
+	}
+	if run.Status != domain.AnalysisRunPreparing && run.Status != domain.AnalysisRunRunning {
+		return fmt.Errorf("start analysis run: invalid status %q", run.Status)
+	}
+	now := run.UpdatedAt
+	if now.IsZero() {
+		now = time.Now()
+	}
+	started := run.StartedAt
+	if started.IsZero() {
+		started = now
+	}
+	coverage, err := json.Marshal(run.Coverage)
+	if err != nil {
+		return fmt.Errorf("encode analysis coverage: %w", err)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `INSERT INTO analysis_runs(id,session_id,harness_id,harness_version,context_transport,model,reasoning_level,schema_version,input_fingerprint,coverage_json,status,started_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, run.ID, run.SessionID, run.Profile.Harness, run.HarnessVersion, run.ContextTransport, run.Profile.Model, run.Profile.Reasoning, run.SchemaVersion, run.InputFingerprint, coverage, run.Status, encodeTime(started), encodeTime(now)); err != nil {
+		return wrap("start analysis run", err)
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE review_sessions SET analysis_status=?,updated_at=? WHERE id=?`, domain.AnalysisRunning, encodeTime(now), run.SessionID)
+	if err != nil {
+		return err
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return fmt.Errorf("start analysis run: session %q not found", run.SessionID)
+	}
+	return tx.Commit()
+}
+
+func (s *Store) MarkAnalysisRunRunning(ctx context.Context, runID string) error {
+	if runID == "" {
+		return errors.New("mark analysis run running: run ID is required")
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE analysis_runs SET status=?,updated_at=? WHERE id=? AND status=?`, domain.AnalysisRunRunning, encodeTime(time.Now()), runID, domain.AnalysisRunPreparing)
+	if err != nil {
+		return wrap("mark analysis run running", err)
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return fmt.Errorf("mark analysis run running: run %q is not preparing", runID)
+	}
+	return nil
+}
+
+func (s *Store) CompleteAnalysisRun(ctx context.Context, runID string, analysis domain.ReviewAnalysis, coverage domain.AnalysisCoverage) error {
+	coverageJSON, err := json.Marshal(coverage)
+	if err != nil {
+		return fmt.Errorf("encode analysis coverage: %w", err)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var sessionID string
+	var schemaVersion int
+	if err := tx.QueryRowContext(ctx, `SELECT session_id,schema_version FROM analysis_runs WHERE id=? AND status IN (?,?)`, runID, domain.AnalysisRunPreparing, domain.AnalysisRunRunning).Scan(&sessionID, &schemaVersion); err != nil {
+		return queryErr("complete analysis run", err)
+	}
+	if analysis.SchemaVersion != schemaVersion {
+		return fmt.Errorf("complete analysis run: schema version %d does not match run version %d", analysis.SchemaVersion, schemaVersion)
+	}
+	now := time.Now()
+	if err := saveCompletedAnalysisTx(ctx, tx, sessionID, analysis, now); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE analysis_runs SET coverage_json=?,status=?,failure_code='',failure_title='',failure_message='',failure_action='',failure_retryable=0,failure_technical_details='',completed_at=?,updated_at=? WHERE id=?`, coverageJSON, domain.AnalysisRunCompleted, encodeTime(now), encodeTime(now), runID)
+	if err != nil {
+		return err
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return fmt.Errorf("complete analysis run: run %q changed concurrently", runID)
+	}
+	return tx.Commit()
+}
+
+func (s *Store) FailAnalysisRun(ctx context.Context, runID string, failure domain.AnalysisFailure, coverage domain.AnalysisCoverage) error {
+	if failure.Code == "" {
+		return errors.New("fail analysis run: failure code is required")
+	}
+	return s.finishAnalysisRun(ctx, runID, domain.AnalysisRunFailed, &failure, coverage)
+}
+
+func (s *Store) CancelAnalysisRun(ctx context.Context, runID string, coverage domain.AnalysisCoverage) error {
+	return s.finishAnalysisRun(ctx, runID, domain.AnalysisRunCancelled, nil, coverage)
+}
+
+func (s *Store) finishAnalysisRun(ctx context.Context, runID string, status domain.AnalysisRunStatus, failure *domain.AnalysisFailure, coverage domain.AnalysisCoverage) error {
+	coverageJSON, err := json.Marshal(coverage)
+	if err != nil {
+		return fmt.Errorf("encode analysis coverage: %w", err)
+	}
+	var code, title, message, action, technical string
+	var retryable bool
+	if failure != nil {
+		code, title, message, action, retryable = string(failure.Code), failure.Title, failure.Message, string(failure.Action), failure.Retryable
+		technical = boundedTechnicalDetails(failure.TechnicalDetails)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var sessionID string
+	if err := tx.QueryRowContext(ctx, `SELECT session_id FROM analysis_runs WHERE id=? AND status IN (?,?)`, runID, domain.AnalysisRunPreparing, domain.AnalysisRunRunning).Scan(&sessionID); err != nil {
+		return queryErr("finish analysis run", err)
+	}
+	now := time.Now()
+	result, err := tx.ExecContext(ctx, `UPDATE analysis_runs SET coverage_json=?,status=?,failure_code=?,failure_title=?,failure_message=?,failure_action=?,failure_retryable=?,failure_technical_details=?,completed_at=?,updated_at=? WHERE id=?`, coverageJSON, status, code, title, message, action, retryable, technical, encodeTime(now), encodeTime(now), runID)
+	if err != nil {
+		return err
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return fmt.Errorf("finish analysis run: run %q changed concurrently", runID)
+	}
+	withoutAnalysis := domain.AnalysisFailed
+	if status == domain.AnalysisRunCancelled {
+		withoutAnalysis = domain.AnalysisNotStarted
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE review_sessions SET analysis_status=CASE WHEN EXISTS(SELECT 1 FROM analyses WHERE analyses.session_id=review_sessions.id) THEN CASE WHEN is_stale=1 THEN ? ELSE ? END ELSE ? END,updated_at=? WHERE id=?`, domain.AnalysisStale, domain.AnalysisReady, withoutAnalysis, encodeTime(now), sessionID); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+func (s *Store) ListAnalysisRuns(ctx context.Context, sessionID string) ([]domain.AnalysisRun, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,session_id,harness_id,harness_version,context_transport,model,reasoning_level,schema_version,input_fingerprint,coverage_json,status,failure_code,failure_title,failure_message,failure_action,failure_retryable,failure_technical_details,started_at,completed_at,updated_at FROM analysis_runs WHERE session_id=? ORDER BY started_at DESC,id DESC`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.AnalysisRun
+	for rows.Next() {
+		run, err := scanAnalysisRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, run)
+	}
+	return out, rows.Err()
+}
+
+type rowScanner interface{ Scan(...any) error }
+
+func scanAnalysisRun(row rowScanner) (domain.AnalysisRun, error) {
+	var run domain.AnalysisRun
+	var coverage []byte
+	var failureCode, failureTitle, failureMessage, failureAction, technical string
+	var retryable bool
+	var started, updated string
+	var completed sql.NullString
+	if err := row.Scan(&run.ID, &run.SessionID, &run.Profile.Harness, &run.HarnessVersion, &run.ContextTransport, &run.Profile.Model, &run.Profile.Reasoning, &run.SchemaVersion, &run.InputFingerprint, &coverage, &run.Status, &failureCode, &failureTitle, &failureMessage, &failureAction, &retryable, &technical, &started, &completed, &updated); err != nil {
+		return run, err
+	}
+	if err := json.Unmarshal(coverage, &run.Coverage); err != nil {
+		return run, fmt.Errorf("load analysis run %q: corrupt coverage JSON: %w", run.ID, err)
+	}
+	if failureCode != "" {
+		run.Failure = &domain.AnalysisFailure{Code: domain.AnalysisFailureCode(failureCode), Title: failureTitle, Message: failureMessage, Action: domain.AnalysisRetryAction(failureAction), Retryable: retryable, TechnicalDetails: technical}
+	}
+	run.StartedAt, _ = decodeTime(started)
+	run.UpdatedAt, _ = decodeTime(updated)
+	if completed.Valid {
+		value, err := decodeTime(completed.String)
+		if err == nil {
+			run.CompletedAt = &value
+		}
+	}
+	return run, nil
+}
+
+func (s *Store) latestAnalysisRun(ctx context.Context, sessionID string) (*domain.AnalysisRun, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id,session_id,harness_id,harness_version,context_transport,model,reasoning_level,schema_version,input_fingerprint,coverage_json,status,failure_code,failure_title,failure_message,failure_action,failure_retryable,failure_technical_details,started_at,completed_at,updated_at FROM analysis_runs WHERE session_id=? ORDER BY started_at DESC,id DESC LIMIT 1`, sessionID)
+	run, err := scanAnalysisRun(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &run, nil
+}
+
+func boundedTechnicalDetails(value string) string {
+	const maxTechnicalDetails = 16 << 10
+	value = strings.TrimSpace(value)
+	if len(value) > maxTechnicalDetails {
+		value = value[len(value)-maxTechnicalDetails:]
+	}
+	return value
 }
 
 func (s *Store) GetSession(ctx context.Context, id string) (domain.ReviewSession, error) {
@@ -512,6 +760,10 @@ func (s *Store) GetSession(ctx context.Context, id string) (domain.ReviewSession
 			v.AnalysisStatus = domain.AnalysisFailed
 		}
 	} else if !errors.Is(err, sql.ErrNoRows) {
+		return v, err
+	}
+	v.LatestAnalysisRun, err = s.latestAnalysisRun(ctx, id)
+	if err != nil {
 		return v, err
 	}
 	v.Chapters, err = s.listChapters(ctx, id)

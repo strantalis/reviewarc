@@ -1,4 +1,4 @@
-package codex
+package analysis
 
 type rawEvidence struct {
 	ID, Path, Revision string

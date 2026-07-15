@@ -1,6 +1,6 @@
 ---
 title: Getting started
-description: Prepare GitHub CLI, Git, and Codex, then open your first pull request in ReviewArc.
+description: Prepare GitHub CLI and Git, then optionally connect an AI harness for guided reviews.
 ---
 
 ReviewArc uses the developer tools and GitHub identity already configured on your Mac.
@@ -11,7 +11,7 @@ Install these command-line tools and make sure they are available in your shell:
 
 - `git` for fetching pull request revisions into isolated managed caches.
 - `gh` for GitHub authentication, repositories, pull requests, and publishing reviews.
-- `codex` for structured, read-only analysis.
+- For guided analysis, either `codex` or `claude`, installed and authenticated. You can browse the inbox and open existing reviews without an AI harness.
 
 Authenticate GitHub CLI before opening ReviewArc:
 
@@ -24,7 +24,7 @@ ReviewArc follows the Git operations protocol shown by `gh auth status`. If your
 
 ## Choose sources
 
-1. Open **Settings** and confirm all three dependencies are detected.
+1. Open **Settings** and confirm Git and GitHub CLI are detected.
 2. Confirm the expected GitHub account and Git operations protocol are shown.
 3. Select the organizations or individual repositories you want in your inbox.
 4. Return to the inbox and refresh.
@@ -32,6 +32,8 @@ ReviewArc follows the Git operations protocol shown by `gh auth status`. If your
 No existing local checkout is required. ReviewArc does not clone a repository until you open a pull request that needs deeper inspection.
 
 ReviewArc follows the macOS appearance by default; choose **System**, **Light**, or **Dark** under **Settings → Appearance**.
+
+The first time you start an analysis, choose a harness, model, and reasoning level inline. ReviewArc saves that profile as the default. Later analyses are one click, with a compact per-run override; the same defaults live in the single **Settings → AI Analysis** section.
 
 ## Open a review
 

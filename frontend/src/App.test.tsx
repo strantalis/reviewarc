@@ -2,10 +2,11 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { App, DiffView, FileContextView, OverviewScreen, ReviewWorkspace, SettingsScreen, SourceSelector, SplitDiffView } from './App'
 import { Markdown, WindowControls } from './components'
-import type { BootstrapState, EnvironmentState, RepositoryPage, ReviewSession, SoftwareUpdateStatus } from './types'
+import type { AnalysisConfiguration, BootstrapState, EnvironmentState, RepositoryPage, ReviewSession, SoftwareUpdateStatus } from './types'
 
 const paths = {root: '/tmp/reviewarc', repositories: '/tmp/reviewarc/repos', worktrees: '/tmp/reviewarc/worktrees', database: '/tmp/reviewarc/db.sqlite', logs: '/tmp/reviewarc/logs', cache: '/tmp/reviewarc/cache'}
 const idleUpdate: SoftwareUpdateStatus = {currentVersion: '0.1.0', currentBuild: '7', state: 'idle', channel: 'stable'}
+const analysisConfiguration: AnalysisConfiguration = {defaultProfile: {harness: 'codex', model: 'gpt-5', reasoning: 'medium'}, harnesses: [{id: 'codex', label: 'Codex', availability: 'available', eligible: true, version: '1.2.3', capabilities: {jsonSchema: true, readOnly: true, progress: true, contextTransport: ['reviewarcTools']}, models: [{id: 'gpt-5', label: 'GPT-5', reasoningLevels: [{id: 'medium', label: 'Medium'}, {id: 'high', label: 'High'}]}, {id: 'gpt-5-mini', label: 'GPT-5 mini', reasoningLevels: [{id: 'low', label: 'Low'}]}]}]}
 
 function reviewSession(): ReviewSession {
   const evidence = {id: 'evidence-1', path: 'src/limiter.ts', revision: 'head' as const, startLine: 10, endLine: 13, validationStatus: 'valid' as const}
@@ -56,7 +57,8 @@ describe('App startup', () => {
     expect(screen.getByText(/Finder-launched apps use a limited environment/)).toBeInTheDocument()
     expect(screen.getByText('brew install gh')).toBeInTheDocument()
     expect(screen.queryByText('gh auth login')).not.toBeInTheDocument()
-    expect(screen.getByText('/opt/homebrew/bin/codex')).toBeInTheDocument()
+    expect(screen.queryByText('/opt/homebrew/bin/codex')).not.toBeInTheDocument()
+    expect(screen.getByText('Git and GitHub CLI connect ReviewArc to your pull requests.')).toBeInTheDocument()
   })
 
   it('checks dependencies again and leaves onboarding when the environment is repaired', async () => {
@@ -92,6 +94,13 @@ describe('App startup', () => {
 	expect(window.go?.main?.App?.RefreshAccount).not.toHaveBeenCalled()
 	expect(window.go?.main?.App?.RefreshEnvironment).not.toHaveBeenCalled()
 	expect(screen.getByText('Your review queue is clear')).toBeInTheDocument()
+  })
+
+  it('keeps the inbox usable when no AI harness is installed', async () => {
+    installBackend({dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'missing'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: []})
+    render(<App/>)
+    expect(await screen.findByRole('heading', {name: 'Pull request inbox'})).toBeInTheDocument()
+    expect(screen.queryByRole('heading', {name: 'Connect your review workspace'})).not.toBeInTheDocument()
   })
 
   it('opens Settings and checks from the native application menu event', async () => {
@@ -312,7 +321,7 @@ describe('Settings', () => {
     expect(screen.getByText(paths.worktrees)).toBeInTheDocument()
     expect(screen.getByText('Temporary cache')).toBeInTheDocument()
     expect(screen.getByText(paths.cache)).toBeInTheDocument()
-    expect(screen.getByText(/PR analysis uses the repository cache/)).toHaveTextContent('ReviewArc also invokes your installed git, gh, and codex tools, which may read their own configuration and credentials.')
+    expect(screen.getByText(/PR analysis uses the repository cache/)).toHaveTextContent('ReviewArc invokes your installed git, gh, and selected AI harness, which may read their own configuration and credentials.')
     expect(screen.queryByText(/operates only in these managed locations/)).not.toBeInTheDocument()
   })
 
@@ -519,6 +528,43 @@ describe('Repository sources', () => {
 	expect(screen.getByText('1 source included')).toBeInTheDocument()
 	await waitFor(() => expect(screen.getByText('0 sources included')).toBeInTheDocument())
 	expect(screen.queryByText('acme/old')).not.toBeInTheDocument()
+  })
+})
+
+describe('Analysis setup', () => {
+  it('configures the recommended profile inline on the first analysis', async () => {
+    const base = reviewSession()
+    const session: ReviewSession = {...base, analysis: undefined, analysisStatus: 'notStarted', chapters: [], progress: {total: 0, reviewed: 0, blocked: 0, clarify: 0, percent: 0}, pullRequest: {...base.pullRequest, analysisStatus: 'notStarted', progress: {total: 0, reviewed: 0, blocked: 0, clarify: 0, percent: 0}}}
+    const configuration = {...analysisConfiguration, defaultProfile: undefined}
+    const start = vi.fn().mockResolvedValue({id: 'operation-1', sessionId: session.id, kind: 'analysis', stage: 'preparingContext', message: 'Preparing context', state: 'running'})
+    const onConfiguration = vi.fn()
+    window.go = {main: {App: {StartAnalysisWithProfile: start}}}
+    window.runtime = {EventsOn: vi.fn(() => () => {})}
+    render(<OverviewScreen session={session} analysisConfiguration={configuration} legacyAnalysis={false} onAnalysisConfiguration={onConfiguration} onBack={vi.fn()} onSession={vi.fn()} onReview={vi.fn()}/>)
+
+    expect(screen.getByRole('heading', {name: 'Choose how to analyze this change'})).toBeInTheDocument()
+    expect(screen.getByRole('combobox', {name: 'Analysis harness'})).toHaveTextContent('Codex')
+    fireEvent.click(screen.getByRole('button', {name: 'Analyze pull request'}))
+    await waitFor(() => expect(start).toHaveBeenCalledWith(session.id, {profile: {harness: 'codex', model: 'gpt-5', reasoning: 'medium'}, saveAsDefault: true}))
+    expect(onConfiguration).toHaveBeenCalledWith(expect.objectContaining({defaultProfile: {harness: 'codex', model: 'gpt-5', reasoning: 'medium'}}))
+  })
+
+  it('uses a per-run override without changing the saved default', async () => {
+    const session = reviewSession()
+    const start = vi.fn().mockResolvedValue({id: 'operation-1', sessionId: session.id, kind: 'analysis', stage: 'preparingContext', message: 'Preparing context', state: 'running'})
+    const onConfiguration = vi.fn()
+    window.go = {main: {App: {StartAnalysisWithProfile: start}}}
+    window.runtime = {EventsOn: vi.fn(() => () => {})}
+    render(<OverviewScreen session={session} analysisConfiguration={analysisConfiguration} legacyAnalysis={false} onAnalysisConfiguration={onConfiguration} onBack={vi.fn()} onSession={vi.fn()} onReview={vi.fn()}/>)
+
+    fireEvent.click(screen.getByRole('button', {name: 'Change'}))
+    expect(screen.getByText('For this run')).toBeInTheDocument()
+    const model = screen.getByRole('combobox', {name: 'Analysis model'})
+    fireEvent.keyDown(model, {key: 'ArrowDown'})
+    fireEvent.click(await screen.findByRole('option', {name: 'GPT-5 mini'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Reanalyze'}))
+    await waitFor(() => expect(start).toHaveBeenCalledWith(session.id, {profile: {harness: 'codex', model: 'gpt-5-mini', reasoning: 'low'}, saveAsDefault: false}))
+    expect(onConfiguration).not.toHaveBeenCalled()
   })
 })
 

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -40,6 +41,9 @@ func preventFrontendCaching(next http.Handler) http.Handler {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "context-server" {
+		os.Exit(runContextServer(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+	}
 	app, err := NewApp()
 	if err != nil {
 		log.Fatal(err)

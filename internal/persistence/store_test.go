@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,7 +40,7 @@ func TestMigrationsAndReopen(t *testing.T) {
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&applied); err != nil {
 		t.Fatal(err)
 	}
-	if applied != 2 {
+	if applied != 3 {
 		t.Fatalf("applied migrations = %d", applied)
 	}
 }
@@ -282,6 +283,10 @@ func TestRecoverInterruptedAnalysesMakesRestartRetryable(t *testing.T) {
 	if err := s.SaveSession(ctx, session); err != nil {
 		t.Fatal(err)
 	}
+	run := domain.AnalysisRun{ID: "interrupted-run", SessionID: session.ID, Profile: domain.AnalysisProfile{Harness: domain.HarnessCodex, Model: "model", Reasoning: domain.ReasoningMedium}, ContextTransport: domain.ContextInline, SchemaVersion: 1, InputFingerprint: "fingerprint"}
+	if err := s.StartAnalysisRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
 	count, err := s.RecoverInterruptedAnalyses(ctx)
 	if err != nil || count != 1 {
 		t.Fatalf("recovery count=%d err=%v", count, err)
@@ -292,6 +297,84 @@ func TestRecoverInterruptedAnalysesMakesRestartRetryable(t *testing.T) {
 	}
 	if got.AnalysisStatus != domain.AnalysisFailed {
 		t.Fatalf("analysis status=%q", got.AnalysisStatus)
+	}
+	if got.LatestAnalysisRun == nil || got.LatestAnalysisRun.Status != domain.AnalysisRunFailed || got.LatestAnalysisRun.Failure == nil || got.LatestAnalysisRun.Failure.Code != domain.FailureInterrupted {
+		t.Fatalf("recovered run=%+v", got.LatestAnalysisRun)
+	}
+}
+
+func TestAnalysisProfileRoundTripAndValidation(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.GetAnalysisProfile(ctx); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing profile error=%v", err)
+	}
+	want := domain.AnalysisProfile{Harness: domain.HarnessCodex, Model: "gpt-test", Reasoning: domain.ReasoningHigh}
+	if err := s.SaveAnalysisProfile(ctx, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetAnalysisProfile(ctx)
+	if err != nil || got != want {
+		t.Fatalf("profile=%+v err=%v", got, err)
+	}
+	if err := s.SaveAnalysisProfile(ctx, domain.AnalysisProfile{}); err == nil {
+		t.Fatal("invalid profile accepted")
+	}
+}
+
+func TestAnalysisRunsAreAppendOnlyAndHydrateLatestProvenance(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	session := testSession()
+	if err := s.SaveSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	legacy := domain.ReviewAnalysis{SchemaVersion: 1, BaseSHA: session.BaseSHA, HeadSHA: session.HeadSHA, Summary: "legacy"}
+	if err := s.SaveAnalysis(ctx, session.ID, legacy); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := s.GetSession(ctx, session.ID)
+	if err != nil || loaded.LatestAnalysisRun != nil {
+		t.Fatalf("legacy session run=%+v err=%v", loaded.LatestAnalysisRun, err)
+	}
+	profile := domain.AnalysisProfile{Harness: domain.HarnessCodex, Model: "gpt-test", Reasoning: domain.ReasoningHigh}
+	first := domain.AnalysisRun{ID: "run-1", SessionID: session.ID, Profile: profile, HarnessVersion: "1.0", ContextTransport: domain.ContextInline, SchemaVersion: 1, InputFingerprint: "input-1"}
+	if err := s.StartAnalysisRun(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	failure := domain.AnalysisFailure{Code: domain.FailureProvider, Title: "Provider failed", Message: "Try again later.", Action: domain.RetrySamePlan, Retryable: true, TechnicalDetails: strings.Repeat("x", 20<<10)}
+	if err := s.FailAnalysisRun(ctx, first.ID, failure, domain.AnalysisCoverage{ChangedFilesTotal: 3, DiffFilesPartiallyRead: 1, DiffFilesUnread: 2}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = s.GetSession(ctx, session.ID)
+	if err != nil || loaded.AnalysisStatus != domain.AnalysisReady || loaded.Analysis == nil || loaded.LatestAnalysisRun == nil || loaded.LatestAnalysisRun.Status != domain.AnalysisRunFailed {
+		t.Fatalf("failed run session=%+v err=%v", loaded, err)
+	}
+	if len(loaded.LatestAnalysisRun.Failure.TechnicalDetails) != 16<<10 {
+		t.Fatalf("technical details length=%d", len(loaded.LatestAnalysisRun.Failure.TechnicalDetails))
+	}
+	second := domain.AnalysisRun{ID: "run-2", SessionID: session.ID, Profile: profile, HarnessVersion: "1.1", ContextTransport: domain.ContextArtifactFiles, SchemaVersion: 1, InputFingerprint: "input-2"}
+	if err := s.StartAnalysisRun(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkAnalysisRunRunning(ctx, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkAnalysisRunRunning(ctx, second.ID); err == nil {
+		t.Fatal("running analysis accepted a second preparing transition")
+	}
+	completed := domain.ReviewAnalysis{SchemaVersion: 1, BaseSHA: session.BaseSHA, HeadSHA: session.HeadSHA, Summary: "current", Chapters: []domain.ReviewChapter{{ID: "chapter"}}}
+	coverage := domain.AnalysisCoverage{ChangedFilesTotal: 3, DiffFilesFullyRead: 3, DiffBytesTotal: 120, DiffBytesRead: 120, Segments: 1}
+	if err := s.CompleteAnalysisRun(ctx, second.ID, completed, coverage); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = s.GetSession(ctx, session.ID)
+	if err != nil || loaded.LatestAnalysisRun == nil || loaded.LatestAnalysisRun.ID != second.ID || loaded.LatestAnalysisRun.Status != domain.AnalysisRunCompleted || loaded.LatestAnalysisRun.ContextTransport != domain.ContextArtifactFiles || loaded.Analysis == nil || loaded.Analysis.Summary != "current" {
+		t.Fatalf("completed session=%+v err=%v", loaded, err)
+	}
+	runs, err := s.ListAnalysisRuns(ctx, session.ID)
+	if err != nil || len(runs) != 2 || runs[0].ID != second.ID || runs[1].ID != first.ID {
+		t.Fatalf("runs=%+v err=%v", runs, err)
 	}
 }
 

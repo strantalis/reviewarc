@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"reviewarc/internal/agent"
+	sharedanalysis "reviewarc/internal/analysis"
 	"reviewarc/internal/dependencies"
 	"reviewarc/internal/domain"
 	gitcache "reviewarc/internal/git"
@@ -27,6 +29,21 @@ type appFixtureRunner struct {
 	results  []proc.Result
 	errors   []error
 	commands []proc.Command
+}
+
+type appAnalysisAdapter struct{}
+
+func (appAnalysisAdapter) ID() domain.HarnessID { return domain.HarnessCodex }
+func (appAnalysisAdapter) Capabilities(context.Context) (domain.HarnessCapabilities, error) {
+	return domain.HarnessCapabilities{
+		ID: domain.HarnessCodex, Name: "Codex", State: domain.HarnessAvailable, Version: "fixture",
+		SupportsJSONSchema: true, EnforcesReadOnly: true, SupportsProgress: true, SupportsCancellation: true,
+		ContextTransports: []domain.ContextTransport{domain.ContextReviewArcTools}, DefaultModel: "fixture",
+		Models: []domain.ModelCapability{{ID: "fixture", Name: "Fixture", ReasoningLevels: []domain.ReasoningLevel{domain.ReasoningMedium}, DefaultReasoningLevel: domain.ReasoningMedium}},
+	}, nil
+}
+func (appAnalysisAdapter) AnalyzeChange(context.Context, agent.AnalyzeInput) (<-chan agent.Event, error) {
+	return nil, errors.New("analysis should not start before pull request context is loaded")
 }
 
 type pullRequestFixtureRunner struct {
@@ -533,24 +550,6 @@ func TestAnalysisWasCancelledRecognizesContextAndWrappedError(t *testing.T) {
 	}
 }
 
-func TestCollectAnalysisDiffFailsClosedWhenAnyChangedFileCannotLoad(t *testing.T) {
-	files := []domain.ChangedFile{{Path: "first.go"}, {Path: "missing.go"}, {Path: "never.go"}}
-	loaded := 0
-	got, err := collectAnalysisDiff(files, func(file domain.ChangedFile) (domain.DiffFile, error) {
-		loaded++
-		if file.Path == "missing.go" {
-			return domain.DiffFile{}, errors.New("object unavailable")
-		}
-		return domain.DiffFile{File: file}, nil
-	})
-	if err == nil || !strings.Contains(err.Error(), "missing.go") {
-		t.Fatalf("error=%v, want changed file context", err)
-	}
-	if got != "" || loaded != 2 {
-		t.Fatalf("diff=%q loaded=%d, want no partial analysis input", got, loaded)
-	}
-}
-
 func TestBuildReviewPayloadSeparatesGeneralAndInlineComments(t *testing.T) {
 	startLine := 24
 	line := 27
@@ -772,8 +771,15 @@ func TestStartAnalysisLoadsFullContextBeforePreparingSnapshot(t *testing.T) {
 	if err := store.SaveSession(ctx, session); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.SaveAnalysisProfile(ctx, domain.AnalysisProfile{Harness: domain.HarnessCodex, Model: "fixture", Reasoning: domain.ReasoningMedium}); err != nil {
+		t.Fatal(err)
+	}
 	runner := &pullRequestFixtureRunner{contextErr: errors.New("discussion unavailable")}
-	app := &App{github: githubclient.New(runner), store: store, prepared: map[string]preparedState{}, active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}}
+	registry, err := agent.NewRegistry(appAnalysisAdapter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := &App{github: githubclient.New(runner), store: store, runner: runner, harnesses: registry, prepared: map[string]preparedState{}, active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}}
 
 	op, err := app.StartAnalysis(session.ID)
 	if err != nil {
@@ -804,6 +810,63 @@ func TestStartAnalysisLoadsFullContextBeforePreparingSnapshot(t *testing.T) {
 		if !strings.Contains(endpoint, "/reviews") && !strings.Contains(endpoint, "/comments") && !strings.Contains(endpoint, "/check-runs") {
 			t.Fatalf("analysis reached non-context endpoint before context completed: %q", endpoint)
 		}
+	}
+}
+
+func TestStartAnalysisWithoutHarnessLeavesSessionUsable(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	session := domain.ReviewSession{ID: "no-harness", PullRequest: domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}, Number: 7}}}, BaseSHA: strings.Repeat("1", 40), HeadSHA: strings.Repeat("2", 40), Status: domain.SessionReady, AnalysisStatus: domain.AnalysisNotStarted}
+	if err := store.SaveSession(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+	registry, _ := agent.NewRegistry(appAnalysisAdapter{})
+	app := &App{store: store, harnesses: registry}
+	_, err = app.StartAnalysis(session.ID)
+	var resolution *agent.ResolutionError
+	if !errors.As(err, &resolution) || resolution.Failure.Code != domain.FailureConfigurationRequired {
+		t.Fatalf("error=%v", err)
+	}
+	loaded, loadErr := store.GetSession(context.Background(), session.ID)
+	if loadErr != nil || loaded.Status != domain.SessionReady || loaded.AnalysisStatus != domain.AnalysisNotStarted || loaded.LatestAnalysisRun != nil {
+		t.Fatalf("session=%+v err=%v", loaded, loadErr)
+	}
+}
+
+func TestStartAnalysisRejectsUnchangedOversizedRetry(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	profile := domain.AnalysisProfile{Harness: domain.HarnessCodex, Model: "fixture", Reasoning: domain.ReasoningMedium}
+	if err := store.SaveAnalysisProfile(context.Background(), profile); err != nil {
+		t.Fatal(err)
+	}
+	session := domain.ReviewSession{ID: "oversized", PullRequest: domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}, Number: 7}}}, BaseSHA: strings.Repeat("1", 40), HeadSHA: strings.Repeat("2", 40), Status: domain.SessionReady, AnalysisStatus: domain.AnalysisNotStarted}
+	if err := store.SaveSession(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+	capabilities, _ := appAnalysisAdapter{}.Capabilities(context.Background())
+	run := domain.AnalysisRun{ID: "oversized-run", SessionID: session.ID, Profile: profile, HarnessVersion: capabilities.Version, ContextTransport: domain.ContextReviewArcTools, SchemaVersion: sharedanalysis.SchemaVersion, InputFingerprint: analysisFingerprint(session, profile, capabilities.Version, domain.ContextReviewArcTools)}
+	if err := store.StartAnalysisRun(context.Background(), run); err != nil {
+		t.Fatal(err)
+	}
+	failure := domain.AnalysisFailure{Code: domain.FailureInputTooLarge, Title: "Too large", Message: "Change the plan", Action: domain.RetryChangeProfile}
+	if err := store.FailAnalysisRun(context.Background(), run.ID, failure, domain.AnalysisCoverage{}); err != nil {
+		t.Fatal(err)
+	}
+	registry, _ := agent.NewRegistry(appAnalysisAdapter{})
+	app := &App{store: store, harnesses: registry}
+	if _, err := app.StartAnalysis(session.ID); err == nil || !strings.Contains(err.Error(), "will not repeat") {
+		t.Fatalf("unchanged retry error=%v", err)
+	}
+	runs, err := store.ListAnalysisRuns(context.Background(), session.ID)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("runs=%+v err=%v", runs, err)
 	}
 }
 

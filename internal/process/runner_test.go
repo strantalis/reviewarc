@@ -107,7 +107,7 @@ func TestRunnerReportsTruncatedOutput(t *testing.T) {
 }
 
 func TestMinimalEnvironmentSeparatesCredentialsByTool(t *testing.T) {
-	source := []string{"PATH=/bin", "GH_HOST=github.example.com", "GH_CONFIG_DIR=/tmp/gh", "GH_TOKEN=stale", "GITHUB_TOKEN=also-stale", "OPENAI_API_KEY=openai", "UNRELATED=nope"}
+	source := []string{"PATH=/bin", "GH_HOST=github.example.com", "GH_CONFIG_DIR=/tmp/gh", "GH_TOKEN=stale", "GITHUB_TOKEN=also-stale", "OPENAI_API_KEY=openai", "ANTHROPIC_API_KEY=anthropic", "CLAUDE_CONFIG_DIR=/tmp/claude", "UNRELATED=nope"}
 	if got := minimalEnvironment(source, Git, "/safe/bin"); len(got) != 1 || got[0] != "PATH=/safe/bin" {
 		t.Fatalf("git env leaked credentials: %v", got)
 	}
@@ -116,6 +116,9 @@ func TestMinimalEnvironmentSeparatesCredentialsByTool(t *testing.T) {
 	}
 	if got := minimalEnvironment(source, Codex, "/safe/bin"); len(got) != 2 || got[0] != "OPENAI_API_KEY=openai" || got[1] != "PATH=/safe/bin" {
 		t.Fatalf("unexpected codex env: %v", got)
+	}
+	if got := minimalEnvironment(source, Claude, "/safe/bin"); len(got) != 3 || got[0] != "ANTHROPIC_API_KEY=anthropic" || got[1] != "CLAUDE_CONFIG_DIR=/tmp/claude" || got[2] != "PATH=/safe/bin" {
+		t.Fatalf("unexpected claude env: %v", got)
 	}
 }
 
@@ -136,7 +139,7 @@ func TestMinimalEnvironmentPreservesValidatedSSHAgentOnlyForGit(t *testing.T) {
 	if !containsString(gitEnv, "SSH_AUTH_SOCK="+socket) {
 		t.Fatalf("git environment lost SSH agent socket: %v", gitEnv)
 	}
-	for _, tool := range []Tool{GH, Codex} {
+	for _, tool := range []Tool{GH, Codex, Claude} {
 		if containsString(minimalEnvironment(source, tool, "/usr/bin:/bin"), "SSH_AUTH_SOCK="+socket) {
 			t.Fatalf("%s environment inherited Git SSH agent socket", tool)
 		}
@@ -157,6 +160,17 @@ func TestResolveExecutableUsesAbsoluteExecutableFromSearchDirs(t *testing.T) {
 	}
 	if got := resolveExecutable(Tool("sh"), []string{dir}); got != "" {
 		t.Fatalf("unknown tool resolved to %q", got)
+	}
+}
+
+func TestResolveClaudeExecutableUsesAllowlist(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "claude")
+	if err := os.WriteFile(path, []byte("fixture"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolveExecutable(Claude, []string{dir}); got != path {
+		t.Fatalf("resolved path=%q, want %q", got, path)
 	}
 }
 

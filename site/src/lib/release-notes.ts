@@ -29,6 +29,15 @@ const releaseNotes: Record<string, PublicReleaseNotes> = {
       "Guided reviews surface the review brief, highest-risk starting point, and stale-analysis recovery more clearly.",
     ],
   },
+  "0.1.0-beta.9": {
+    summary: "Guided analysis is now configurable, artifact-first, and available through Codex or Claude Code.",
+    changes: [
+      "Choose an available analysis harness, model, and reasoning level without adding complexity to the normal review flow.",
+      "Large pull requests stay in bounded local artifacts instead of being embedded wholesale in the initial model prompt.",
+      "Analysis progress, context coverage, provenance, and failures are persisted and surfaced more clearly.",
+      "ReviewArc remains usable for inbox and existing-review workflows when no compatible AI harness is installed.",
+    ],
+  },
 };
 
 export function releaseNotesFor(version: string): PublicReleaseNotes | null {

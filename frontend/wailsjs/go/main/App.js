@@ -30,6 +30,10 @@ export function DeleteNote(arg1) {
   return window['go']['main']['App']['DeleteNote'](arg1);
 }
 
+export function GetAnalysisConfiguration() {
+  return window['go']['main']['App']['GetAnalysisConfiguration']();
+}
+
 export function GetChangedFiles(arg1) {
   return window['go']['main']['App']['GetChangedFiles'](arg1);
 }
@@ -82,6 +86,10 @@ export function RefreshAccount() {
   return window['go']['main']['App']['RefreshAccount']();
 }
 
+export function RefreshAnalysisHarnesses() {
+  return window['go']['main']['App']['RefreshAnalysisHarnesses']();
+}
+
 export function RefreshEnvironment() {
   return window['go']['main']['App']['RefreshEnvironment']();
 }
@@ -104,6 +112,10 @@ export function RefreshSelectedRepositories() {
 
 export function RefreshSourceAccess(arg1) {
   return window['go']['main']['App']['RefreshSourceAccess'](arg1);
+}
+
+export function SaveAnalysisDefaults(arg1) {
+  return window['go']['main']['App']['SaveAnalysisDefaults'](arg1);
 }
 
 export function SaveDraftComment(arg1) {
@@ -132,4 +144,8 @@ export function SetUpdateChannel(arg1) {
 
 export function StartAnalysis(arg1) {
   return window['go']['main']['App']['StartAnalysis'](arg1);
+}
+
+export function StartAnalysisWithProfile(arg1, arg2) {
+  return window['go']['main']['App']['StartAnalysisWithProfile'](arg1, arg2);
 }

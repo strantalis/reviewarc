@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -12,9 +11,14 @@ import (
 	"time"
 
 	"reviewarc/internal/agent"
+	sharedanalysis "reviewarc/internal/analysis"
+	"reviewarc/internal/analysisbundle"
 	"reviewarc/internal/domain"
+	gitcache "reviewarc/internal/git"
 	processpkg "reviewarc/internal/process"
 )
+
+const fixturePatch = "diff --git a/src/greet.go b/src/greet.go\n@@ -1,2 +1,2 @@\n package greet\n-func Greet() string { return \"hi\" }\n+func Greet() string { return \"hello\" }\n"
 
 type fixtureRunner struct {
 	mu               sync.Mutex
@@ -28,16 +32,17 @@ type fixtureRunner struct {
 
 func (r *fixtureRunner) Run(ctx context.Context, command processpkg.Command) (processpkg.Result, error) {
 	r.mu.Lock()
-	r.command = command
 	r.commands = append(r.commands, command)
 	r.mu.Unlock()
-	if r.wait {
-		<-ctx.Done()
-		return processpkg.Result{}, ctx.Err()
+	if len(command.Args) >= 2 && command.Args[0] == "debug" && command.Args[1] == "models" {
+		return processpkg.Result{Stdout: []byte(`{"models":[{"slug":"fixture","display_name":"Fixture","default_reasoning_level":"medium","supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"}],"shell_type":"shell_command"}]}`)}, nil
 	}
-	if len(command.Args) >= 3 && command.Args[0] == "debug" && command.Args[1] == "models" {
-		return processpkg.Result{Stdout: []byte(`{"models":[{"slug":"fixture","shell_type":"shell_command"}]}`)}, nil
+	if len(command.Args) == 1 && command.Args[0] == "--version" {
+		return processpkg.Result{Stdout: []byte("codex-cli fixture\n")}, nil
 	}
+	r.mu.Lock()
+	r.command = command
+	r.mu.Unlock()
 	for _, arg := range command.Args {
 		if strings.HasPrefix(arg, "model_catalog_json=") {
 			path := strings.Trim(strings.TrimPrefix(arg, "model_catalog_json="), `"`)
@@ -51,13 +56,23 @@ func (r *fixtureRunner) Run(ctx context.Context, command processpkg.Command) (pr
 			}
 		}
 	}
+	if r.wait {
+		<-ctx.Done()
+		return processpkg.Result{}, ctx.Err()
+	}
 	return r.result, r.err
+}
+
+type fixturePatchSource map[string]string
+
+func (f fixturePatchSource) DiffFile(_ context.Context, _ gitcache.ManagedRepository, file domain.ChangedFile, _ int) (domain.DiffFile, error) {
+	return domain.DiffFile{File: file, Patch: f[file.Path]}, nil
 }
 
 type fixtureFiles map[string][]byte
 
-func (f fixtureFiles) ReadFile(_ context.Context, _, revision, path string) ([]byte, error) {
-	value, ok := f[revision+":"+path]
+func (f fixtureFiles) ReadFile(_ context.Context, revision domain.Revision, path string) ([]byte, error) {
+	value, ok := f[string(revision)+":"+path]
 	if !ok {
 		return nil, errors.New("missing")
 	}
@@ -70,55 +85,78 @@ func fixtureJSONL(t *testing.T) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	event, _ := json.Marshal(map[string]any{"type": "item.completed", "item": map[string]any{"id": "item_1", "type": "agent_message", "text": string(payload)}})
-	return append(append([]byte("{\"type\":\"thread.started\",\"thread_id\":\"fixture\"}\n"), event...), '\n')
+	tool, _ := json.Marshal(map[string]any{
+		"type": "item.completed",
+		"item": map[string]any{
+			"id": "tool_1", "type": "mcp_tool_call", "server": "reviewarc", "tool": "read_diff", "status": "completed",
+			"arguments": map[string]any{"fileId": "f000001", "cursor": 0},
+			"result":    map[string]any{"bytes": len(fixturePatch), "hasMore": false},
+		},
+	})
+	message, _ := json.Marshal(map[string]any{"type": "item.completed", "item": map[string]any{"id": "item_1", "type": "agent_message", "text": string(payload)}})
+	return []byte("{\"type\":\"thread.started\",\"thread_id\":\"fixture\"}\n" + string(tool) + "\n" + string(message) + "\n")
 }
 
 func validInput(t *testing.T) agent.AnalyzeInput {
 	t.Helper()
-	return agent.AnalyzeInput{Workspace: t.TempDir(), BaseSHA: strings.Repeat("1", 40), HeadSHA: strings.Repeat("2", 40), UnifiedDiff: "diff --git a/src/greet.go b/src/greet.go", RepositoryContext: "--- src/greet.go @ head ---\npackage greet"}
+	dataRoot := t.TempDir()
+	base, head, merge := strings.Repeat("1", 40), strings.Repeat("2", 40), strings.Repeat("3", 40)
+	file := domain.ChangedFile{Path: "src/greet.go", Status: domain.FileModified, Additions: 1, Deletions: 1}
+	lease, err := (analysisbundle.Builder{Root: analysisbundle.BundleRoot(dataRoot), Source: fixturePatchSource{file.Path: fixturePatch}}).Build(context.Background(), analysisbundle.Input{
+		PullRequest: domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{
+			Ref: domain.PullRequestRef{Repository: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}, Number: 7}, Title: "Greeting change",
+		}},
+		Repository:   gitcache.ManagedRepository{Repository: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}, PullRequest: 7, BaseSHA: base, HeadSHA: head, MergeBaseSHA: merge},
+		ChangedFiles: []domain.ChangedFile{file},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Close() })
+	return agent.AnalyzeInput{
+		Bundle: lease.Reference, DataRoot: dataRoot,
+		Profile:          domain.AnalysisProfile{Harness: domain.HarnessCodex, Model: "fixture", Reasoning: domain.ReasoningMedium},
+		ContextTransport: domain.ContextReviewArcTools,
+		Snapshot: sharedanalysis.Snapshot{BaseSHA: base, HeadSHA: head, Files: fixtureFiles{
+			"head:src/greet.go": []byte("package greet\nfunc Greet() string { return \"hello\" }\n"),
+		}},
+	}
 }
 
-func TestAnalyzeValidatesEvidenceAndUnsupportedClaims(t *testing.T) {
+func TestAnalyzeUsesBoundedPromptAndValidatesEvidence(t *testing.T) {
 	runner := &fixtureRunner{result: processpkg.Result{Stdout: fixtureJSONL(t)}}
-	p := New(runner, Config{Timeout: time.Second})
-	p.files = fixtureFiles{strings.Repeat("2", 40) + ":src/greet.go": []byte("package greet\nfunc Greet() string { return \"hello\" }\n")}
+	p := New(runner, Config{Timeout: time.Second, ContextServerExecutable: "/usr/bin/true"})
 	events, err := p.AnalyzeChange(context.Background(), validInput(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var completed *domain.ReviewAnalysis
+	var completed *agent.Event
 	for event := range events {
 		if event.Kind == agent.EventFailed {
-			t.Fatalf("analysis failed: %v", event.Err)
+			t.Fatalf("analysis failed: %+v", event.Failure)
 		}
 		if event.Kind == agent.EventCompleted {
-			completed = event.Analysis
+			copy := event
+			completed = &copy
 		}
 	}
-	if completed == nil {
-		t.Fatal("missing completed analysis")
+	if completed == nil || completed.Analysis == nil || completed.Coverage == nil {
+		t.Fatal("missing completed analysis or coverage")
 	}
-	if completed.SummaryValidation != domain.ValidationValid || len(completed.SummaryEvidence) != 1 {
-		t.Fatalf("summary support=%s evidence=%+v", completed.SummaryValidation, completed.SummaryEvidence)
+	if completed.Analysis.SummaryValidation != domain.ValidationValid || len(completed.Analysis.SummaryEvidence) != 1 {
+		t.Fatalf("summary support=%s evidence=%+v", completed.Analysis.SummaryValidation, completed.Analysis.SummaryEvidence)
 	}
-	if got := completed.Facts[0].ValidationStatus; got != domain.ValidationValid {
-		t.Fatalf("valid fact status=%s", got)
-	}
-	if got := completed.Facts[1].ValidationStatus; got != domain.ValidationUnverified {
+	if got := completed.Analysis.Facts[1].ValidationStatus; got != domain.ValidationUnverified {
 		t.Fatalf("unsupported fact status=%s", got)
 	}
-	if got := completed.Facts[1].Evidence[0].ValidationStatus; got != domain.ValidationInvalid {
-		t.Fatalf("escaping evidence status=%s", got)
-	}
-	if len(completed.ValidationIssues) < 2 {
-		t.Fatalf("issues=%+v", completed.ValidationIssues)
+	if completed.Coverage.DiffFilesFullyRead != 1 || completed.Coverage.DiffBytesRead != len(fixturePatch) {
+		t.Fatalf("coverage=%+v", completed.Coverage)
 	}
 	runner.mu.Lock()
-	args := append([]string(nil), runner.command.Args...)
+	command := runner.command
 	runner.mu.Unlock()
-	joined := strings.Join(args, " ")
-	for _, want := range []string{"--json", "--output-schema", "--sandbox read-only", "--ephemeral", "--ignore-user-config", "--ignore-rules", `approval_policy="never"`, `shell_environment_policy.inherit="none"`, "model_catalog_json="} {
+	joined := strings.Join(command.Args, " ")
+	for _, want := range []string{"--json", "--output-schema", "--sandbox read-only", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--strict-config", "--model fixture", `approval_policy="never"`, `model_reasoning_effort="medium"`, "mcp_servers.reviewarc.enabled_tools="} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("safe invocation missing %q: %s", want, joined)
 		}
@@ -126,77 +164,54 @@ func TestAnalyzeValidatesEvidenceAndUnsupportedClaims(t *testing.T) {
 	if runner.catalogShellType != "disabled" {
 		t.Fatalf("model shell type = %q, want disabled", runner.catalogShellType)
 	}
-	if !strings.Contains(string(runner.command.Stdin), "src/greet.go @ head") {
-		t.Fatal("bounded repository context was not supplied to Codex")
+	prompt := string(command.Stdin)
+	if len(prompt) > maxLaunchPromptBytes || strings.Contains(prompt, fixturePatch) || strings.Contains(prompt, "package greet") {
+		t.Fatalf("launch prompt was not bounded and artifact-only: %q", prompt)
+	}
+	if !strings.Contains(prompt, "using only the reviewarc read-only context tools") {
+		t.Fatalf("missing controlled-context instruction: %q", prompt)
 	}
 }
 
-func TestValidateRejectsTraversalAndInvalidLines(t *testing.T) {
-	for _, test := range []struct {
-		name, path string
-		start, end int
-		want       string
-	}{
-		{"parent", "../outside", 1, 1, "escapes"}, {"absolute", "/tmp/outside", 1, 1, "relative"}, {"dot", ".", 1, 1, "escapes"}, {"dot-prefix", "./src/greet.go", 1, 1, "canonical"}, {"normalized-traversal", "src/../greet.go", 1, 1, "canonical"}, {"backward", "src/greet.go", 3, 2, "1-based"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			raw := rawEvidence{ID: "e", Path: test.path, Revision: "head", StartLine: test.start, EndLine: test.end}
-			v := validator{ctx: context.Background(), files: fixtureFiles{}, workspace: t.TempDir(), base: strings.Repeat("1", 40), head: strings.Repeat("2", 40), cache: map[string][]byte{}, ids: map[string]rawEvidence{}}
-			got := v.evidence([]rawEvidence{raw})[0]
-			if got.ValidationStatus != domain.ValidationInvalid || !strings.Contains(got.ValidationMessage, test.want) {
-				t.Fatalf("got %+v", got)
-			}
-		})
+func TestCapabilitiesDiscoverModelsAndControlledTransport(t *testing.T) {
+	provider := New(&fixtureRunner{}, Config{})
+	capabilities, err := provider.Capabilities(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capabilities.ID != domain.HarnessCodex || capabilities.Version != "codex-cli fixture" || capabilities.DefaultModel != "fixture" || len(capabilities.Models) != 1 || capabilities.Models[0].DefaultReasoningLevel != domain.ReasoningMedium || len(capabilities.Models[0].ReasoningLevels) != 2 {
+		t.Fatalf("capabilities=%+v", capabilities)
+	}
+	if len(capabilities.ContextTransports) != 1 || capabilities.ContextTransports[0] != domain.ContextReviewArcTools {
+		t.Fatalf("controlled transport missing: %+v", capabilities.ContextTransports)
+	}
+	if !capabilities.SupportsProgress {
+		t.Fatal("Codex progress capability missing")
 	}
 }
 
-func TestValidateModelIdentityRejectsDuplicateChapterIDs(t *testing.T) {
-	raw := rawAnalysis{Summary: "Review summary", Chapters: []rawChapter{{ID: "chapter", Order: 1, Title: "One", Purpose: "Review one"}, {ID: "chapter", Order: 2, Title: "Two", Purpose: "Review two"}}}
-	if err := validateModelIdentity(raw); err == nil || !strings.Contains(err.Error(), "reused") {
-		t.Fatalf("duplicate chapter ID error = %v", err)
-	}
-	raw = rawAnalysis{Summary: "Review summary", Chapters: []rawChapter{{ID: "chapter", Order: 1, Title: "One", Purpose: "Review one"}, {ID: "other", Order: 1, Title: "Two", Purpose: "Review two"}}}
-	if err := validateModelIdentity(raw); err == nil || !strings.Contains(err.Error(), "order") {
-		t.Fatalf("duplicate chapter order error = %v", err)
-	}
-}
-
-func TestValidateRejectsEmptyOrUnsupportedWalkthrough(t *testing.T) {
-	for _, raw := range []rawAnalysis{
-		{Chapters: []rawChapter{{ID: "chapter", Order: 1, Title: "Title", Purpose: "Purpose"}}},
-		{Summary: "Summary", Chapters: []rawChapter{{ID: "chapter", Order: 1, Purpose: "Purpose"}}},
-	} {
-		if err := validateModelIdentity(raw); err == nil || !strings.Contains(err.Error(), "empty") {
-			t.Fatalf("empty walkthrough error = %v", err)
-		}
-	}
-	analysis := domain.ReviewAnalysis{Summary: "Summary", Chapters: []domain.ReviewChapter{{ID: "chapter", Title: "Title", Purpose: "Purpose"}}}
-	if err := validateAnalysisSubstance(analysis); err == nil || !strings.Contains(err.Error(), "substantive review findings") {
-		t.Fatalf("unsupported walkthrough error = %v", err)
-	}
-	analysis.Chapters[0].Evidence = []domain.EvidenceReference{{ID: "evidence", ValidationStatus: domain.ValidationValid}}
-	if err := validateAnalysisSubstance(analysis); err == nil || !strings.Contains(err.Error(), "substantive review findings") {
-		t.Fatalf("empty evidence-only walkthrough error = %v", err)
-	}
-	analysis.Chapters[0].Facts = []domain.Claim{{ID: "fact", Text: "The implementation changes behavior.", Evidence: analysis.Chapters[0].Evidence}}
-	if err := validateAnalysisSubstance(analysis); err != nil {
-		t.Fatalf("evidence-backed walkthrough rejected: %v", err)
-	}
-}
-
-func TestParseJSONLRejectsConversationalOrUnknownOutput(t *testing.T) {
-	if _, _, err := parseJSONL([]byte("not json\n")); err == nil {
+func TestParseJSONLRejectsMalformedStructuredAndUnapprovedToolOutput(t *testing.T) {
+	tracker := NewAccessTrackerForTest()
+	if _, _, err := parseJSONL([]byte("not json\n"), tracker); err == nil {
 		t.Fatal("expected malformed JSONL error")
 	}
 	event := `{"type":"item.completed","item":{"type":"agent_message","text":"{\"schemaVersion\":1,\"unexpected\":true}"}}`
-	if _, _, err := parseJSONL([]byte(event)); err == nil {
+	if _, _, err := parseJSONL([]byte(event), tracker); err == nil {
 		t.Fatal("expected strict structured output error")
 	}
+	policy := `{"type":"item.completed","item":{"type":"command_execution","status":"completed"}}`
+	if _, _, err := parseJSONL([]byte(policy), tracker); !errors.Is(err, errPolicyViolation) {
+		t.Fatalf("policy error=%v", err)
+	}
+}
+
+func NewAccessTrackerForTest() *agent.AccessTracker {
+	return agent.NewAccessTracker(analysisbundle.Manifest{})
 }
 
 func TestCancellationTerminatesAnalysis(t *testing.T) {
 	runner := &fixtureRunner{wait: true}
-	p := New(runner, Config{Timeout: time.Minute})
+	p := New(runner, Config{Timeout: time.Minute, ContextServerExecutable: "/usr/bin/true"})
 	ctx, cancel := context.WithCancel(context.Background())
 	events, err := p.AnalyzeChange(ctx, validInput(t))
 	if err != nil {
@@ -207,10 +222,7 @@ func TestCancellationTerminatesAnalysis(t *testing.T) {
 	for {
 		select {
 		case event, ok := <-events:
-			if !ok {
-				return
-			}
-			if event.Kind == agent.EventCancelled {
+			if !ok || event.Kind == agent.EventCancelled {
 				return
 			}
 		case <-deadline:
@@ -220,42 +232,17 @@ func TestCancellationTerminatesAnalysis(t *testing.T) {
 }
 
 func TestRevisionMismatchFailsClosed(t *testing.T) {
-	raw, warnings, err := parseJSONL(fixtureJSONL(t))
-	if err != nil || len(warnings) != 0 {
-		t.Fatalf("parse: %v %v", err, warnings)
-	}
-	raw.HeadSHA = strings.Repeat("3", 40)
-	p := New(&fixtureRunner{}, Config{})
+	provider := New(&fixtureRunner{}, Config{ContextServerExecutable: "/usr/bin/true"})
 	input := validInput(t)
-	if _, err = p.validate(context.Background(), input, raw); err == nil {
+	input.Snapshot.HeadSHA = strings.Repeat("4", 40)
+	if _, err := provider.AnalyzeChange(context.Background(), input); err == nil {
 		t.Fatal("expected revision mismatch")
 	}
 }
 
-func TestLiveCodexAcceptsToolDisabledCatalog(t *testing.T) {
-	if os.Getenv("REVIEWARC_LIVE_CODEX") != "1" {
-		t.Skip("set REVIEWARC_LIVE_CODEX=1 for installed CLI verification")
-	}
-	runner := processpkg.NewExecRunner()
-	p := New(runner, Config{Timeout: 2 * time.Minute})
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	catalog, err := p.writeToollessModelCatalog(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(catalog)
-	result, err := runner.Run(ctx, processpkg.Command{Tool: processpkg.Codex, Dir: t.TempDir(), Timeout: 2 * time.Minute, MaxOutput: 4 << 20,
-		Args:  []string{"exec", "--json", "--sandbox", "read-only", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "-c", fmt.Sprintf("model_catalog_json=%q", catalog), "-C", ".", "-"},
-		Stdin: []byte("Return exactly NO_SHELL and do not call tools.")})
-	if err != nil {
-		t.Fatalf("tool-disabled Codex invocation failed: %v: %s", err, result.Stderr)
-	}
-	output := string(result.Stdout)
-	if !strings.Contains(output, "NO_SHELL") {
-		t.Fatalf("missing expected response: %s", output)
-	}
-	if strings.Contains(output, "command_execution") || strings.Contains(output, "exec_command") {
-		t.Fatalf("shell event appeared with disabled catalog: %s", output)
+func TestOversizedProviderFailureDoesNotOfferUnchangedRetry(t *testing.T) {
+	event := providerFailure(errors.New("exit 1"), []byte(`{"input_error_code":"input_too_large","max_chars":1048576}`))
+	if event.Failure == nil || event.Failure.Code != domain.FailureInputTooLarge || event.Failure.Action != domain.RetryChangeProfile || event.Failure.Retryable {
+		t.Fatalf("failure=%+v", event.Failure)
 	}
 }

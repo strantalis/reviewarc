@@ -17,6 +17,8 @@ export function DeleteDraftComment(arg1:string):Promise<void>;
 
 export function DeleteNote(arg1:string):Promise<void>;
 
+export function GetAnalysisConfiguration():Promise<main.AnalysisConfiguration>;
+
 export function GetChangedFiles(arg1:string):Promise<Array<domain.ChangedFile>>;
 
 export function GetDiff(arg1:string,arg2:string):Promise<domain.DiffFile>;
@@ -43,6 +45,8 @@ export function PrepareThreadReply(arg1:string,arg2:number,arg3:string):Promise<
 
 export function RefreshAccount():Promise<main.AccountState>;
 
+export function RefreshAnalysisHarnesses():Promise<main.AnalysisConfiguration>;
+
 export function RefreshEnvironment():Promise<domain.EnvironmentState>;
 
 export function RefreshInbox():Promise<main.InboxState>;
@@ -54,6 +58,8 @@ export function RefreshPullRequestContext(arg1:string):Promise<domain.ReviewSess
 export function RefreshSelectedRepositories():Promise<main.SelectedRepositoryRefresh>;
 
 export function RefreshSourceAccess(arg1:Array<domain.Organization>):Promise<Array<domain.Organization>>;
+
+export function SaveAnalysisDefaults(arg1:domain.AnalysisProfile):Promise<main.AnalysisConfiguration>;
 
 export function SaveDraftComment(arg1:main.CommentInput):Promise<domain.ReviewComment>;
 
@@ -68,3 +74,5 @@ export function SetChapterStatus(arg1:string,arg2:string,arg3:domain.ChapterStat
 export function SetUpdateChannel(arg1:string):Promise<main.SoftwareUpdateStatus>;
 
 export function StartAnalysis(arg1:string):Promise<main.Operation>;
+
+export function StartAnalysisWithProfile(arg1:string,arg2:main.AnalysisRequest):Promise<main.Operation>;

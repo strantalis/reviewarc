@@ -16,7 +16,11 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"reviewarc/internal/agent"
+	"reviewarc/internal/agent/claude"
 	"reviewarc/internal/agent/codex"
+	sharedanalysis "reviewarc/internal/analysis"
+	"reviewarc/internal/analysisbundle"
+	"reviewarc/internal/analysiscontext"
 	"reviewarc/internal/appdata"
 	"reviewarc/internal/dependencies"
 	"reviewarc/internal/domain"
@@ -65,12 +69,52 @@ type InboxState struct {
 	Partial bool                        `json:"partial"`
 }
 type Operation struct {
-	ID        string `json:"id"`
-	SessionID string `json:"sessionId,omitempty"`
-	Kind      string `json:"kind"`
-	Stage     string `json:"stage"`
-	State     string `json:"state"`
-	Message   string `json:"message"`
+	ID        string                  `json:"id"`
+	SessionID string                  `json:"sessionId,omitempty"`
+	Kind      string                  `json:"kind"`
+	Stage     string                  `json:"stage"`
+	State     string                  `json:"state"`
+	Message   string                  `json:"message"`
+	Progress  *float64                `json:"progress,omitempty"`
+	RunID     string                  `json:"runId,omitempty"`
+	Failure   *domain.AnalysisFailure `json:"failure,omitempty"`
+}
+type AnalysisRequest struct {
+	Profile       *domain.AnalysisProfile `json:"profile,omitempty"`
+	SaveAsDefault bool                    `json:"saveAsDefault"`
+}
+type AnalysisConfiguration struct {
+	DefaultProfile *domain.AnalysisProfile `json:"defaultProfile,omitempty"`
+	Harnesses      []HarnessDescriptor     `json:"harnesses"`
+	RefreshedAt    time.Time               `json:"refreshedAt"`
+}
+type HarnessDescriptor struct {
+	ID           domain.HarnessID         `json:"id"`
+	Label        string                   `json:"label"`
+	Availability domain.HarnessState      `json:"availability"`
+	Path         string                   `json:"path,omitempty"`
+	Version      string                   `json:"version,omitempty"`
+	Message      string                   `json:"message,omitempty"`
+	Eligible     bool                     `json:"eligible"`
+	Capabilities HarnessCapabilitySummary `json:"capabilities"`
+	Models       []HarnessModelDescriptor `json:"models"`
+}
+type HarnessCapabilitySummary struct {
+	JSONSchema       bool                      `json:"jsonSchema"`
+	ReadOnly         bool                      `json:"readOnly"`
+	Progress         bool                      `json:"progress"`
+	ContextTransport []domain.ContextTransport `json:"contextTransport"`
+}
+type HarnessModelDescriptor struct {
+	ID              string                     `json:"id"`
+	Label           string                     `json:"label"`
+	ReasoningLevels []ReasoningLevelDescriptor `json:"reasoningLevels"`
+	Recommended     bool                       `json:"recommended"`
+}
+type ReasoningLevelDescriptor struct {
+	ID          domain.ReasoningLevel `json:"id"`
+	Label       string                `json:"label"`
+	Recommended bool                  `json:"recommended"`
 }
 type NoteInput struct {
 	ID        string `json:"id"`
@@ -127,6 +171,12 @@ type preparedState struct {
 	repository gitcache.ManagedRepository
 	files      []domain.ChangedFile
 }
+type analysisPlan struct {
+	adapter   agent.HarnessAdapter
+	profile   domain.AnalysisProfile
+	transport domain.ContextTransport
+	runID     string
+}
 type pendingPublish struct {
 	preview PublishPreview
 	ref     domain.PullRequestRef
@@ -148,7 +198,8 @@ type App struct {
 	github            *githubclient.Client
 	store             *persistence.Store
 	repos             *gitcache.Manager
-	agent             agent.ReviewAgent
+	runner            proc.Runner
+	harnesses         *agent.Registry
 	prepared          map[string]preparedState
 	active            map[string]context.CancelFunc
 	analysisBySession map[string]string
@@ -175,7 +226,12 @@ func NewApp() (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	app := &App{paths: paths, detector: dependencies.New(runner), github: githubclient.New(runner), store: store, repos: gitcache.NewManager(paths.Repositories, paths.Worktrees, runner, gitcache.Options{RemoteURL: remoteURL}), agent: codex.New(runner, codex.Config{}), prepared: map[string]preparedState{}, active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}, publish: map[string]pendingPublish{}, threadReplies: map[string]pendingThreadReply{}, gitProtocol: gitProtocol}
+	registry, err := agent.NewRegistry(codex.New(runner, codex.Config{}), claude.New(runner, claude.Config{}))
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	app := &App{paths: paths, detector: dependencies.New(runner), github: githubclient.New(runner), store: store, repos: gitcache.NewManager(paths.Repositories, paths.Worktrees, runner, gitcache.Options{RemoteURL: remoteURL}), runner: runner, harnesses: registry, prepared: map[string]preparedState{}, active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}, publish: map[string]pendingPublish{}, threadReplies: map[string]pendingThreadReply{}, gitProtocol: gitProtocol}
 	app.configureUpdater()
 	return app, nil
 }
@@ -721,12 +777,155 @@ func analysisRepository(session domain.ReviewSession, repository gitcache.Manage
 	}
 	return repository
 }
+
+func (a *App) GetAnalysisConfiguration() AnalysisConfiguration {
+	return a.analysisConfiguration(false)
+}
+
+func (a *App) RefreshAnalysisHarnesses() AnalysisConfiguration {
+	return a.analysisConfiguration(true)
+}
+
+func (a *App) analysisConfiguration(refresh bool) AnalysisConfiguration {
+	if refresh {
+		if refresher, ok := a.runner.(proc.PathRefresher); ok {
+			refresher.RefreshPaths()
+		}
+	}
+	capabilities := a.harnesses.Capabilities(a.appContext())
+	configuration := AnalysisConfiguration{Harnesses: make([]HarnessDescriptor, 0, len(capabilities)), RefreshedAt: time.Now().UTC()}
+	for _, capability := range capabilities {
+		descriptor := HarnessDescriptor{
+			ID: capability.ID, Label: capability.Name, Availability: capability.State,
+			Version: capability.Version, Message: capability.Message,
+			Eligible:     capability.State == domain.HarnessAvailable && capability.SupportsJSONSchema && capability.EnforcesReadOnly && capability.SupportsProgress && controlledTransport(capability.ContextTransports) != "",
+			Capabilities: HarnessCapabilitySummary{JSONSchema: capability.SupportsJSONSchema, ReadOnly: capability.EnforcesReadOnly, Progress: capability.SupportsProgress, ContextTransport: append([]domain.ContextTransport(nil), capability.ContextTransports...)},
+			Models:       make([]HarnessModelDescriptor, 0, len(capability.Models)),
+		}
+		if resolver, ok := a.runner.(proc.PathResolver); ok {
+			tool := proc.Codex
+			if capability.ID == domain.HarnessClaude {
+				tool = proc.Claude
+			}
+			if path, err := resolver.ResolvedPath(tool); err == nil {
+				descriptor.Path = path
+			}
+		}
+		for _, model := range capability.Models {
+			item := HarnessModelDescriptor{ID: model.ID, Label: model.Name, Recommended: model.Recommended, ReasoningLevels: make([]ReasoningLevelDescriptor, 0, len(model.ReasoningLevels))}
+			for _, level := range model.ReasoningLevels {
+				item.ReasoningLevels = append(item.ReasoningLevels, ReasoningLevelDescriptor{ID: level, Label: reasoningLabel(level), Recommended: level == model.DefaultReasoningLevel})
+			}
+			descriptor.Models = append(descriptor.Models, item)
+		}
+		configuration.Harnesses = append(configuration.Harnesses, descriptor)
+	}
+	if profile, err := a.store.GetAnalysisProfile(a.appContext()); err == nil && profileSelectable(profile, configuration.Harnesses) {
+		configuration.DefaultProfile = &profile
+	}
+	return configuration
+}
+
+func (a *App) SaveAnalysisDefaults(profile domain.AnalysisProfile) (AnalysisConfiguration, error) {
+	_, resolved, _, err := a.harnesses.Resolve(a.appContext(), profile)
+	if err != nil {
+		return AnalysisConfiguration{}, err
+	}
+	if err := a.store.SaveAnalysisProfile(a.appContext(), resolved); err != nil {
+		return AnalysisConfiguration{}, err
+	}
+	return a.analysisConfiguration(false), nil
+}
+
+func profileSelectable(profile domain.AnalysisProfile, harnesses []HarnessDescriptor) bool {
+	for _, harness := range harnesses {
+		if harness.ID != profile.Harness || !harness.Eligible {
+			continue
+		}
+		for _, model := range harness.Models {
+			if model.ID != profile.Model {
+				continue
+			}
+			for _, level := range model.ReasoningLevels {
+				if level.ID == profile.Reasoning {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func reasoningLabel(level domain.ReasoningLevel) string {
+	switch level {
+	case domain.ReasoningLow:
+		return "Low"
+	case domain.ReasoningMedium:
+		return "Medium"
+	case domain.ReasoningHigh:
+		return "High"
+	case domain.ReasoningXHigh:
+		return "Extra high"
+	case domain.ReasoningMax:
+		return "Maximum"
+	default:
+		return string(level)
+	}
+}
+
+func controlledTransport(transports []domain.ContextTransport) domain.ContextTransport {
+	for _, transport := range transports {
+		if transport == domain.ContextReviewArcTools {
+			return transport
+		}
+	}
+	for _, transport := range transports {
+		if transport == domain.ContextArtifactFiles {
+			return transport
+		}
+	}
+	return ""
+}
+
 func (a *App) StartAnalysis(sessionID string) (Operation, error) {
+	profile, err := a.store.GetAnalysisProfile(a.appContext())
+	if err != nil {
+		return Operation{}, &agent.ResolutionError{Failure: domain.AnalysisFailure{Code: domain.FailureConfigurationRequired, Title: "AI analysis is not configured", Message: "Choose an installed analysis harness before starting the first analysis.", Action: domain.RetryConfigure}}
+	}
+	return a.startAnalysis(sessionID, AnalysisRequest{Profile: &profile})
+}
+
+func (a *App) StartAnalysisWithProfile(sessionID string, request AnalysisRequest) (Operation, error) {
+	return a.startAnalysis(sessionID, request)
+}
+
+func (a *App) startAnalysis(sessionID string, request AnalysisRequest) (Operation, error) {
 	session, err := a.store.GetSession(a.appContext(), sessionID)
 	if err != nil {
 		return Operation{}, err
 	}
-	op := Operation{ID: newID(), SessionID: sessionID, Kind: "analysis", Stage: "loadingPullRequestContext", State: "running", Message: "Loading GitHub discussion and checks"}
+	profile := domain.AnalysisProfile{}
+	if request.Profile != nil {
+		profile = *request.Profile
+	} else if profile, err = a.store.GetAnalysisProfile(a.appContext()); err != nil {
+		return Operation{}, &agent.ResolutionError{Failure: domain.AnalysisFailure{Code: domain.FailureConfigurationRequired, Title: "AI analysis is not configured", Message: "Choose an installed analysis harness before starting the first analysis.", Action: domain.RetryConfigure}}
+	}
+	adapter, profile, capabilities, err := a.harnesses.Resolve(a.appContext(), profile)
+	if err != nil {
+		return Operation{}, err
+	}
+	transport := controlledTransport(capabilities.ContextTransports)
+	fingerprint := analysisFingerprint(session, profile, capabilities.Version, transport)
+	if prior := session.LatestAnalysisRun; prior != nil && prior.InputFingerprint == fingerprint && prior.Status == domain.AnalysisRunFailed && prior.Failure != nil && (prior.Failure.Code == domain.FailureInputTooLarge || prior.Failure.Code == domain.FailureRetryRequiresReplan) {
+		return Operation{}, errors.New("input_too_large: ReviewArc will not repeat the unchanged oversized analysis request; change the profile or analysis plan")
+	}
+	if request.SaveAsDefault {
+		if err := a.store.SaveAnalysisProfile(a.appContext(), profile); err != nil {
+			return Operation{}, err
+		}
+	}
+	runID := newID()
+	op := Operation{ID: newID(), SessionID: sessionID, RunID: runID, Kind: "analysis", Stage: "loadingPullRequestContext", State: "running", Message: "Loading GitHub discussion and checks"}
 	ctx, cancel := context.WithCancel(a.appContext())
 	a.mu.Lock()
 	if _, exists := a.analysisBySession[sessionID]; exists {
@@ -737,9 +936,8 @@ func (a *App) StartAnalysis(sessionID string) (Operation, error) {
 	a.active[op.ID] = cancel
 	a.analysisBySession[sessionID] = op.ID
 	a.mu.Unlock()
-	session.AnalysisStatus = domain.AnalysisRunning
-	session.UpdatedAt = time.Now().UTC()
-	if err := a.store.SaveSession(a.appContext(), session); err != nil {
+	run := domain.AnalysisRun{ID: runID, SessionID: sessionID, Profile: profile, HarnessVersion: capabilities.Version, ContextTransport: transport, SchemaVersion: sharedanalysis.SchemaVersion, InputFingerprint: fingerprint, Coverage: domain.AnalysisCoverage{OmittedPaths: []string{}, Accesses: []domain.ContextAccess{}}, Status: domain.AnalysisRunPreparing}
+	if err := a.store.StartAnalysisRun(a.appContext(), run); err != nil {
 		cancel()
 		a.mu.Lock()
 		delete(a.active, op.ID)
@@ -748,8 +946,20 @@ func (a *App) StartAnalysis(sessionID string) (Operation, error) {
 		return Operation{}, err
 	}
 	a.emitOperation(op)
-	go a.prepareAndRunAnalysis(ctx, op, session)
+	go a.prepareAndRunAnalysis(ctx, op, session, analysisPlan{adapter: adapter, profile: profile, transport: transport, runID: runID})
 	return op, nil
+}
+
+func analysisFingerprint(session domain.ReviewSession, profile domain.AnalysisProfile, harnessVersion string, transport domain.ContextTransport) string {
+	payload, _ := json.Marshal(struct {
+		BaseSHA, HeadSHA, HarnessVersion string
+		Profile                          domain.AnalysisProfile
+		Transport                        domain.ContextTransport
+		SchemaVersion, PromptVersion     int
+		PullRequest                      domain.PullRequest
+	}{session.BaseSHA, session.HeadSHA, harnessVersion, profile, transport, sharedanalysis.SchemaVersion, 1, session.PullRequest})
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
 }
 func (a *App) CancelOperation(id string) error {
 	a.mu.Lock()
@@ -1040,7 +1250,7 @@ func (a *App) ensurePreparedContext(ctx context.Context, sessionID string) (prep
 	}
 	return preparedState{}, errors.New("pull request revision changed while preparing the managed repository")
 }
-func (a *App) prepareAndRunAnalysis(ctx context.Context, op Operation, session domain.ReviewSession) {
+func (a *App) prepareAndRunAnalysis(ctx context.Context, op Operation, session domain.ReviewSession, plan analysisPlan) {
 	sessionID := session.ID
 	op.Stage = "loadingPullRequestContext"
 	op.Message = "Loading GitHub discussion and checks"
@@ -1052,15 +1262,15 @@ func (a *App) prepareAndRunAnalysis(ctx context.Context, op Operation, session d
 		delete(a.analysisBySession, sessionID)
 		a.mu.Unlock()
 		if analysisWasCancelled(ctx, err) {
-			a.cancelAnalysisOperation(op)
+			a.cancelAnalysisOperation(op, domain.AnalysisCoverage{})
 		} else {
-			a.failOperation(op, err)
+			a.failAnalysisOperation(op, contextFailure(err), domain.AnalysisCoverage{})
 		}
 		return
 	}
 	session = refreshed
-	op.Stage = "preparingSnapshot"
-	op.Message = "Preparing isolated repository snapshot"
+	op.Stage = "preparingContext"
+	op.Message = "Preparing bounded review context"
 	a.emitOperation(op)
 	state, err := a.ensurePreparedContext(ctx, session.ID)
 	if err != nil {
@@ -1069,9 +1279,9 @@ func (a *App) prepareAndRunAnalysis(ctx context.Context, op Operation, session d
 		delete(a.analysisBySession, session.ID)
 		a.mu.Unlock()
 		if analysisWasCancelled(ctx, err) {
-			a.cancelAnalysisOperation(op)
+			a.cancelAnalysisOperation(op, domain.AnalysisCoverage{})
 		} else {
-			a.failOperation(op, err)
+			a.failAnalysisOperation(op, contextFailure(err), domain.AnalysisCoverage{})
 		}
 		return
 	}
@@ -1081,68 +1291,81 @@ func (a *App) prepareAndRunAnalysis(ctx context.Context, op Operation, session d
 		delete(a.active, op.ID)
 		delete(a.analysisBySession, session.ID)
 		a.mu.Unlock()
-		a.failOperation(op, err)
+		a.failAnalysisOperation(op, contextFailure(err), domain.AnalysisCoverage{})
 		return
 	}
-	a.runAnalysis(ctx, op, current, state)
+	a.runAnalysis(ctx, op, current, state, plan)
 }
-func (a *App) runAnalysis(ctx context.Context, op Operation, session domain.ReviewSession, state preparedState) {
+func (a *App) runAnalysis(ctx context.Context, op Operation, session domain.ReviewSession, state preparedState, plan analysisPlan) {
 	defer func() { a.mu.Lock(); delete(a.active, op.ID); delete(a.analysisBySession, session.ID); a.mu.Unlock() }()
-	lease, err := a.repos.AcquireReadOnlySnapshot(ctx, state.repository)
+	lease, err := (analysisbundle.Builder{Root: analysisbundle.BundleRoot(a.paths.Root), Source: a.repos}).Build(ctx, analysisbundle.Input{PullRequest: session.PullRequest, Repository: state.repository, ChangedFiles: state.files})
 	if err != nil {
 		if analysisWasCancelled(ctx, err) {
-			a.cancelAnalysisOperation(op)
+			a.cancelAnalysisOperation(op, domain.AnalysisCoverage{})
 			return
 		}
-		a.failOperation(op, err)
+		a.failAnalysisOperation(op, contextFailure(err), domain.AnalysisCoverage{})
 		return
 	}
 	defer lease.Close()
-	diff, err := collectAnalysisDiff(state.files, func(file domain.ChangedFile) (domain.DiffFile, error) {
-		return a.repos.DiffFile(ctx, state.repository, file, 5)
+	bundle, err := analysisbundle.Open(a.paths.Root, lease.Reference.Path, lease.Reference.Digest)
+	if err != nil {
+		a.failAnalysisOperation(op, contextFailure(err), domain.AnalysisCoverage{})
+		return
+	}
+	emptyCoverage := agent.NewAccessTracker(bundle.Manifest).Coverage()
+	reader, err := analysiscontext.NewGitObjectReader(a.runner, state.repository.CachePath, session.BaseSHA, session.HeadSHA)
+	if err != nil {
+		a.failAnalysisOperation(op, contextFailure(err), emptyCoverage)
+		return
+	}
+	op.Stage = "analyzingChange"
+	op.Message = "Analyzing the change with controlled read-only context"
+	a.emitOperation(op)
+	if err := a.store.MarkAnalysisRunRunning(ctx, plan.runID); err != nil {
+		a.failAnalysisOperation(op, persistenceFailure(err), emptyCoverage)
+		return
+	}
+	events, err := plan.adapter.AnalyzeChange(ctx, agent.AnalyzeInput{
+		Bundle: lease.Reference, DataRoot: a.paths.Root, Profile: plan.profile, ContextTransport: plan.transport,
+		Snapshot: sharedanalysis.Snapshot{BaseSHA: session.BaseSHA, HeadSHA: session.HeadSHA, Files: evidenceFileReader{reader}},
 	})
 	if err != nil {
 		if analysisWasCancelled(ctx, err) {
-			a.cancelAnalysisOperation(op)
+			a.cancelAnalysisOperation(op, emptyCoverage)
 			return
 		}
-		a.failOperation(op, err)
+		a.failAnalysisOperation(op, providerStartFailure(err), emptyCoverage)
 		return
 	}
-	repositoryContext, err := a.repos.RepositoryContext(ctx, state.repository, state.files, 512<<10)
-	if err != nil {
-		if analysisWasCancelled(ctx, err) {
-			a.cancelAnalysisOperation(op)
-			return
-		}
-		a.failOperation(op, err)
-		return
-	}
-	op.Stage = "runningCodex"
-	op.Message = "Running Codex in read-only mode"
-	a.emitOperation(op)
-	events, err := a.agent.AnalyzeChange(ctx, agent.AnalyzeInput{PullRequest: session.PullRequest, Workspace: lease.Path(), BaseSHA: session.BaseSHA, HeadSHA: session.HeadSHA, ChangedFiles: state.files, UnifiedDiff: diff, RepositoryContext: repositoryContext, ExistingDiscussion: existingDiscussion(session.PullRequest)})
-	if err != nil {
-		if analysisWasCancelled(ctx, err) {
-			a.cancelAnalysisOperation(op)
-			return
-		}
-		a.failOperation(op, err)
-		return
-	}
+	coverage := emptyCoverage
 	for event := range events {
 		op.Message = event.Message
+		if event.Coverage != nil {
+			coverage = *event.Coverage
+		}
 		switch event.Kind {
+		case agent.EventStarted, agent.EventProgress:
+			op.Stage = "analyzingChange"
+		case agent.EventValidating:
+			if strings.Contains(strings.ToLower(event.Message), "structured") {
+				op.Stage = "validatingOutput"
+			} else {
+				op.Stage = "validatingEvidence"
+			}
 		case agent.EventCompleted:
 			if event.Analysis == nil {
-				a.failOperation(op, errors.New("analysis completed without a review model"))
+				a.failAnalysisOperation(op, providerStartFailure(errors.New("analysis completed without a review model")), coverage)
 				return
 			}
+			op.Stage = "savingReview"
+			op.Message = "Saving the validated guided review"
+			a.emitOperation(op)
 			commitCtx, cancelCommit := context.WithTimeout(a.appContext(), 10*time.Second)
-			err := a.store.SaveCompletedAnalysis(commitCtx, session.ID, *event.Analysis)
+			err := a.store.CompleteAnalysisRun(commitCtx, plan.runID, *event.Analysis, coverage)
 			cancelCommit()
 			if err != nil {
-				a.failOperation(op, err)
+				a.failAnalysisOperation(op, persistenceFailure(err), coverage)
 				return
 			}
 			op.Stage = "complete"
@@ -1154,7 +1377,7 @@ func (a *App) runAnalysis(ctx context.Context, op Operation, session domain.Revi
 			}
 			return
 		case agent.EventCancelled:
-			a.cancelAnalysisOperation(op)
+			a.cancelAnalysisOperation(op, coverage)
 			return
 		case agent.EventFailed:
 			eventErr := event.Err
@@ -1162,42 +1385,75 @@ func (a *App) runAnalysis(ctx context.Context, op Operation, session domain.Revi
 				eventErr = errors.New(event.Message)
 			}
 			if analysisWasCancelled(ctx, eventErr) {
-				a.cancelAnalysisOperation(op)
+				a.cancelAnalysisOperation(op, coverage)
 				return
 			}
-			a.failOperation(op, eventErr)
+			failure := providerStartFailure(eventErr)
+			if event.Failure != nil {
+				failure = *event.Failure
+			}
+			a.failAnalysisOperation(op, failure, coverage)
 			return
 		}
 		a.emitOperation(op)
 	}
 	if ctx.Err() != nil {
-		a.cancelAnalysisOperation(op)
+		a.cancelAnalysisOperation(op, coverage)
 		return
 	}
-	a.failOperation(op, errors.New("analysis stream ended without a completed review model"))
+	a.failAnalysisOperation(op, providerStartFailure(errors.New("analysis stream ended without a completed review model")), coverage)
 }
-func (a *App) cancelAnalysisOperation(op Operation) {
+func (a *App) cancelAnalysisOperation(op Operation, coverage domain.AnalysisCoverage) {
 	op.State = "cancelled"
 	op.Stage = "cancelled"
 	op.Message = "Analysis cancelled"
-	if current, loadErr := a.store.GetSession(a.appContext(), op.SessionID); loadErr == nil {
-		current.AnalysisStatus = analysisStatusAfterCancellation(current)
-		current.UpdatedAt = time.Now().UTC()
-		_ = a.store.SaveSession(a.appContext(), current)
+	if op.RunID != "" {
+		_ = a.store.CancelAnalysisRun(a.appContext(), op.RunID, coverage)
 	}
 	a.emitOperation(op)
 }
-func (a *App) failOperation(op Operation, err error) {
+func (a *App) failAnalysisOperation(op Operation, failure domain.AnalysisFailure, coverage domain.AnalysisCoverage) {
 	op.State = "failed"
 	op.Stage = "failed"
-	op.Message = safeMessage(err)
-	if session, loadErr := a.store.GetSession(a.appContext(), op.SessionID); loadErr == nil {
-		session.AnalysisStatus = analysisStatusAfterFailure(session)
-		session.UpdatedAt = time.Now().UTC()
-		_ = a.store.SaveSession(a.appContext(), session)
+	op.Message = failure.Message
+	op.Failure = &failure
+	if op.RunID != "" {
+		if err := a.store.FailAnalysisRun(a.appContext(), op.RunID, failure, coverage); err != nil {
+			op.Failure = ptrAnalysisFailure(persistenceFailure(err))
+			op.Message = op.Failure.Message
+		}
 	}
 	a.emitOperation(op)
 }
+
+type evidenceFileReader struct {
+	reader *analysiscontext.GitObjectReader
+}
+
+func (r evidenceFileReader) ReadFile(ctx context.Context, revision domain.Revision, path string) ([]byte, error) {
+	content, binary, err := r.reader.ReadFile(ctx, revision, path)
+	if err != nil {
+		return nil, err
+	}
+	if binary {
+		return nil, errors.New("evidence path is binary")
+	}
+	return []byte(content), nil
+}
+
+func contextFailure(err error) domain.AnalysisFailure {
+	return domain.AnalysisFailure{Code: domain.FailureContextAccess, Title: "Review context could not be prepared", Message: "ReviewArc could not prepare the bounded pull request context for analysis.", Action: domain.RetrySamePlan, Retryable: true, TechnicalDetails: safeMessage(err)}
+}
+
+func providerStartFailure(err error) domain.AnalysisFailure {
+	return domain.AnalysisFailure{Code: domain.FailureProvider, Title: "Analysis did not complete", Message: "The selected harness stopped before ReviewArc received a valid review.", Action: domain.RetrySamePlan, Retryable: true, TechnicalDetails: safeMessage(err)}
+}
+
+func persistenceFailure(err error) domain.AnalysisFailure {
+	return domain.AnalysisFailure{Code: domain.FailurePersistence, Title: "Analysis could not be saved", Message: "ReviewArc received a result but could not save the guided review.", Action: domain.RetrySamePlan, Retryable: true, TechnicalDetails: safeMessage(err)}
+}
+
+func ptrAnalysisFailure(failure domain.AnalysisFailure) *domain.AnalysisFailure { return &failure }
 func (a *App) emitOperation(op Operation) {
 	_ = a.store.SaveOperation(a.appContext(), persistence.Operation{ID: op.ID, Kind: op.Kind, Subject: op.SessionID, Status: op.State, Detail: op.Message, UpdatedAt: time.Now().UTC()})
 	if a.ctx != nil {
@@ -1408,36 +1664,6 @@ func buildReviewPayload(preview PublishPreview) []byte {
 	}{preview.HeadSHA, strings.Join(body, "\n\n"), event, comments})
 	return payload
 }
-func writeDiff(builder *strings.Builder, file domain.DiffFile) {
-	builder.WriteString("diff --git a/" + file.File.Path + " b/" + file.File.Path + "\n")
-	for _, h := range file.Hunks {
-		builder.WriteString(h.Header + "\n")
-		for _, line := range h.Lines {
-			prefix := " "
-			if line.Kind == domain.DiffAdd {
-				prefix = "+"
-			} else if line.Kind == domain.DiffDelete {
-				prefix = "-"
-			} else if line.Kind == domain.DiffNoNewline {
-				prefix = "\\"
-			}
-			builder.WriteString(prefix + line.Content + "\n")
-		}
-	}
-}
-
-func collectAnalysisDiff(files []domain.ChangedFile, load func(domain.ChangedFile) (domain.DiffFile, error)) (string, error) {
-	var builder strings.Builder
-	for _, file := range files {
-		parsed, err := load(file)
-		if err != nil {
-			return "", fmt.Errorf("load analysis diff for %s: %w", file.Path, err)
-		}
-		writeDiff(&builder, parsed)
-	}
-	return builder.String(), nil
-}
-
 func existingDiscussion(pr domain.PullRequest) string {
 	var out strings.Builder
 	for _, review := range pr.Reviews {

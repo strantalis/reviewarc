@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 
+	sharedanalysis "reviewarc/internal/analysis"
+	"reviewarc/internal/analysisbundle"
 	"reviewarc/internal/domain"
 )
 
@@ -18,18 +20,15 @@ const (
 	EventFailed     EventKind = "failed"
 )
 
-// AnalyzeInput is a fully prepared, immutable PR snapshot. Workspace must be an
-// application-managed isolated worktree at HeadSHA; it must never be a user's checkout.
+// AnalyzeInput contains only authority to a finalized ReviewArc bundle and a
+// pinned evidence reader. Providers never receive a user's checkout, a complete
+// diff, or repository context in their initial prompt.
 type AnalyzeInput struct {
-	PullRequest            domain.PullRequest   `json:"pullRequest"`
-	Workspace              string               `json:"-"`
-	BaseSHA                string               `json:"baseSha"`
-	HeadSHA                string               `json:"headSha"`
-	ChangedFiles           []domain.ChangedFile `json:"changedFiles"`
-	UnifiedDiff            string               `json:"unifiedDiff"`
-	RepositoryContext      string               `json:"repositoryContext"`
-	RepositoryInstructions string               `json:"repositoryInstructions"`
-	ExistingDiscussion     string               `json:"existingDiscussion"`
+	Bundle           analysisbundle.Reference
+	DataRoot         string
+	Profile          domain.AnalysisProfile
+	ContextTransport domain.ContextTransport
+	Snapshot         sharedanalysis.Snapshot
 }
 
 type Event struct {
@@ -37,6 +36,8 @@ type Event struct {
 	Message  string                   `json:"message"`
 	Analysis *domain.ReviewAnalysis   `json:"analysis,omitempty"`
 	Issues   []domain.ValidationIssue `json:"issues,omitempty"`
+	Coverage *domain.AnalysisCoverage `json:"coverage,omitempty"`
+	Failure  *domain.AnalysisFailure  `json:"failure,omitempty"`
 	Err      error                    `json:"-"`
 }
 
@@ -44,4 +45,10 @@ type Event struct {
 // Cancellation is controlled exclusively by ctx.
 type ReviewAgent interface {
 	AnalyzeChange(ctx context.Context, input AnalyzeInput) (<-chan Event, error)
+}
+
+type HarnessAdapter interface {
+	ReviewAgent
+	ID() domain.HarnessID
+	Capabilities(context.Context) (domain.HarnessCapabilities, error)
 }

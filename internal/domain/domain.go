@@ -427,21 +427,22 @@ type ReviewComment struct {
 }
 
 type ReviewSession struct {
-	ID             string            `json:"id"`
-	PullRequest    PullRequest       `json:"pullRequest"`
-	BaseSHA        string            `json:"baseSha"`
-	HeadSHA        string            `json:"headSha"`
-	Status         SessionStatus     `json:"status"`
-	AnalysisStatus AnalysisStatus    `json:"analysisStatus"`
-	Analysis       *ReviewAnalysis   `json:"analysis,omitempty"`
-	Chapters       []ChapterProgress `json:"chapters"`
-	Notes          []ReviewNote      `json:"notes"`
-	Comments       []ReviewComment   `json:"comments"`
-	Progress       ReviewProgress    `json:"progress"`
-	IsStale        bool              `json:"isStale"`
-	StaleReason    string            `json:"staleReason,omitempty"`
-	CreatedAt      time.Time         `json:"createdAt"`
-	UpdatedAt      time.Time         `json:"updatedAt"`
+	ID                string            `json:"id"`
+	PullRequest       PullRequest       `json:"pullRequest"`
+	BaseSHA           string            `json:"baseSha"`
+	HeadSHA           string            `json:"headSha"`
+	Status            SessionStatus     `json:"status"`
+	AnalysisStatus    AnalysisStatus    `json:"analysisStatus"`
+	Analysis          *ReviewAnalysis   `json:"analysis,omitempty"`
+	LatestAnalysisRun *AnalysisRun      `json:"latestAnalysisRun,omitempty"`
+	Chapters          []ChapterProgress `json:"chapters"`
+	Notes             []ReviewNote      `json:"notes"`
+	Comments          []ReviewComment   `json:"comments"`
+	Progress          ReviewProgress    `json:"progress"`
+	IsStale           bool              `json:"isStale"`
+	StaleReason       string            `json:"staleReason,omitempty"`
+	CreatedAt         time.Time         `json:"createdAt"`
+	UpdatedAt         time.Time         `json:"updatedAt"`
 }
 
 type DependencyStatus struct {

@@ -6,6 +6,9 @@ export type RiskLevel = 'unknown' | 'low' | 'medium' | 'high' | 'critical'
 export type ChapterStatus = 'notReviewed' | 'inProgress' | 'reviewed' | 'needsClarification' | 'blocked'
 export type ValidationStatus = 'valid' | 'invalid' | 'unverified'
 export type ClaimKind = 'fact' | 'inference' | 'unknown'
+export type HarnessAvailability = 'available' | 'missing' | 'broken' | 'unsupported'
+export type ContextTransport = 'reviewarcTools' | 'artifactFiles' | 'inline'
+export type AnalysisRetryAction = 'retry' | 'replan' | 'configure' | 'authenticate' | 'changeProfile' | 'none'
 
 export interface RepositoryRef { host: string; owner: string; name: string; cloneUrl: string; databaseId: string }
 export interface PullRequestRef { repository: RepositoryRef; number: number }
@@ -56,6 +59,34 @@ export interface ReviewAnalysis {
   chapters: ReviewChapter[]; behavioralChanges: BehavioralChange[]; risks: ReviewRisk[]; facts: Claim[]
   inferences: Claim[]; unknowns: Claim[]; createdAt: string; validationIssues: {code: string; message: string; evidenceId?: string}[]
 }
+export interface ReasoningLevel { id: string; label: string; recommended?: boolean }
+export interface HarnessModel { id: string; label: string; reasoningLevels: ReasoningLevel[]; recommended?: boolean }
+export interface HarnessCapabilities {
+  jsonSchema: boolean; readOnly: boolean; progress: boolean; contextTransport: ContextTransport[]
+}
+export interface HarnessDescriptor {
+  id: string; label: string; availability: HarnessAvailability; path?: string; version?: string; message?: string
+  eligible: boolean; capabilities: HarnessCapabilities; models: HarnessModel[]
+}
+export interface AnalysisProfile { harness: string; model: string; reasoning: string }
+export interface AnalysisConfiguration { defaultProfile?: AnalysisProfile; harnesses: HarnessDescriptor[]; refreshedAt?: string }
+export interface AnalysisRequest { profile?: AnalysisProfile; saveAsDefault?: boolean }
+export interface AnalysisFailure {
+  code: string; title: string; message: string; action: AnalysisRetryAction; retryable?: boolean; technicalDetails?: string
+}
+export interface ContextAccess {
+  kind: string; path?: string; revision?: 'base' | 'head'; startLine?: number; endLine?: number; bytes?: number; at: string
+}
+export interface AnalysisCoverage {
+  changedFilesTotal: number; diffFilesFullyRead: number; diffFilesPartiallyRead: number
+  diffFilesUnread: number; diffBytesTotal: number; diffBytesRead: number; segments: number
+  omittedPaths: string[]; accesses: ContextAccess[]
+}
+export interface AnalysisRun {
+  id: string; sessionId: string; profile: AnalysisProfile; harnessVersion?: string; contextTransport: ContextTransport
+  schemaVersion: number; inputFingerprint: string; coverage: AnalysisCoverage; startedAt: string; completedAt?: string; updatedAt: string
+  status: 'preparing' | 'running' | 'completed' | 'failed' | 'cancelled'; failure?: AnalysisFailure
+}
 export interface ReviewNote { id: string; sessionId: string; chapterId?: string; body: string; createdAt: string; updatedAt: string }
 export interface ReviewComment {
   id: string; sessionId: string; chapterId?: string; kind: 'general' | 'inline'; body: string; path?: string; startLine?: number
@@ -66,6 +97,7 @@ export interface ReviewSession {
   id: string; pullRequest: PullRequest; baseSha: string; headSha: string; status: 'preparing' | 'ready' | 'failed'
   analysisStatus: AnalysisStatus; analysis?: ReviewAnalysis; chapters: {chapterId: string; status: ChapterStatus; updatedAt: string}[]
   notes: ReviewNote[]; comments: ReviewComment[]; progress: ReviewProgress; isStale: boolean; staleReason?: string
+  latestAnalysisRun?: AnalysisRun
   createdAt: string; updatedAt: string
 }
 export interface DependencyStatus { name: DependencyName; state: DependencyState; path?: string; version?: string; message?: string }
@@ -87,7 +119,7 @@ export interface SourceState extends SourceCatalog {}
 export interface RepositoryPage { items: Repository[]; totalCount: number; endCursor?: string; hasNextPage: boolean; cached: boolean }
 export interface SelectedRepositoryRefresh { repositories: Repository[]; archivedKeys: string[]; errors: Record<string, string> }
 export interface InboxResult { items: PullRequestSummary[]; errors?: Record<string, string>; partial?: boolean }
-export interface Operation { id: string; sessionId?: string; kind: string; stage: string; message: string; state: string }
+export interface Operation { id: string; sessionId?: string; kind: string; stage: string; message: string; state: string; progress?: number; runId?: string; failure?: AnalysisFailure }
 export interface PublishItem { draftId: string; kind: 'general' | 'inline'; body: string; path?: string; startLine?: number; startSide?: 'LEFT' | 'RIGHT'; line?: number; side?: 'LEFT' | 'RIGHT' }
 export type ReviewEvent = 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES'
 export interface PublishPreview { token: string; digest: string; repository: string; number: number; headSha: string; items: PublishItem[]; event: ReviewEvent; expiresAt: string }

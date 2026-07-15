@@ -3,13 +3,13 @@ title: Analysis and re-analysis
 description: How ReviewArc evaluates a pull request, validates evidence, and detects stale results.
 ---
 
-ReviewArc analyzes the pull request's complete current diff against its base revision. Re-analysis is intentionally end to end: it evaluates the current pull request again rather than analyzing only commits added since the previous run.
+ReviewArc makes the pull request's complete current diff available against its base revision. The harness reads relevant per-file pages through bounded local tools, and ReviewArc records full, partial, and unread diff coverage. Re-analysis is intentionally end to end: it evaluates the current pull request again rather than analyzing only commits added since the previous run.
 
 That choice keeps chapters, risks, test relationships, and cross-file behavior coherent after a revision changes. It also means re-analysis cost and time generally scale with the full pull request, not only its newest commit.
 
 ## Read-only execution
 
-ReviewArc invokes Codex with structured JSON or JSONL output against an isolated snapshot. The analysis process is read-only. ReviewArc does not run arbitrary project commands, package scripts, tests, hooks, or generated instructions from the repository.
+ReviewArc invokes the selected compatible harness with a strict JSON output schema and controlled access to an immutable local analysis bundle. The initial prompt does not embed the full diff. The analysis process is read-only. ReviewArc does not run arbitrary project commands, package scripts, tests, hooks, or generated instructions from the repository.
 
 Progress is streamed into the app while the structured review model is built.
 

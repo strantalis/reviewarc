@@ -1,6 +1,6 @@
 # ReviewArc
 
-ReviewArc is a local-first Wails desktop application for reviewing real GitHub pull requests as evidence-backed, guided review journeys. It opens to a unified inbox, creates isolated application-managed Git caches only when a PR is opened, runs Codex in read-only mode, validates every AI-provided code reference, and persists reviewer progress locally in SQLite.
+ReviewArc is a local-first Wails desktop application for reviewing real GitHub pull requests as evidence-backed, guided review journeys. It opens to a unified inbox, creates application-managed Git caches only when a PR is opened, runs a selected compatible AI harness through controlled read-only context tools, validates every AI-provided code reference, and persists reviewer progress locally in SQLite.
 
 Product documentation and signed release downloads are published at [reviewarc.dev](https://reviewarc.dev).
 
@@ -10,11 +10,11 @@ Product documentation and signed release downloads are published at [reviewarc.d
 - Node.js and npm
 - `git`
 - GitHub CLI (`gh`), authenticated with `gh auth login`
-- Codex CLI, authenticated and available as `codex`
+- For guided analysis, either Codex CLI (`codex`) or Claude Code (`claude`), installed and authenticated. A harness is optional for the inbox and existing reviews.
 
 ReviewArc never needs or modifies an existing working checkout. Its managed repositories, temporary snapshots, database, and logs live under the platform user configuration directory. Set `REVIEWARC_DATA_DIR` to override that location for development or testing.
 
-On macOS the default root is `~/Library/Application Support/ReviewArc`. Managed bare repositories are under `repositories/`, temporary read-only analysis snapshots under `worktrees/`, and SQLite state under `database/reviewarc.db`.
+On macOS the default root is `~/Library/Application Support/ReviewArc`. Managed bare repositories are under `repositories/`, immutable per-run analysis bundles are under `cache/analysis-bundles/`, and SQLite state is under `database/reviewarc.db`.
 
 ## Run in development
 
@@ -66,14 +66,15 @@ To clear only managed Git data, quit ReviewArc and remove the `repositories/` an
 
 - External processes use fixed executables and argument arrays; no shell command strings are constructed.
 - Git operations target only the ReviewArc data directory.
-- Codex runs non-interactively with JSONL, a strict output schema, an ephemeral session, a read-only sandbox, and no inherited shell environment.
-- ReviewArc supplies Codex a derived model catalog with shell tools disabled, so repository command execution is unavailable during analysis.
+- Analysis adapters must support ReviewArc's JSON Schema contract, explicit model and reasoning selection, cancellation, and enforceable controlled read-only context.
+- The initial prompt contains only an immutable bundle identity and digest. Pull-request metadata and per-file diffs remain in local artifacts and are exposed only through bounded, audited ReviewArc tools.
+- Codex runs with its read-only sandbox and shell-disabled model catalog. Claude Code runs with built-in tools disabled and only ReviewArc's MCP tools allowed.
 - Repository scripts, builds, tests, hooks, pushes, merges, and working-tree mutations are never run automatically.
 - AI paths and line ranges are validated against the exact pinned Git objects. Unsupported claims remain visibly unverified.
 - Publishing is a two-step operation: ReviewArc creates an immutable, expiring preview; the user explicitly confirms its digest before the single `gh api` mutation is allowed.
 
 ## Current MVP scope
 
-The MVP supports GitHub.com repositories available through `gh`, a unified selected-source inbox with saved views and quick-open, managed Git caches, unified and split diffs, local file context, existing reviews and inline discussion, check runs, structured Codex review chapters, changed-symbol references, persisted notes/progress/drafts, stale-analysis detection, and COMMENT/APPROVE/REQUEST_CHANGES review events with explicit confirmation. Team workspaces, project command execution, and additional AI providers are intentionally out of scope.
+The MVP supports GitHub.com repositories available through `gh`, a unified selected-source inbox with saved views and quick-open, managed Git caches, unified and split diffs, local file context, existing reviews and inline discussion, check runs, structured guided-review chapters through Codex or Claude Code, changed-symbol references, persisted analysis provenance/coverage, notes/progress/drafts, stale-analysis detection, and COMMENT/APPROVE/REQUEST_CHANGES review events with explicit confirmation. Team workspaces and project command execution remain out of scope.
 
 Known limitations: GitHub Enterprise hosts are not yet configurable; linked-issue discovery and full repository-wide semantic caller/dependency indexing are not part of this MVP; an ambiguous network failure after GitHub accepts a review must be reconciled on GitHub before retrying.

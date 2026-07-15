@@ -10,8 +10,12 @@ import { AnalysisBadge, DependencyPills, EmptyState, ErrorBanner, Logo, Markdown
 import { WindowToggleMaximise } from '../wailsjs/runtime/runtime'
 import { analysisLabel, chapterStatusLabel, filterInbox, normalizeProgress, primaryRelationship, relationshipLabel, relativeTime, repoName } from './lib'
 import { useTheme, type ThemePreference } from './theme'
+import {
+  AIAnalysisSettings, AnalysisFailurePanel, AnalysisProfilePicker, AnalysisProfileSummary, AnalysisProgress,
+  AnalysisRunDetails, NoHarnessState, legacyAnalysisConfiguration, recommendedProfile,
+} from './features/analysis/analysis'
 import type {
-  AnalysisStatus, BootstrapState, ChangedFile, ChapterStatus, CommentRange, DependencyStatus, DiffFile, EnvironmentState, EvidenceReference, FileContent, Operation,
+  AnalysisConfiguration, AnalysisFailure, AnalysisProfile, AnalysisStatus, BootstrapState, ChangedFile, ChapterStatus, CommentRange, DependencyStatus, DiffFile, EnvironmentState, EvidenceReference, FileContent, Operation,
   OperationEvent, PublishPreview, PullRequestRef, PullRequestReviewComment, PullRequestSummary, Relationship, ReviewChapter, ReviewRisk,
   Repository, RepositoryPage, ReviewComment, ReviewSession, SoftwareUpdateStatus, SourceSelection, SourceState, UpdateChannel, Organization,
   ThreadReplyPreview,
@@ -77,6 +81,9 @@ export function App() {
   const [updateBusy, setUpdateBusy] = useState(false)
   const [dismissedUpdateBuild, setDismissedUpdateBuild] = useState('')
   const [installUpdateOpen, setInstallUpdateOpen] = useState(false)
+  const [analysisConfiguration, setAnalysisConfiguration] = useState<AnalysisConfiguration>()
+  const [analysisConfigurationBusy, setAnalysisConfigurationBusy] = useState(false)
+  const [analysisConfigurationError, setAnalysisConfigurationError] = useState('')
   const openRequest = useRef(0)
   const environmentRequest = useRef(0)
 
@@ -112,6 +119,13 @@ export function App() {
 
   useEffect(() => { void load() }, [])
   useEffect(() => backend.on('reviewarc:update:v1', (raw) => setSoftwareUpdate(raw as SoftwareUpdateStatus)), [])
+  useEffect(() => {
+    if (!bootstrap || (screen !== 'settings' && screen !== 'overview') || analysisConfiguration || typeof window.go?.main?.App?.GetAnalysisConfiguration !== 'function') return
+    void (async () => {
+      try { setAnalysisConfiguration(await backend.getAnalysisConfiguration()) }
+      catch { /* A pre-harness backend remains usable through the legacy Codex profile. */ }
+    })()
+  }, [analysisConfiguration, bootstrap, screen])
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); setCommandOpen(true) }
@@ -154,6 +168,20 @@ export function App() {
     catch (err) { setError(errorText(err)) }
     finally { setUpdateBusy(false) }
   }
+  const refreshAnalysisHarnesses = async () => {
+    if (typeof window.go?.main?.App?.RefreshAnalysisHarnesses !== 'function') return
+    setAnalysisConfigurationBusy(true); setAnalysisConfigurationError('')
+    try { setAnalysisConfiguration(await backend.refreshAnalysisHarnesses()) }
+    catch (err) { setAnalysisConfigurationError(errorText(err)) }
+    finally { setAnalysisConfigurationBusy(false) }
+  }
+  const saveAnalysisDefaults = async (profile: AnalysisProfile) => {
+    if (typeof window.go?.main?.App?.SaveAnalysisDefaults !== 'function') return
+    setAnalysisConfigurationBusy(true); setAnalysisConfigurationError('')
+    try { setAnalysisConfiguration(await backend.saveAnalysisDefaults(profile)) }
+    catch (err) { setAnalysisConfigurationError(errorText(err)); throw err }
+    finally { setAnalysisConfigurationBusy(false) }
+  }
 
   useEffect(() => backend.on('reviewarc:check-for-updates:v1', () => {
     setScreen('settings')
@@ -181,12 +209,12 @@ export function App() {
     {error && <div className="global-error"><ErrorBanner message={error} onRetry={() => setError('')} actionLabel="Dismiss"/></div>}
     {screen === 'sources' && <SourceSelector state={bootstrap} onDone={async () => { const next = await backend.bootstrap(); setBootstrap({...next, account: bootstrap.account}); setScreen('inbox') }} />}
     {screen === 'settings' && (
-      <SettingsScreen state={bootstrap} theme={theme.preference} onThemeChange={theme.setPreference} update={softwareUpdate} updateBusy={updateBusy} onCheckUpdate={checkForUpdates} onSetUpdateChannel={setUpdateChannel} onInstallUpdate={() => setInstallUpdateOpen(true)} onSources={() => setScreen('sources')}/>
+      <SettingsScreen state={bootstrap} theme={theme.preference} onThemeChange={theme.setPreference} update={softwareUpdate} updateBusy={updateBusy} onCheckUpdate={checkForUpdates} onSetUpdateChannel={setUpdateChannel} onInstallUpdate={() => setInstallUpdateOpen(true)} onSources={() => setScreen('sources')} analysisConfiguration={analysisConfiguration ?? legacyAnalysisConfiguration(bootstrap.dependencies)} analysisConfigurationBusy={analysisConfigurationBusy} analysisConfigurationError={analysisConfigurationError} onRefreshAnalysis={refreshAnalysisHarnesses} onSaveAnalysisDefaults={saveAnalysisDefaults}/>
     )}
     {screen === 'inbox' && <InboxScreen state={bootstrap} onUpdate={(inbox) => setBootstrap({...bootstrap, inbox})} onOpen={openPR}/>}
     {openingPR && screen === 'overview' && <OpeningPullRequest pr={openingPR} onBack={() => { openRequest.current++; setOpeningPR(undefined); setScreen('inbox') }}/>}
     {session && screen === 'overview' && (
-      <OverviewScreen session={session} onBack={() => { openRequest.current++; setSession(undefined); setReviewChapterId(''); setScreen('inbox') }} onSession={setSession} onReview={(chapterId) => { setReviewChapterId(chapterId ?? ''); setScreen('review') }}/>
+      <OverviewScreen session={session} analysisConfiguration={analysisConfiguration ?? legacyAnalysisConfiguration(bootstrap.dependencies)} legacyAnalysis={!analysisConfiguration} onAnalysisConfiguration={(configuration) => setAnalysisConfiguration(configuration)} onRefreshHarnesses={refreshAnalysisHarnesses} onOpenSettings={() => setScreen('settings')} onBack={() => { openRequest.current++; setSession(undefined); setReviewChapterId(''); setScreen('inbox') }} onSession={setSession} onReview={(chapterId) => { setReviewChapterId(chapterId ?? ''); setScreen('review') }}/>
     )}
     {session && screen === 'review' && (
       <ReviewWorkspace session={session} initialChapterId={reviewChapterId} onSession={setSession} onBack={() => setScreen('overview')}/>
@@ -213,14 +241,15 @@ function missingDependencyHelp(name: DependencyStatus['name']) {
 }
 
 function DependencyGate({state, onRefresh, refreshing, error}: {state: BootstrapState; onRefresh: () => void; refreshing: boolean; error: string}) {
+  const requiredDependencies = state.dependencies.filter((dependency) => dependency.name !== 'codex')
   return <main className="onboarding">
-    <header onDoubleClick={toggleWindowOnHeaderDoubleClick}><WindowControls/><Logo/><DependencyPills dependencies={state.dependencies}/></header>
+    <header onDoubleClick={toggleWindowOnHeaderDoubleClick}><WindowControls/><Logo/><DependencyPills dependencies={requiredDependencies}/></header>
     <section className="onboarding-body">
       <div className="onboarding-intro"><span className="arc-line"/><h1>Your pull requests,<br/>ready to understand.</h1><p>ReviewArc uses the tools already trusted on your machine and creates isolated Git caches for pull-request analysis. No existing local checkout is required.</p></div>
       <div className="setup-panel">
         <h2>Connect your review workspace</h2>
-        <p>Three local tools power the ReviewArc workflow.</p>
-        <div className="setup-list">{state.dependencies.map((dep) => <div className="setup-row" key={dep.name}>
+        <p>Git and GitHub CLI connect ReviewArc to your pull requests.</p>
+        <div className="setup-list">{requiredDependencies.map((dep) => <div className="setup-row" key={dep.name}>
           <span className={`setup-status ${dep.state}`}>{dep.state === 'available' ? <Check size={15}/> : <X size={15}/>}</span>
           <div><strong>{dependencyLabel(dep.name)}</strong><small>{dep.state === 'available' ? dep.version || 'Available' : dep.message || 'Not detected by ReviewArc'}</small>{dep.state !== 'available' && <p className="dependency-help">{missingDependencyHelp(dep.name)}</p>}</div>
           <code title={dep.path}>{dep.path || dep.name}</code>
@@ -494,25 +523,53 @@ function PRRow({pr, onOpen}: {pr: PullRequestSummary; onOpen: () => void}) {
   return <button className="pr-row" onClick={onOpen}><div className="pr-relation"><span className={`relation-mark ${relationship}`}/><div><span>{relationshipLabel(relationship)}</span><strong>{repoName(pr)}</strong></div></div><div className="pr-main"><div className="pr-title"><span>#{pr.ref.number}</span><strong>{pr.title}</strong>{pr.isDraft && <span className="badge neutral">Draft</span>}</div><div className="pr-meta"><span>by @{pr.author.login}</span><span>updated {relativeTime(pr.updatedAt)}</span><span>{pr.changedFiles} files</span><span className="additions">+{pr.additions}</span><span className="deletions">−{pr.deletions}</span>{pr.labels.slice(0, 2).map((item) => <span className="pr-label" key={item}>{item}</span>)}{pr.labels.length > 2 && <span className="pr-label-more">+{pr.labels.length - 2}</span>}</div></div><div className="pr-state"><div><AnalysisBadge status={pr.analysisStatus}/>{pr.analysisStatus === 'ready' && <RiskBadge level={pr.riskLevel}/>}</div>{progress.total > 0 ? <div className="progress-inline"><span><i style={{width: `${progress.percent}%`}}/></span><small>{progress.reviewed}/{progress.total} reviewed</small></div> : <small>{analysisLabel(pr.analysisStatus)}</small>}</div><ChevronRight size={18}/></button>
 }
 
-export function OverviewScreen({session, onBack, onSession, onReview}: {session: ReviewSession; onBack: () => void; onSession: (session: ReviewSession) => void; onReview: (chapterId?: string) => void}) {
-  const pr = session.pullRequest; const analysis = session.analysis; const [operation, setOperation] = useState<Operation>(); const [events, setEvents] = useState<OperationEvent[]>([]); const [error, setError] = useState('')
-  useEffect(() => { const offOperation = backend.on('reviewarc:operation:v1', (raw) => { const op = raw as Operation; if (op.sessionId && op.sessionId !== session.id) return; setOperation(op); const completed = op.state === 'complete' || op.state === 'completed'; const failed = op.state === 'failed'; const cancelled = op.state === 'cancelled'; const terminal = completed || failed || cancelled; const event: OperationEvent = {stage: op.stage, message: op.message, status: completed ? 'complete' : failed || cancelled ? 'failed' : 'running'}; setEvents((current) => [...current.slice(-7), event]); if (failed) setError(op.message || 'Reanalysis failed. The previous guided review is still available.'); if (terminal) backend.getSession(session.id).then(onSession).catch(() => setError(`${completed ? 'Analysis completed' : cancelled ? 'Analysis was cancelled' : 'Analysis failed'}, but the restored guided review could not be loaded. Return to the inbox and reopen this pull request.`)) }); const offSession = backend.on('reviewarc:session:v1', (raw) => { const value = raw as {sessionId?: string}; if (value.sessionId === session.id) backend.getSession(session.id).then(onSession).catch(() => {}) }); return () => { offOperation(); offSession() } }, [session.id, onSession])
-  const analyze = async () => { setError(''); setEvents([]); try { setOperation(await backend.startAnalysis(session.id)) } catch (err) { setError(errorText(err)) } }
+const legacyOverviewAnalysisConfiguration = legacyAnalysisConfiguration([{name: 'codex', state: 'available'}])
+
+function operationFailure(message: string, hasPreviousAnalysis: boolean): AnalysisFailure {
+  const oversized = /input exceeds|maximum length|max_chars|input_too_large/i.test(message)
+  return oversized ? {
+    code: 'input_too_large', title: 'This change exceeded the analysis limit',
+    message: 'ReviewArc did not repeat the same oversized request. Change the analysis setup or wait for ReviewArc to create a bounded plan.',
+    action: 'changeProfile', technicalDetails: message,
+  } : {
+    code: 'analysis_failed', title: 'Analysis did not complete',
+    message: hasPreviousAnalysis ? 'The previous guided review is still available.' : 'No guided review was created. Check the analysis setup and try again.',
+    action: 'retry', technicalDetails: message,
+  }
+}
+
+export function OverviewScreen({session, analysisConfiguration = legacyOverviewAnalysisConfiguration, legacyAnalysis = true, onAnalysisConfiguration = () => {}, onRefreshHarnesses = () => {}, onOpenSettings = () => {}, onBack, onSession, onReview}: {session: ReviewSession; analysisConfiguration?: AnalysisConfiguration; legacyAnalysis?: boolean; onAnalysisConfiguration?: (configuration: AnalysisConfiguration) => void; onRefreshHarnesses?: () => void; onOpenSettings?: () => void; onBack: () => void; onSession: (session: ReviewSession) => void; onReview: (chapterId?: string) => void}) {
+  const pr = session.pullRequest; const analysis = session.analysis; const [operation, setOperation] = useState<Operation>(); const [events, setEvents] = useState<OperationEvent[]>([]); const [failure, setFailure] = useState<AnalysisFailure>(); const [profile, setProfile] = useState<AnalysisProfile | undefined>(() => recommendedProfile(analysisConfiguration)); const [profileOpen, setProfileOpen] = useState(false)
+  useEffect(() => { setProfile((current) => current && analysisConfiguration.harnesses.some((harness) => harness.id === current.harness) ? current : recommendedProfile(analysisConfiguration)) }, [analysisConfiguration])
+  useEffect(() => { const offOperation = backend.on('reviewarc:operation:v1', (raw) => { const op = raw as Operation; if (op.sessionId && op.sessionId !== session.id) return; setOperation(op); const completed = op.state === 'complete' || op.state === 'completed'; const failed = op.state === 'failed'; const cancelled = op.state === 'cancelled'; const terminal = completed || failed || cancelled; const event: OperationEvent = {stage: op.stage, message: op.message, progress: op.progress, status: completed ? 'complete' : failed ? 'failed' : cancelled ? 'complete' : 'running'}; setEvents((current) => [...current.slice(-7), event]); if (failed) setFailure(op.failure ?? operationFailure(op.message || 'The analysis process stopped unexpectedly.', Boolean(analysis))); if (terminal) backend.getSession(session.id).then(onSession).catch((err) => setFailure({code: 'session_reload_failed', title: 'Analysis state could not be refreshed', message: 'Return to the inbox and reopen this pull request.', action: 'none', technicalDetails: errorText(err)})) }); const offSession = backend.on('reviewarc:session:v1', (raw) => { const value = raw as {sessionId?: string}; if (value.sessionId === session.id) backend.getSession(session.id).then(onSession).catch(() => {}) }); return () => { offOperation(); offSession() } }, [analysis, session.id, onSession])
+  const analyze = async () => {
+    const selected = profile ?? recommendedProfile(analysisConfiguration)
+    if (!selected) return
+    setFailure(undefined); setEvents([])
+    try {
+      const saveAsDefault = !analysisConfiguration.defaultProfile
+      const next = await backend.startAnalysis(session.id, legacyAnalysis ? undefined : {profile: selected, saveAsDefault})
+      setOperation(next)
+      if (saveAsDefault && !legacyAnalysis) onAnalysisConfiguration({...analysisConfiguration, defaultProfile: selected})
+      setProfileOpen(false)
+    } catch (err) { setFailure(operationFailure(errorText(err), Boolean(analysis))) }
+  }
   const running = session.analysisStatus === 'running' || Boolean(operation && !['complete', 'completed', 'failed', 'cancelled'].includes(operation.state))
-  const cancel = async () => { if (!operation) return; try { await backend.cancelOperation(operation.id) } catch (err) { setError(errorText(err)) } }
-  return <main className="detail-page overview-page"><div className="detail-top"><button className="button text" onClick={onBack}><ArrowLeft size={16}/>Inbox</button><div className="detail-actions">{session.isStale ? <><button className="button secondary" disabled={!analysis || running} onClick={() => onReview()}>Continue stale review</button><button className="button primary" disabled={running} onClick={analyze}>{running ? <LoaderCircle className="spin" size={15}/> : <RefreshCw size={15}/>} {running ? 'Reanalyzing' : 'Reanalyze current revision'}</button></> : <>{analysis && <button className="button secondary" disabled={running} onClick={analyze}>{running ? <LoaderCircle className="spin" size={15}/> : <RefreshCw size={15}/>} {running ? 'Reanalyzing' : 'Reanalyze'}</button>}<button className="button primary" disabled={!analysis || running} onClick={() => onReview()}>Start guided review<ArrowRight size={16}/></button></>}</div></div>
+  const cancel = async () => { if (!operation) return; try { await backend.cancelOperation(operation.id) } catch (err) { setFailure(operationFailure(errorText(err), Boolean(analysis))) } }
+  const configured = Boolean(analysisConfiguration.defaultProfile)
+  return <main className="detail-page overview-page"><div className="detail-top"><button className="button text" onClick={onBack}><ArrowLeft size={16}/>Inbox</button><div className="detail-actions">{analysis && profile && <AnalysisProfileSummary configuration={analysisConfiguration} profile={profile} expanded={profileOpen} onChange={() => setProfileOpen((open) => !open)}/>} {analysis && !profile && <button className="button secondary" onClick={onOpenSettings}><Settings size={15}/>Configure AI analysis</button>} {session.isStale ? <><button className="button secondary" disabled={!analysis || running} onClick={() => onReview()}>Continue stale review</button>{profile && <button className="button primary" disabled={running} onClick={() => void analyze()}>{running ? <LoaderCircle className="spin" size={15}/> : <RefreshCw size={15}/>} {running ? 'Reanalyzing' : 'Reanalyze current revision'}</button>}</> : <>{analysis && profile && <button className="button secondary" disabled={running} onClick={() => void analyze()}>{running ? <LoaderCircle className="spin" size={15}/> : <RefreshCw size={15}/>} {running ? 'Reanalyzing' : 'Reanalyze'}</button>}<button className="button primary" disabled={!analysis || running} onClick={() => onReview()}>Start guided review<ArrowRight size={16}/></button></>}</div></div>
+    {analysis && profileOpen && profile && <div className="analysis-override" id="analysis-profile-override"><div><strong>For this run</strong><small>This changes the next analysis only. Your Settings default stays the same.</small></div><AnalysisProfilePicker configuration={analysisConfiguration} value={profile} onChange={setProfile}/><button className="button text small" onClick={() => { setProfile(recommendedProfile(analysisConfiguration)); setProfileOpen(false) }}>Use default</button></div>}
     {session.isStale && <div className="stale-banner"><AlertTriangle size={18}/><div><strong>Analysis covers an older revision</strong><p>{session.staleReason || `This guided review covers ${session.headSha.slice(0, 8)}; the pull request is now ${pr.headSha.slice(0, 8)}. Notes, drafts, and progress are preserved.`}</p></div></div>}
     {!analysis && <header className="pr-hero compact"><div><span className="repo-label">{repoName(pr)}</span><h1><span>#{pr.ref.number}</span> {pr.title}</h1><div className="hero-meta"><span>@{pr.author.login}</span><span>{pr.baseRef} ← {pr.headRef}</span><span>{pr.commits.length} commit{pr.commits.length === 1 ? '' : 's'}</span><span>{pr.changedFiles} files</span>{pr.requestedReviewers.length > 0 && <span>Review: {pr.requestedReviewers.map((reviewer) => `@${reviewer.login}`).join(', ')}</span>}{pr.reviewState && <span>{pr.reviewState.replaceAll('_', ' ').toLowerCase()}</span>}<span className="additions">+{pr.additions}</span><span className="deletions">−{pr.deletions}</span></div></div><div className="hero-status"><AnalysisBadge status={running ? 'running' : session.analysisStatus}/><small>Head {pr.headSha.slice(0, 8)}</small></div></header>}
-    {!analysis ? <AnalysisPanel status={running ? 'running' : session.analysisStatus} operation={operation} events={events} error={error} onStart={analyze} onCancel={cancel}/> : <>{(running || error) && <AnalysisPanel status={running ? 'running' : session.analysisStatus} operation={operation} events={events} error={error} onStart={analyze} onCancel={cancel}/>} {analysis.summaryValidation !== 'valid' && <div className="warning-banner"><AlertTriangle size={16}/><span><strong>Summary is unverified.</strong> {analysis.summaryMessage || 'No valid code evidence supports this summary.'}</span></div>}<AnalysisOverview session={session} onReview={onReview}/></>}
+    {!analysis ? <AnalysisPanel running={running} reanalysis={false} configured={configured} configuration={analysisConfiguration} profile={profile} profileOpen={profileOpen} events={events} failure={failure} onProfileChange={setProfile} onToggleProfile={() => setProfileOpen((open) => !open)} onStart={() => void analyze()} onCancel={() => void cancel()} onRefresh={onRefreshHarnesses} onOpenSettings={onOpenSettings}/> : <>{(running || failure) && <AnalysisPanel running={running} reanalysis configured configuration={analysisConfiguration} profile={profile} profileOpen={profileOpen} events={events} failure={failure} onProfileChange={setProfile} onToggleProfile={() => setProfileOpen((open) => !open)} onStart={() => void analyze()} onCancel={() => void cancel()} onRefresh={onRefreshHarnesses} onOpenSettings={onOpenSettings}/>} {session.latestAnalysisRun && (session.latestAnalysisRun.coverage.diffFilesFullyRead < session.latestAnalysisRun.coverage.changedFilesTotal || session.latestAnalysisRun.coverage.diffFilesPartiallyRead > 0) && <div className="warning-banner analysis-coverage-warning"><AlertTriangle size={16}/><span><strong>Analysis coverage is incomplete.</strong> Full diffs were available for {session.latestAnalysisRun.coverage.diffFilesFullyRead} of {session.latestAnalysisRun.coverage.changedFilesTotal} changed files{session.latestAnalysisRun.coverage.diffFilesPartiallyRead ? `; ${session.latestAnalysisRun.coverage.diffFilesPartiallyRead} were partially paged` : ''}. <a href="#analysis-run-details">View details</a></span></div>} {analysis.summaryValidation !== 'valid' && <div className="warning-banner"><AlertTriangle size={16}/><span><strong>Summary is unverified.</strong> {analysis.summaryMessage || 'No valid code evidence supports this summary.'}</span></div>}<AnalysisOverview session={session} analysisConfiguration={analysisConfiguration} onReview={onReview}/></>}
   </main>
 }
 
-function AnalysisPanel({status, operation, events, error, onStart, onCancel}: {status: AnalysisStatus; operation?: Operation; events: OperationEvent[]; error: string; onStart: () => void; onCancel: () => void}) {
-  const running = status === 'running' || Boolean(operation && operation.state !== 'complete' && operation.state !== 'completed' && operation.state !== 'failed' && operation.state !== 'cancelled')
-  return <section className="analysis-launch" aria-live="polite" aria-busy={running}><div className="analysis-promise"><span><Sparkles size={24}/></span><h2>{running ? 'Building the review arc' : 'Turn this change into a guided review'}</h2><p>{running ? 'The previous guided review remains visible below while Codex reevaluates the complete current pull request.' : 'Codex reads the isolated managed repository in read-only mode. ReviewArc validates every referenced path and line range before it reaches the guided review.'}</p>{!running && <button className="button primary" onClick={onStart}><Sparkles size={16}/>Analyze pull request</button>}</div><div className="analysis-events"><div className="event-heading"><strong>{running ? 'Reanalysis progress' : 'Analysis progress'}</strong>{running && <button className="button text small" onClick={onCancel}>Cancel</button>}</div>{error && <ErrorBanner message={error} onRetry={onStart}/>} {!events.length ? <div className="event-placeholder"><CircleHelp size={17}/><p>{running ? 'Starting the managed snapshot and Codex analysis…' : 'Progress will appear here: cache preparation, revision fetch, Codex analysis, evidence validation, and persistence.'}</p></div> : events.map((event, index) => <div className="event-row" key={`${event.stage}-${index}`}><span className={event.status ?? 'running'}>{event.status === 'complete' ? <Check size={13}/> : event.status === 'failed' ? <X size={13}/> : <LoaderCircle className="spin" size={13}/>}</span><div><strong>{event.stage}</strong><small>{event.message}</small></div>{event.progress != null && <em>{Math.round(event.progress)}%</em>}</div>)}</div></section>
+function AnalysisPanel({running, reanalysis, configured, configuration, profile, profileOpen, events, failure, onProfileChange, onToggleProfile, onStart, onCancel, onRefresh, onOpenSettings}: {running: boolean; reanalysis: boolean; configured: boolean; configuration: AnalysisConfiguration; profile?: AnalysisProfile; profileOpen: boolean; events: OperationEvent[]; failure?: AnalysisFailure; onProfileChange: (profile: AnalysisProfile) => void; onToggleProfile: () => void; onStart: () => void; onCancel: () => void; onRefresh: () => void; onOpenSettings: () => void}) {
+  return <section className="analysis-launch" aria-busy={running}><div className="analysis-promise"><span><Sparkles size={24}/></span><h2>{running ? 'Building the review arc' : configured ? 'Turn this change into a guided review' : 'Choose how to analyze this change'}</h2><p>{running ? 'ReviewArc is analyzing the complete current pull request through a controlled, read-only context.' : 'ReviewArc uses a read-only repository snapshot and validates the structured result before it reaches your review.'}</p>{!running && !profile && <NoHarnessState configuration={configuration} onRefresh={onRefresh} onOpenSettings={onOpenSettings}/>} {!running && profile && <div className="analysis-profile-launch">{configured ? <AnalysisProfileSummary configuration={configuration} profile={profile} expanded={profileOpen} onChange={onToggleProfile}/> : <AnalysisProfilePicker configuration={configuration} value={profile} onChange={onProfileChange}/>} {configured && profileOpen && <AnalysisProfilePicker configuration={configuration} value={profile} onChange={onProfileChange} id="analysis-profile-override"/>}<button className="button primary" onClick={onStart}><Sparkles size={16}/>Analyze pull request</button>{!configured && <small>This becomes your default. You can change it later in Settings.</small>}</div>}</div><div><AnalysisProgress events={events} running={running} reanalysis={reanalysis} onCancel={onCancel}/>{failure && <AnalysisFailurePanel failure={failure} onRetry={onStart} onRefresh={onRefresh} onChangeProfile={onToggleProfile} onOpenSettings={onOpenSettings}/>}</div></section>
 }
 
-function AnalysisOverview({session, onReview}: {session: ReviewSession; onReview: (chapterId?: string) => void}) {
+function AnalysisOverview({session, analysisConfiguration, onReview}: {session: ReviewSession; analysisConfiguration?: AnalysisConfiguration; onReview: (chapterId?: string) => void}) {
   const analysis = session.analysis!
   const pr = session.pullRequest
   const checks = pr.checkRuns ?? []
@@ -563,6 +620,7 @@ function AnalysisOverview({session, onReview}: {session: ReviewSession; onReview
         <aside className="overview-context" aria-label="Review context">
           <details className="overview-context-disclosure"><summary><span>Review context</span><small>{blockingUnknown ? '1 open question' : 'No open questions'} · {analysis.validationIssues.length ? `${analysis.validationIssues.length} unsupported` : 'Evidence checked'}</small></summary><div className="overview-context-content"><article className={blockingUnknown ? 'overview-note unknown' : 'overview-note clear'}><CircleHelp size={18}/><div><span>{blockingUnknown ? 'Open question' : 'Questions'}</span><strong>{blockingUnknown?.text ?? 'No blocking unknowns'}</strong></div></article><article className="overview-note evidence"><ShieldCheck size={18}/><div><span>Evidence</span><strong>{analysis.validationIssues.length ? `${analysis.validationIssues.length} unsupported reference${analysis.validationIssues.length === 1 ? '' : 's'}` : 'References checked'}</strong><small>{checks.length ? `${validChecks} of ${checks.length} GitHub checks are complete or passing.` : 'CI status was not available in this snapshot.'}</small></div></article></div></details>
           <div className="overview-support" aria-label="Supporting pull request context">
+            {session.latestAnalysisRun && <div id="analysis-run-details"><AnalysisRunDetails run={session.latestAnalysisRun} configuration={analysisConfiguration}/></div>}
             <details className="support-disclosure"><summary><span><BookOpen size={16}/>Author context</span><small>{pr.body ? 'Pull request description' : 'No description supplied'}</small></summary><div className="support-content">{pr.body ? <Markdown className="pr-description">{pr.body}</Markdown> : <p>No pull request description was provided.</p>}</div></details>
             {checks.length > 0 && <details className="support-disclosure"><summary><span><Check size={16}/>Checks</span><small>{validChecks} of {checks.length} complete or passing</small></summary><div className="support-content">{checks.map((check) => <div className="check-row" key={check.id}><span className={`check-state ${check.conclusion || check.status}`}/><div><strong>{check.name}</strong><small>{check.conclusion || check.status}{check.appName ? ` · ${check.appName}` : ''}</small></div></div>)}</div></details>}
             {discussionCount > 0 && <details className="support-disclosure"><summary><span><MessageSquare size={16}/>Existing discussion</span><small>{visibleDiscussionCount < discussionCount ? `Latest ${visibleDiscussionCount} of ${discussionCount}` : `${discussionCount} messages`}</small></summary><div className="support-content">{reviews.slice(-3).map((review) => <div className="discussion-row" key={`review-${review.id}`}><strong>@{review.author.login} · {review.state.toLowerCase()}</strong>{review.body && <p>{review.body}</p>}</div>)}{comments.slice(-3).map((comment) => <div className="discussion-row" key={`comment-${comment.id}`}><strong>@{comment.author.login} on {comment.path}{comment.line ? `:${comment.line}` : ''}</strong><p>{comment.body}</p></div>)}</div></details>}
@@ -916,7 +974,7 @@ function UpdateInstallConfirmation({update, busy, onCancel, onConfirm}: {update:
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel() }}><section className="publish-modal" role="dialog" aria-modal="true" aria-labelledby="update-install-title"><header><div><span><Download size={17}/></span><div><h2 id="update-install-title">Install ReviewArc {update.release?.version}?</h2><p>{ready ? 'The update is downloaded and ready.' : 'ReviewArc will download the signed update.'}</p></div></div><button className="icon-button" aria-label="Close" disabled={busy} onClick={onCancel}><X size={17}/></button></header><div className="publish-comments"><article><p>ReviewArc will close and reopen to finish the update. macOS may ask for an administrator username and password to replace the app in Applications.</p></article></div><footer><button className="button secondary" disabled={busy} onClick={onCancel}>Cancel</button><button className="button primary" disabled={busy} onClick={onConfirm}>{busy ? <LoaderCircle className="spin" size={15}/> : <Download size={15}/>} {ready ? 'Install and restart' : 'Install update'}</button></footer></section></div>
 }
 
-export function SettingsScreen({state, theme = 'system', onThemeChange = () => {}, update, updateBusy = false, onCheckUpdate = () => {}, onSetUpdateChannel = () => {}, onInstallUpdate = () => {}, onSources}: {state: BootstrapState; theme?: ThemePreference; onThemeChange?: (theme: ThemePreference) => void; update?: SoftwareUpdateStatus; updateBusy?: boolean; onCheckUpdate?: () => void; onSetUpdateChannel?: (channel: UpdateChannel) => void; onInstallUpdate?: () => void; onSources: () => void}) {
+export function SettingsScreen({state, theme = 'system', onThemeChange = () => {}, update, updateBusy = false, onCheckUpdate = () => {}, onSetUpdateChannel = () => {}, onInstallUpdate = () => {}, onSources, analysisConfiguration, analysisConfigurationBusy = false, analysisConfigurationError = '', onRefreshAnalysis = () => {}, onSaveAnalysisDefaults = () => {}}: {state: BootstrapState; theme?: ThemePreference; onThemeChange?: (theme: ThemePreference) => void; update?: SoftwareUpdateStatus; updateBusy?: boolean; onCheckUpdate?: () => void; onSetUpdateChannel?: (channel: UpdateChannel) => void; onInstallUpdate?: () => void; onSources: () => void; analysisConfiguration?: AnalysisConfiguration; analysisConfigurationBusy?: boolean; analysisConfigurationError?: string; onRefreshAnalysis?: () => void; onSaveAnalysisDefaults?: (profile: AnalysisProfile) => Promise<void> | void}) {
   const protocol = (state.gitProtocol || 'https').toUpperCase()
   const selectedSources = state.selections.filter((selection) => selection.enabled).length
   const themeOptions = [
@@ -934,10 +992,11 @@ export function SettingsScreen({state, theme = 'system', onThemeChange = () => {
           <p className="theme-preference-help">System follows the appearance selected in macOS and updates when it changes.</p>
         </div>
       </section>
+      <AIAnalysisSettings configuration={analysisConfiguration ?? legacyAnalysisConfiguration(state.dependencies)} busy={analysisConfigurationBusy} error={analysisConfigurationError} onRefresh={onRefreshAnalysis} onSave={onSaveAnalysisDefaults}/>
       <section>
         <div className="settings-section-heading"><h2>Connections</h2><p>Tool readiness, GitHub identity, and Git transport.</p></div>
         <div className="settings-section-body settings-rows">
-          {state.dependencies.map((dep) => <div key={dep.name}><span className={`setup-status ${dep.state}`}>{dep.state === 'available' ? <Check size={14}/> : <X size={14}/>}</span><div><strong>{dependencyLabel(dep.name)}</strong><small>{dep.version || dep.message || (dep.state === 'available' ? 'Available' : 'Not detected by ReviewArc')}</small>{dep.state !== 'available' && <p className="dependency-help">{missingDependencyHelp(dep.name)}</p>}</div><code title={dep.path}>{dep.path || 'Not found'}</code></div>)}
+          {state.dependencies.filter((dependency) => dependency.name !== 'codex').map((dep) => <div key={dep.name}><span className={`setup-status ${dep.state}`}>{dep.state === 'available' ? <Check size={14}/> : <X size={14}/>}</span><div><strong>{dependencyLabel(dep.name)}</strong><small>{dep.version || dep.message || (dep.state === 'available' ? 'Available' : 'Not detected by ReviewArc')}</small>{dep.state !== 'available' && <p className="dependency-help">{missingDependencyHelp(dep.name)}</p>}</div><code title={dep.path}>{dep.path || 'Not found'}</code></div>)}
           <div><span className="setup-status available"><Check size={14}/></span><div><strong>Authenticated as @{state.account?.login || 'unknown'}</strong><small>Credentials are managed by GitHub CLI.</small></div><code>gh</code></div>
           <div><span className="setup-status available"><GitPullRequest size={14}/></span><div><strong>Git operations: {protocol}</strong><small>Managed repository fetches follow your <code>gh</code> protocol setting.</small></div><code>{state.gitProtocol || 'https'}</code></div>
         </div>
@@ -946,7 +1005,7 @@ export function SettingsScreen({state, theme = 'system', onThemeChange = () => {
       {update && (
         <SoftwareUpdateSettings update={update} busy={updateBusy} onCheck={onCheckUpdate} onSetChannel={onSetUpdateChannel} onInstall={onInstallUpdate}/>
       )}
-      <section><div className="settings-section-heading"><h2>Local data</h2><p>Application-owned storage used for repository analysis and saved review state.</p></div><div className="settings-section-body"><dl className="path-list"><div><dt>Application data</dt><dd>{state.paths.root}</dd></div><div><dt>Repository caches</dt><dd>{state.paths.repositories}</dd></div><div><dt>Analysis worktrees</dt><dd>{state.paths.worktrees}</dd></div><div><dt>Database</dt><dd>{state.paths.database}</dd></div><div><dt>Logs</dt><dd>{state.paths.logs}</dd></div><div><dt>Temporary cache</dt><dd>{state.paths.cache}</dd></div></dl><p className="safety-copy"><CircleHelp size={16}/><span>PR analysis uses the repository cache and isolated worktree listed above. ReviewArc also invokes your installed <code>git</code>, <code>gh</code>, and <code>codex</code> tools, which may read their own configuration and credentials.</span></p></div></section>
+      <section><div className="settings-section-heading"><h2>Local data</h2><p>Application-owned storage used for repository analysis and saved review state.</p></div><div className="settings-section-body"><dl className="path-list"><div><dt>Application data</dt><dd>{state.paths.root}</dd></div><div><dt>Repository caches</dt><dd>{state.paths.repositories}</dd></div><div><dt>Analysis worktrees</dt><dd>{state.paths.worktrees}</dd></div><div><dt>Database</dt><dd>{state.paths.database}</dd></div><div><dt>Logs</dt><dd>{state.paths.logs}</dd></div><div><dt>Temporary cache</dt><dd>{state.paths.cache}</dd></div></dl><p className="safety-copy"><CircleHelp size={16}/><span>PR analysis uses the repository cache and isolated worktree listed above. ReviewArc invokes your installed <code>git</code>, <code>gh</code>, and selected AI harness, which may read their own configuration and credentials.</span></p></div></section>
     </div>
   </main>
 }

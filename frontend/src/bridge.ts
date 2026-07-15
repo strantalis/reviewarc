@@ -1,4 +1,4 @@
-import type { AccountState, BootstrapState, ChapterStatus, ChangedFile, DiffFile, EnvironmentState, FileContent, InboxResult, Operation, PublishPreview, PullRequestRef, PullRequestReviewComment, RepositoryPage, ReviewComment, ReviewNote, ReviewSession, SelectedRepositoryRefresh, SoftwareUpdateStatus, SourceSelection, SourceState, ThreadReplyPreview, UpdateChannel, Organization } from './types'
+import type { AccountState, AnalysisConfiguration, AnalysisProfile, AnalysisRequest, BootstrapState, ChapterStatus, ChangedFile, DiffFile, EnvironmentState, FileContent, InboxResult, Operation, PublishPreview, PullRequestRef, PullRequestReviewComment, RepositoryPage, ReviewComment, ReviewNote, ReviewSession, SelectedRepositoryRefresh, SoftwareUpdateStatus, SourceSelection, SourceState, ThreadReplyPreview, UpdateChannel, Organization } from './types'
 
 type WailsMethod = (...args: unknown[]) => Promise<unknown>
 type AppBinding = Record<string, WailsMethod>
@@ -45,7 +45,10 @@ export const backend = {
   refreshInbox: () => call<InboxResult>(['RefreshInbox']),
   openPullRequest: (ref: PullRequestRef) => call<ReviewSession>(['OpenPullRequest'], ref),
   refreshPullRequestContext: (sessionId: string) => call<ReviewSession>(['RefreshPullRequestContext'], sessionId),
-  startAnalysis: (sessionId: string) => call<Operation>(['StartAnalysis'], sessionId),
+  getAnalysisConfiguration: () => call<AnalysisConfiguration>(['GetAnalysisConfiguration']),
+  refreshAnalysisHarnesses: () => call<AnalysisConfiguration>(['RefreshAnalysisHarnesses']),
+  saveAnalysisDefaults: (profile: AnalysisProfile) => call<AnalysisConfiguration>(['SaveAnalysisDefaults'], profile),
+  startAnalysis: (sessionId: string, request?: AnalysisRequest) => request ? call<Operation>(['StartAnalysisWithProfile'], sessionId, request) : call<Operation>(['StartAnalysis'], sessionId),
   cancelOperation: (operationId: string) => call<void>(['CancelOperation'], operationId),
   getSession: (sessionId: string) => call<ReviewSession>(['GetSession'], sessionId),
   getChangedFiles: (sessionId: string) => call<ChangedFile[]>(['GetChangedFiles'], sessionId),
