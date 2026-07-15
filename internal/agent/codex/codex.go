@@ -195,7 +195,7 @@ func (p *Provider) analyze(parent context.Context, input agent.AnalyzeInput, bun
 		Tool: processpkg.Codex, Dir: filepath.Join(bundle.Path, "run"), Timeout: p.config.Timeout,
 		Args: invocationArgs(input, schemaPath, catalogPath, executable), Stdin: []byte(prompt), MaxOutput: p.config.MaxOutput,
 		OnStdoutLine: func(line []byte) {
-			if message := progressMessage(line); message != "" {
+			if message := progressMessage(line, bundle.Manifest); message != "" {
 				emit(agent.Event{Kind: agent.EventProgress, Message: message})
 			}
 		},
@@ -341,7 +341,7 @@ type envelope struct {
 	} `json:"item"`
 }
 
-func progressMessage(line []byte) string {
+func progressMessage(line []byte, manifest analysisbundle.Manifest) string {
 	var event envelope
 	if json.Unmarshal(line, &event) != nil {
 		return ""
@@ -349,8 +349,15 @@ func progressMessage(line []byte) string {
 	switch event.Type {
 	case "thread.started", "turn.started":
 		return "Planning the review"
-	case "item.started":
-		return "Inspecting relevant context"
+	case "item.completed":
+		if event.Item.Type != "mcp_tool_call" || event.Item.Server != "reviewarc" {
+			return ""
+		}
+		tool := event.Item.Tool
+		if tool == "" {
+			tool = event.Item.Name
+		}
+		return agent.ContextActivityMessage(tool, event.Item.Arguments, manifest)
 	case "turn.completed":
 		return "Analysis response received"
 	default:

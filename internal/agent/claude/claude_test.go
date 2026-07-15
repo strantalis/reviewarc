@@ -113,6 +113,17 @@ func fixtureStream(t *testing.T) []byte {
 	return []byte(string(toolUse) + "\n" + string(toolResult) + "\n" + string(result) + "\n")
 }
 
+func TestProgressMessageDescribesApprovedContextActivity(t *testing.T) {
+	line := []byte(`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__reviewarc__read_file","input":{"path":"src/greet.go","revision":"head","startLine":1,"endLine":20}}]}}`)
+	if got := progressMessage(line, analysisbundle.Manifest{}); got != "Reading src/greet.go lines 1–20" {
+		t.Fatalf("progress message=%q", got)
+	}
+	unsafe := []byte(`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__other__read_file","input":{"path":"secret"}}]}}`)
+	if got := progressMessage(unsafe, analysisbundle.Manifest{}); got != "" {
+		t.Fatalf("unapproved activity was exposed: %q", got)
+	}
+}
+
 func TestCapabilitiesExposeSecondEligibleAdapter(t *testing.T) {
 	capabilities, err := New(&fixtureRunner{}, Config{}).Capabilities(context.Background())
 	if err != nil {

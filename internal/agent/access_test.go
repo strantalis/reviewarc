@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"reviewarc/internal/analysisbundle"
@@ -75,6 +76,28 @@ func TestAccessTrackerRejectsUnknownToolsFilesAndRanges(t *testing.T) {
 		tracker := NewAccessTracker(accessManifest())
 		if err := tracker.Record(test.tool, json.RawMessage(test.args), json.RawMessage(test.result)); err == nil {
 			t.Fatalf("accepted tool=%s args=%s", test.tool, test.args)
+		}
+	}
+}
+
+func TestContextActivityMessageDescribesOnlySafeToolMetadata(t *testing.T) {
+	manifest := accessManifest()
+	for _, test := range []struct {
+		tool, args, want string
+	}{
+		{"list_changes", `{}`, "Listing changed files"},
+		{"read_pr_context", `{"section":"discussion"}`, "Reading pull request discussion"},
+		{"read_diff", `{"fileId":"f000001","cursor":0}`, "Reading diff for src/first.go"},
+		{"read_file", `{"path":"src/first.go","revision":"head","startLine":10,"endLine":20}`, "Reading src/first.go lines 10–20"},
+		{"search_snapshot", `{"query":"private search term","revision":"base"}`, "Searching the base repository snapshot"},
+		{"exec_command", `{"command":"unsafe"}`, ""},
+	} {
+		got := ContextActivityMessage(test.tool, json.RawMessage(test.args), manifest)
+		if got != test.want {
+			t.Fatalf("ContextActivityMessage(%q)=%q, want %q", test.tool, got, test.want)
+		}
+		if strings.Contains(got, "private search term") {
+			t.Fatalf("search term leaked into progress copy: %q", got)
 		}
 	}
 }

@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { App, DiffView, FileContextView, OverviewScreen, ReviewWorkspace, SettingsScreen, SourceSelector, SplitDiffView } from './App'
+import { App, appendOperationEvent, DiffView, FileContextView, OverviewScreen, ReviewWorkspace, SettingsScreen, SourceSelector, SplitDiffView } from './App'
 import { Markdown, WindowControls } from './components'
 import type { AnalysisConfiguration, BootstrapState, EnvironmentState, RepositoryPage, ReviewSession, SoftwareUpdateStatus } from './types'
 
@@ -539,6 +539,12 @@ describe('Repository sources', () => {
 })
 
 describe('Analysis setup', () => {
+  it('coalesces repeated progress events while preserving changed activity', () => {
+    const repeated = {stage: 'analyzingChange', message: 'Reading diff for src/first.go', status: 'running' as const, progress: 20}
+    expect(appendOperationEvent([repeated], {...repeated, progress: 40})).toEqual([{...repeated, progress: 40}])
+    expect(appendOperationEvent([repeated], {...repeated, message: 'Reading diff for src/second.go'})).toHaveLength(2)
+  })
+
   it('does not expose a fake Codex profile while the saved Claude configuration is loading', async () => {
     const session = reviewSession()
     installBackend({dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: [session.pullRequest]})

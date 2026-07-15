@@ -161,7 +161,7 @@ func (p *Provider) analyze(parent context.Context, input agent.AnalyzeInput, bun
 		Tool: processpkg.Claude, Dir: filepath.Join(bundle.Path, "run"), Timeout: p.config.Timeout,
 		Args: invocationArgs(input, mcpPath, string(schema)), Stdin: []byte(prompt), MaxOutput: p.config.MaxOutput,
 		OnStdoutLine: func(line []byte) {
-			if message := progressMessage(line); message != "" {
+			if message := progressMessage(line, bundle.Manifest); message != "" {
 				emit(agent.Event{Kind: agent.EventProgress, Message: message})
 			}
 		},
@@ -327,7 +327,7 @@ func parseStream(data []byte, tracker *agent.AccessTracker) (sharedanalysis.Docu
 	return sharedanalysis.Decode(final)
 }
 
-func progressMessage(line []byte) string {
+func progressMessage(line []byte, manifest analysisbundle.Manifest) string {
 	var event streamEvent
 	if json.Unmarshal(line, &event) != nil {
 		return ""
@@ -335,10 +335,13 @@ func progressMessage(line []byte) string {
 	if event.Type == "assistant" {
 		for _, block := range event.Message.Content {
 			if block.Type == "tool_use" {
-				return "Inspecting relevant context"
+				const prefix = "mcp__reviewarc__"
+				if strings.HasPrefix(block.Name, prefix) {
+					return agent.ContextActivityMessage(strings.TrimPrefix(block.Name, prefix), block.Input, manifest)
+				}
 			}
 		}
-		return "Analyzing the change"
+		return ""
 	}
 	if event.Type == "result" {
 		return "Analysis response received"

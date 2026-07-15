@@ -97,6 +97,18 @@ func fixtureJSONL(t *testing.T) []byte {
 	return []byte("{\"type\":\"thread.started\",\"thread_id\":\"fixture\"}\n" + string(tool) + "\n" + string(message) + "\n")
 }
 
+func TestProgressMessageDescribesApprovedContextActivity(t *testing.T) {
+	line := []byte(`{"type":"item.completed","item":{"type":"mcp_tool_call","server":"reviewarc","tool":"read_diff","arguments":{"fileId":"f000001","cursor":0}}}`)
+	manifest := analysisbundle.Manifest{Changes: []analysisbundle.Change{{ID: "f000001", Path: "src/greet.go"}}}
+	if got := progressMessage(line, manifest); got != "Reading diff for src/greet.go" {
+		t.Fatalf("progress message=%q", got)
+	}
+	unsafe := []byte(`{"type":"item.completed","item":{"type":"mcp_tool_call","server":"other","tool":"read_diff","arguments":{"fileId":"f000001"}}}`)
+	if got := progressMessage(unsafe, manifest); got != "" {
+		t.Fatalf("unapproved activity was exposed: %q", got)
+	}
+}
+
 func validInput(t *testing.T) agent.AnalyzeInput {
 	t.Helper()
 	dataRoot := t.TempDir()

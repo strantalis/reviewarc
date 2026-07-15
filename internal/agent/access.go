@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"reviewarc/internal/analysisbundle"
@@ -31,6 +32,66 @@ func NewAccessTracker(manifest analysisbundle.Manifest) *AccessTracker {
 }
 
 func IsAllowedContextTool(name string) bool { return allowedContextTools[name] }
+
+// ContextActivityMessage turns an approved read-only tool call into progress
+// copy. It deliberately excludes model prose, file contents, and search terms.
+func ContextActivityMessage(tool string, arguments json.RawMessage, manifest analysisbundle.Manifest) string {
+	if !IsAllowedContextTool(tool) {
+		return ""
+	}
+	args := jsonObject(arguments)
+	switch tool {
+	case "list_changes":
+		return "Listing changed files"
+	case "read_pr_context":
+		switch jsonString(args["section"]) {
+		case "metadata":
+			return "Reading pull request metadata"
+		case "discussion":
+			return "Reading pull request discussion"
+		default:
+			return "Reading pull request context"
+		}
+	case "read_diff":
+		if change, ok := changeByID(manifest.Changes, jsonString(args["fileId"])); ok {
+			if path := safeActivityPath(change.Path); path != "" {
+				return "Reading diff for " + path
+			}
+		}
+		return "Reading a changed-file diff"
+	case "read_file":
+		path := safeActivityPath(jsonString(args["path"]))
+		start, end := jsonInt(args["startLine"]), jsonInt(args["endLine"])
+		if path != "" && start > 0 && end >= start {
+			return fmt.Sprintf("Reading %s lines %d–%d", path, start, end)
+		}
+		if path != "" {
+			return "Reading " + path
+		}
+		return "Reading a repository file"
+	case "search_snapshot":
+		revision := jsonString(args["revision"])
+		if revision == "base" || revision == "head" {
+			return "Searching the " + revision + " repository snapshot"
+		}
+		return "Searching the repository snapshot"
+	default:
+		return ""
+	}
+}
+
+func safeActivityPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" || strings.IndexFunc(path, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+		return ""
+	}
+	const maxRunes = 160
+	runes := []rune(path)
+	if len(runes) > maxRunes {
+		return string(runes[:maxRunes-1]) + "…"
+	}
+	return path
+}
 
 func (t *AccessTracker) Record(tool string, arguments, result json.RawMessage) error {
 	if t == nil {

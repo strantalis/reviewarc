@@ -68,10 +68,9 @@ describe('analysis configuration components', () => {
   })
 
   it('maps provider-shaped stages to harness-neutral progress copy', () => {
-    render(<AnalysisProgress running events={[{stage: 'runningCodex', message: 'Running Codex', status: 'running', progress: 42}]} onCancel={vi.fn()}/>)
+    render(<AnalysisProgress running events={[{stage: 'runningCodex', message: 'Reading src/greet.go lines 10–24', status: 'running', progress: 42}]} onCancel={vi.fn()}/>)
     expect(screen.getByText('Analyzing the change', {selector: 'strong'})).toBeInTheDocument()
-    expect(screen.getByText('Reading changed code and repository context as needed.')).toBeInTheDocument()
-    expect(screen.queryByText('Running Codex')).not.toBeInTheDocument()
+    expect(screen.getByText('Reading src/greet.go lines 10–24')).toBeInTheDocument()
     expect(screen.getByRole('progressbar', {name: 'Analyzing the change'})).toHaveAttribute('aria-valuenow', '42')
   })
 
