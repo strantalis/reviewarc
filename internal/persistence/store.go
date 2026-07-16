@@ -300,12 +300,11 @@ func (s *Store) SearchAccessibleRepositories(ctx context.Context, accountLogin, 
 		return nil, 0, errors.New("search accessible repositories: invalid limit")
 	}
 	pattern := "%" + escapeLike(strings.ToLower(query)) + "%"
-	where := `a.account_login=? AND (?='' OR lower(a.owner || '/' || a.name || ' ' || a.description) LIKE ? ESCAPE '\')`
 	var total int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM accessible_repositories a WHERE `+where, accountLogin, query, pattern).Scan(&total); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM accessible_repositories a WHERE a.account_login=? AND (?='' OR lower(a.owner || '/' || a.name || ' ' || a.description) LIKE ? ESCAPE '\')`, accountLogin, query, pattern).Scan(&total); err != nil {
 		return nil, 0, wrap("search accessible repositories", err)
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT r.repository_json FROM accessible_repositories a JOIN repositories r ON r.repo_key=a.repo_key WHERE `+where+` ORDER BY lower(a.owner),lower(a.name) LIMIT ? OFFSET ?`, accountLogin, query, pattern, limit, offset)
+	rows, err := s.db.QueryContext(ctx, `SELECT r.repository_json FROM accessible_repositories a JOIN repositories r ON r.repo_key=a.repo_key WHERE a.account_login=? AND (?='' OR lower(a.owner || '/' || a.name || ' ' || a.description) LIKE ? ESCAPE '\') ORDER BY lower(a.owner),lower(a.name) LIMIT ? OFFSET ?`, accountLogin, query, pattern, limit, offset)
 	if err != nil {
 		return nil, 0, wrap("search accessible repositories", err)
 	}

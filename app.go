@@ -526,7 +526,14 @@ func (a *App) ListAccessibleRepositories(input AccessibleRepositorySearchInput) 
 	page := RepositoryPage{Items: items, TotalCount: total, HasNextPage: input.Offset+len(items) < total, Cached: true}
 	var snapshot accessibleCatalogSnapshot
 	settingKey := accessibleCatalogSetting + ":" + strings.ToLower(input.Account)
-	if err := a.store.GetSetting(a.appContext(), settingKey, &snapshot); err != nil || snapshot.LastSyncedAt.IsZero() {
+	if err := a.store.GetSetting(a.appContext(), settingKey, &snapshot); err != nil {
+		if !errors.Is(err, persistence.ErrNotFound) {
+			return RepositoryPage{}, err
+		}
+		page.RefreshRequired = true
+		return page, nil
+	}
+	if snapshot.LastSyncedAt.IsZero() {
 		page.RefreshRequired = true
 		return page, nil
 	}
