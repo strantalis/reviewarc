@@ -129,9 +129,9 @@ export function AnalysisProgress({events, running, reanalysis = false, onCancel}
   const quietFor = Number.isFinite(lastActivityTime) ? Math.max(0, now - lastActivityTime) : undefined
   const timing = elapsed == null || quietFor == null ? '' : `Running ${durationLabel(elapsed)} · ${quietFor < 5000 ? 'Activity just now' : `Last activity ${durationLabel(quietFor)} ago`}`
   const quietMessage = quietFor != null && quietFor >= 120000
-    ? `No new observable activity for ${durationLabel(quietFor)}. The harness is still running; cancel and retry if this appears stuck.`
+    ? `No new harness event for ${durationLabel(quietFor)}. The process is still running; cancel and retry if this appears stuck.`
     : quietFor != null && quietFor >= 30000
-      ? `No new observable activity for ${durationLabel(quietFor)}. The harness is still running; models can be quiet while reasoning or composing a response.`
+      ? `No new harness event for ${durationLabel(quietFor)}. It may still be working; some harness phases do not expose intermediate activity.`
       : ''
   return <div className="analysis-events" aria-busy={running}>
     <div className="event-heading"><strong>{running ? (reanalysis ? 'Reanalysis progress' : 'Analysis progress') : 'What happens next'}</strong>{running && <button className="button text small" onClick={onCancel}>Cancel</button>}</div>
@@ -171,7 +171,7 @@ export function AnalysisRunDetails({run, configuration, open, onOpenChange}: {ru
   const completed = run.completedAt ? new Date(run.completedAt).toLocaleString() : 'In progress'
   const sourceReads = (path: string) => run.coverage.accesses.filter((access) => access.kind === 'read_file' && access.path === path).length
   const coveragePaths = (paths: string[], kind: 'previewed' | 'unseen' | 'legacy') => <section className="analysis-coverage-files" aria-label={kind === 'previewed' ? 'Files previewed without a full diff read' : 'Files not fully inspected'}>
-    <header><strong>{paths.length} {kind === 'previewed' ? `file${paths.length === 1 ? '' : 's'} previewed only` : kind === 'unseen' ? `file${paths.length === 1 ? '' : 's'} not inspected` : `file${paths.length === 1 ? '' : 's'} not fully read`}</strong><small>{kind === 'previewed' ? 'Full diff not read' : 'Coverage gap'}</small></header>
+    <header><h3 data-analysis-coverage-kind={kind} tabIndex={-1}>{paths.length} {kind === 'previewed' ? `file${paths.length === 1 ? '' : 's'} previewed only` : kind === 'unseen' ? `file${paths.length === 1 ? '' : 's'} not inspected` : `file${paths.length === 1 ? '' : 's'} not fully read`}</h3><small>{kind === 'previewed' ? 'Full diff not read' : 'Coverage gap'}</small></header>
     {kind === 'previewed' && <p>The harness saw a bounded sample from each diff but did not request the complete diff. ReviewArc does not receive a file-specific skip reason.</p>}
     <ul>{paths.map((path) => {
       const reads = sourceReads(path)

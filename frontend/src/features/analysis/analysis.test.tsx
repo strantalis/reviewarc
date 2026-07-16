@@ -99,7 +99,7 @@ describe('analysis configuration components', () => {
         {stage: 'runningCodex', message: 'Reading src/greet.go lines 10–24', status: 'running', updatedAt: '2026-07-15T12:01:34Z'},
       ]} onCancel={vi.fn()}/>)
       expect(screen.getByText('Running 1m 5s · Last activity 31s ago')).toBeInTheDocument()
-      expect(screen.getByText(/No new observable activity for 31s/)).toHaveTextContent('models can be quiet while reasoning or composing a response')
+      expect(screen.getByText(/No new harness event for 31s/)).toHaveTextContent('some harness phases do not expose intermediate activity')
     } finally {
       vi.useRealTimers()
     }
@@ -112,7 +112,26 @@ describe('analysis configuration components', () => {
       render(<AnalysisProgress running events={[
         {stage: 'runningCodex', message: 'Reading src/greet.go lines 10–24', status: 'running', updatedAt: '2026-07-15T12:01:00Z'},
       ]} onCancel={vi.fn()}/>)
-      expect(screen.getByText(/No new observable activity for 2m 1s/)).toHaveTextContent('cancel and retry if this appears stuck')
+      expect(screen.getByText(/No new harness event for 2m 1s/)).toHaveTextContent('cancel and retry if this appears stuck')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('clears the quiet warning when a real harness event arrives', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-15T12:02:05Z'))
+    try {
+      const {rerender} = render(<AnalysisProgress running events={[
+        {stage: 'runningCodex', message: 'Reasoning about the change', status: 'running', updatedAt: '2026-07-15T12:01:34Z'},
+      ]} onCancel={vi.fn()}/>)
+      expect(screen.getByText(/No new harness event for 31s/)).toBeInTheDocument()
+
+      rerender(<AnalysisProgress running events={[
+        {stage: 'runningCodex', message: 'Composing the structured review', status: 'running', updatedAt: '2026-07-15T12:02:05Z'},
+      ]} onCancel={vi.fn()}/>)
+      expect(screen.queryByText(/No new harness event/)).not.toBeInTheDocument()
+      expect(screen.getByText('Running 0s · Activity just now')).toBeInTheDocument()
     } finally {
       vi.useRealTimers()
     }

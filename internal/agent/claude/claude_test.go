@@ -26,6 +26,8 @@ type fixtureRunner struct {
 	result    processpkg.Result
 	err       error
 	wait      bool
+	stream    bool
+	release   <-chan struct{}
 	loggedOut bool
 	mcpConfig []byte
 }
@@ -35,7 +37,7 @@ func (r *fixtureRunner) Run(ctx context.Context, command processpkg.Command) (pr
 		return processpkg.Result{Stdout: []byte("2.1.210 (Claude Code)\n")}, nil
 	}
 	if len(command.Args) == 1 && command.Args[0] == "--help" {
-		return processpkg.Result{Stdout: []byte(strings.Join([]string{"--json-schema", "--strict-mcp-config", "--mcp-config", "--tools", "--permission-mode", "--effort", "--no-session-persistence"}, "\n"))}, nil
+		return processpkg.Result{Stdout: []byte(strings.Join([]string{"--print", "--output-format", "--verbose", "--include-partial-messages", "--json-schema", "--model", "--effort", "--permission-mode", "--strict-mcp-config", "--mcp-config", "--setting-sources", "--disable-slash-commands", "--no-chrome", "--no-session-persistence", "--tools", "--allowedTools", "--system-prompt"}, "\n"))}, nil
 	}
 	if len(command.Args) == 2 && command.Args[0] == "auth" && command.Args[1] == "status" {
 		if r.loggedOut {
@@ -51,6 +53,18 @@ func (r *fixtureRunner) Run(ctx context.Context, command processpkg.Command) (pr
 		}
 	}
 	r.mu.Unlock()
+	if r.stream && command.OnStdoutLine != nil {
+		for _, line := range strings.Split(strings.TrimSuffix(string(r.result.Stdout), "\n"), "\n") {
+			command.OnStdoutLine([]byte(line))
+		}
+	}
+	if r.release != nil {
+		select {
+		case <-r.release:
+		case <-ctx.Done():
+			return processpkg.Result{}, ctx.Err()
+		}
+	}
 	if r.wait {
 		<-ctx.Done()
 		return processpkg.Result{}, ctx.Err()
@@ -134,6 +148,53 @@ func TestProgressMessageDescribesApprovedContextActivity(t *testing.T) {
 	}
 }
 
+func TestProgressMessageDescribesPartialActivityWithoutExposingContent(t *testing.T) {
+	thinking := []byte(`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"private reasoning"}}}`)
+	if got := progressMessage(thinking, analysisbundle.Manifest{}); got != "Reasoning about the change" || strings.Contains(got, "private") {
+		t.Fatalf("thinking progress=%q", got)
+	}
+	structured := []byte(`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\\\"summary\\\":"}}}`)
+	if got := progressMessage(structured, analysisbundle.Manifest{}); got != "Composing the structured review" || strings.Contains(got, "summary") {
+		t.Fatalf("structured progress=%q", got)
+	}
+	failed := []byte(`{"type":"result","subtype":"success","is_error":true,"result":"Not logged in"}`)
+	if got := progressMessage(failed, analysisbundle.Manifest{}); got != "" {
+		t.Fatalf("failed result was reported as successful progress: %q", got)
+	}
+	structuredStart := []byte(`{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","name":"StructuredOutput","input":{}}}}`)
+	if got := progressMessage(structuredStart, analysisbundle.Manifest{}); got != "Preparing a structured review" {
+		t.Fatalf("structured start progress=%q", got)
+	}
+	unknownTool := []byte(`{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use","name":"Bash","input":{"command":"cat secret"}}}}`)
+	if got := progressMessage(unknownTool, analysisbundle.Manifest{}); got != "" {
+		t.Fatalf("unknown tool activity was exposed: %q", got)
+	}
+}
+
+func TestAnalyzeEmitsObservedActivityBeforeClaudeExits(t *testing.T) {
+	release := make(chan struct{})
+	runner := &fixtureRunner{result: processpkg.Result{Stdout: fixtureStream(t)}, stream: true, release: release}
+	events, err := New(runner, Config{Timeout: time.Second, ContextServerExecutable: "/usr/bin/true"}).AnalyzeChange(context.Background(), validInput(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case event := <-events:
+			if event.Kind == agent.EventProgress && event.Message == "Reading diff for src/greet.go" {
+				close(release)
+				for range events {
+				}
+				return
+			}
+		case <-deadline:
+			close(release)
+			t.Fatal("Claude activity was not emitted before process exit")
+		}
+	}
+}
+
 func TestCapabilitiesExposeSecondEligibleAdapter(t *testing.T) {
 	capabilities, err := New(&fixtureRunner{}, Config{}).Capabilities(context.Background())
 	if err != nil {
@@ -171,7 +232,7 @@ func TestAnalyzeUsesOnlyControlledToolsAndStructuredOutput(t *testing.T) {
 	command, mcpConfig := runner.command, append([]byte(nil), runner.mcpConfig...)
 	runner.mu.Unlock()
 	joined := strings.Join(command.Args, " ")
-	for _, want := range []string{"--output-format stream-json", "--json-schema", "--model sonnet", "--effort high", "--permission-mode dontAsk", "--strict-mcp-config", "--setting-sources  --disable-slash-commands", "--no-chrome", "--no-session-persistence", "--tools  --allowedTools mcp__reviewarc__list_changes"} {
+	for _, want := range []string{"--output-format stream-json", "--include-partial-messages", "--json-schema", "--model sonnet", "--effort high", "--permission-mode dontAsk", "--strict-mcp-config", "--setting-sources  --disable-slash-commands", "--no-chrome", "--no-session-persistence", "--tools  --allowedTools mcp__reviewarc__list_changes"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("isolated invocation missing %q: %s", want, joined)
 		}

@@ -76,7 +76,7 @@ func (r *analysisFlowRunner) claude(command proc.Command) (proc.Result, error) {
 		return proc.Result{Stdout: []byte("2.1.210 (Claude Code)\n")}, nil
 	}
 	if len(command.Args) == 1 && command.Args[0] == "--help" {
-		return proc.Result{Stdout: []byte("--json-schema\n--strict-mcp-config\n--mcp-config\n--tools\n--permission-mode\n--effort\n--no-session-persistence\n")}, nil
+		return proc.Result{Stdout: []byte("--print\n--output-format\n--verbose\n--include-partial-messages\n--json-schema\n--model\n--effort\n--permission-mode\n--strict-mcp-config\n--mcp-config\n--setting-sources\n--disable-slash-commands\n--no-chrome\n--no-session-persistence\n--tools\n--allowedTools\n--system-prompt\n")}, nil
 	}
 	if len(command.Args) == 2 && command.Args[0] == "auth" && command.Args[1] == "status" {
 		return proc.Result{Stdout: []byte(`{"loggedIn":true,"authMethod":"oauth"}`)}, nil

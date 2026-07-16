@@ -750,7 +750,7 @@ describe('Reanalysis state', () => {
     expect(onSession).toHaveBeenCalledWith(session)
   })
 
-  it('explains targeted coverage when every changed file was at least previewed', () => {
+  it('opens and focuses targeted coverage when every changed file was at least previewed', async () => {
     const session = reviewSession()
     session.latestAnalysisRun = {
       id: 'run-coverage', sessionId: session.id, profile: {harness: 'claude', model: 'sonnet', reasoning: 'medium'}, contextTransport: 'reviewarcTools', schemaVersion: 1, inputFingerprint: 'fixture',
@@ -766,12 +766,15 @@ describe('Reanalysis state', () => {
     expect(screen.queryByText(/Full diffs were available/)).not.toBeInTheDocument()
     const coverageDetails = screen.getByText('Analysis details').closest('details')
     expect(coverageDetails).not.toHaveAttribute('open')
-    fireEvent.click(screen.getByRole('button', {name: 'Review 3 previewed files'}))
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, 'scrollIntoView')
+    fireEvent.click(screen.getByRole('button', {name: 'View coverage details'}))
     expect(coverageDetails).toHaveAttribute('open')
-    expect(screen.getByText('3 files previewed only')).toBeInTheDocument()
+    const coverageHeading = screen.getByRole('heading', {name: '3 files previewed only'})
+    await waitFor(() => expect(coverageHeading).toHaveFocus())
+    expect(scrollIntoView).toHaveBeenCalledWith({behavior: 'smooth', block: 'nearest'})
   })
 
-  it('warns when changed files were never inventoried', () => {
+  it('warns and focuses unseen coverage when changed files were never inventoried', async () => {
     const session = reviewSession()
     session.latestAnalysisRun = {
       id: 'run-unseen', sessionId: session.id, profile: {harness: 'codex', model: 'gpt-5', reasoning: 'medium'}, contextTransport: 'reviewarcTools', schemaVersion: 1, inputFingerprint: 'fixture',
@@ -784,8 +787,12 @@ describe('Reanalysis state', () => {
     const banner = screen.getByText('2 changed files were not inspected.').closest('.warning-banner')
     expect(banner).toHaveTextContent('15 fully read · 1 partially read · 3 previewed · 2 unseen')
     expect(banner).toHaveTextContent('Findings may not cover the unseen changes')
-    fireEvent.click(screen.getByRole('button', {name: 'Review 2 unseen files'}))
-    expect(screen.getByText('2 files not inspected')).toBeInTheDocument()
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, 'scrollIntoView')
+    fireEvent.click(screen.getByRole('button', {name: 'View coverage details'}))
+    const unseenHeading = screen.getByRole('heading', {name: '2 files not inspected'})
+    await waitFor(() => expect(unseenHeading).toHaveFocus())
+    expect(screen.getByRole('heading', {name: '3 files previewed only'})).not.toHaveFocus()
+    expect(scrollIntoView).toHaveBeenCalledWith({behavior: 'smooth', block: 'nearest'})
   })
 })
 

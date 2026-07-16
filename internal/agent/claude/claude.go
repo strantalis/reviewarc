@@ -71,7 +71,11 @@ func (p *Provider) Capabilities(ctx context.Context) (domain.HarnessCapabilities
 		return capabilities, err
 	}
 	text := string(help.Stdout)
-	for _, required := range []string{"--json-schema", "--strict-mcp-config", "--mcp-config", "--tools", "--permission-mode", "--effort", "--no-session-persistence"} {
+	for _, required := range []string{
+		"--print", "--output-format", "--verbose", "--include-partial-messages", "--json-schema", "--model", "--effort",
+		"--permission-mode", "--strict-mcp-config", "--mcp-config", "--setting-sources", "--disable-slash-commands",
+		"--no-chrome", "--no-session-persistence", "--tools", "--allowedTools", "--system-prompt",
+	} {
 		if !strings.Contains(text, required) {
 			capabilities.State = domain.HarnessUnsupported
 			return capabilities, fmt.Errorf("Claude Code does not expose required flag %s", required)
@@ -164,11 +168,12 @@ func (p *Provider) analyze(parent context.Context, input agent.AnalyzeInput, bun
 		return
 	}
 	tracker := agent.NewAccessTracker(bundle.Manifest)
+	progress := agent.NewProgressGate(10 * time.Second)
 	command := processpkg.Command{
 		Tool: processpkg.Claude, Dir: filepath.Join(bundle.Path, "run"), Timeout: p.config.Timeout,
 		Args: invocationArgs(input, mcpPath, schema), Stdin: []byte(prompt), MaxOutput: p.config.MaxOutput,
 		OnStdoutLine: func(line []byte) {
-			if message := progressMessage(line, bundle.Manifest); message != "" {
+			if message := progressMessage(line, bundle.Manifest); progress.Allow(message, time.Now()) {
 				emit(agent.Event{Kind: agent.EventProgress, Message: message})
 			}
 		},
@@ -263,7 +268,7 @@ func invocationArgs(input agent.AnalyzeInput, mcpPath, schema string) []string {
 		allowed = append(allowed, "mcp__reviewarc__"+name)
 	}
 	return []string{
-		"--print", "--output-format", "stream-json", "--verbose",
+		"--print", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
 		"--json-schema", schema, "--model", input.Profile.Model, "--effort", string(input.Profile.Reasoning),
 		"--permission-mode", "dontAsk", "--strict-mcp-config", "--mcp-config", mcpPath,
 		"--setting-sources", "", "--disable-slash-commands", "--no-chrome", "--no-session-persistence",
@@ -291,6 +296,17 @@ type streamEvent struct {
 			IsError   bool            `json:"is_error"`
 		} `json:"content"`
 	} `json:"message"`
+	Event struct {
+		Type         string `json:"type"`
+		ContentBlock struct {
+			Type  string          `json:"type"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
+		} `json:"content_block"`
+		Delta struct {
+			Type string `json:"type"`
+		} `json:"delta"`
+	} `json:"event"`
 }
 
 type pendingCall struct {
@@ -377,10 +393,39 @@ func progressMessage(line []byte, manifest analysisbundle.Manifest) string {
 					return agent.ContextActivityMessage(strings.TrimPrefix(block.Name, prefix), block.Input, manifest)
 				}
 			}
+			if block.Type == "thinking" {
+				return "Reasoning about the change"
+			}
+			if block.Type == "text" {
+				return "Composing the structured review"
+			}
 		}
 		return ""
 	}
-	if event.Type == "result" {
+	if event.Type == "stream_event" {
+		switch event.Event.Delta.Type {
+		case "thinking_delta", "signature_delta":
+			return "Reasoning about the change"
+		case "text_delta", "input_json_delta":
+			return "Composing the structured review"
+		}
+		switch event.Event.ContentBlock.Type {
+		case "thinking":
+			return "Reasoning about the change"
+		case "text":
+			return "Composing the structured review"
+		case "tool_use":
+			if event.Event.ContentBlock.Name == "StructuredOutput" {
+				return "Preparing a structured review"
+			}
+			const prefix = "mcp__reviewarc__"
+			if strings.HasPrefix(event.Event.ContentBlock.Name, prefix) {
+				return agent.ContextActivityMessage(strings.TrimPrefix(event.Event.ContentBlock.Name, prefix), event.Event.ContentBlock.Input, manifest)
+			}
+			return ""
+		}
+	}
+	if event.Type == "result" && !event.IsError {
 		return "Analysis response received"
 	}
 	return ""

@@ -26,6 +26,8 @@ type fixtureRunner struct {
 	result           processpkg.Result
 	err              error
 	wait             bool
+	stream           bool
+	release          <-chan struct{}
 	loggedOut        bool
 	commands         []processpkg.Command
 	catalogShellType string
@@ -50,6 +52,18 @@ func (r *fixtureRunner) Run(ctx context.Context, command processpkg.Command) (pr
 	r.mu.Lock()
 	r.command = command
 	r.mu.Unlock()
+	if r.stream && command.OnStdoutLine != nil {
+		for _, line := range strings.Split(strings.TrimSuffix(string(r.result.Stdout), "\n"), "\n") {
+			command.OnStdoutLine([]byte(line))
+		}
+	}
+	if r.release != nil {
+		select {
+		case <-r.release:
+		case <-ctx.Done():
+			return processpkg.Result{}, ctx.Err()
+		}
+	}
 	for _, arg := range command.Args {
 		if strings.HasPrefix(arg, "model_catalog_json=") {
 			path := strings.Trim(strings.TrimPrefix(arg, "model_catalog_json="), `"`)
@@ -113,6 +127,41 @@ func TestProgressMessageDescribesApprovedContextActivity(t *testing.T) {
 	unsafe := []byte(`{"type":"item.completed","item":{"type":"mcp_tool_call","server":"other","tool":"read_diff","arguments":{"fileId":"f000001"}}}`)
 	if got := progressMessage(unsafe, manifest); got != "" {
 		t.Fatalf("unapproved activity was exposed: %q", got)
+	}
+}
+
+func TestProgressMessageDescribesLifecycleWithoutExposingContent(t *testing.T) {
+	reasoning := []byte(`{"type":"item.updated","item":{"type":"reasoning","text":"private reasoning"}}`)
+	if got := progressMessage(reasoning, analysisbundle.Manifest{}); got != "Reasoning about the change" || strings.Contains(got, "private") {
+		t.Fatalf("reasoning progress=%q", got)
+	}
+	message := []byte(`{"type":"item.started","item":{"type":"agent_message","text":"private response"}}`)
+	if got := progressMessage(message, analysisbundle.Manifest{}); got != "Composing the structured review" || strings.Contains(got, "private") {
+		t.Fatalf("message progress=%q", got)
+	}
+}
+
+func TestAnalyzeEmitsObservedActivityBeforeCodexExits(t *testing.T) {
+	release := make(chan struct{})
+	runner := &fixtureRunner{result: processpkg.Result{Stdout: fixtureJSONL(t)}, stream: true, release: release}
+	events, err := New(runner, Config{Timeout: time.Second, ContextServerExecutable: "/usr/bin/true"}).AnalyzeChange(context.Background(), validInput(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case event := <-events:
+			if event.Kind == agent.EventProgress && event.Message == "Reading diff for src/greet.go" {
+				close(release)
+				for range events {
+				}
+				return
+			}
+		case <-deadline:
+			close(release)
+			t.Fatal("Codex activity was not emitted before process exit")
+		}
 	}
 }
 
@@ -251,6 +300,25 @@ func TestParseJSONLRejectsMalformedStructuredAndUnapprovedToolOutput(t *testing.
 	policy := `{"type":"item.completed","item":{"type":"command_execution","status":"completed"}}`
 	if _, _, err := parseJSONL([]byte(policy), tracker); !errors.Is(err, errPolicyViolation) {
 		t.Fatalf("policy error=%v", err)
+	}
+}
+
+func TestParseJSONLDeduplicatesRecoverableWarnings(t *testing.T) {
+	payload, err := os.ReadFile("testdata/analysis.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	warning := `{"type":"item.completed","item":{"type":"error","message":"local configuration warning"}}`
+	message, err := json.Marshal(map[string]any{"type": "item.completed", "item": map[string]any{"type": "agent_message", "text": string(payload)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, warnings, err := parseJSONL([]byte(warning+"\n"+warning+"\n"+string(message)+"\n"), NewAccessTrackerForTest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("warnings=%v", warnings)
 	}
 }
 

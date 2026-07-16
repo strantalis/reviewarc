@@ -196,11 +196,12 @@ func (p *Provider) analyze(parent context.Context, input agent.AnalyzeInput, bun
 		return
 	}
 	tracker := agent.NewAccessTracker(bundle.Manifest)
+	progress := agent.NewProgressGate(10 * time.Second)
 	command := processpkg.Command{
 		Tool: processpkg.Codex, Dir: filepath.Join(bundle.Path, "run"), Timeout: p.config.Timeout,
 		Args: invocationArgs(input, schemaPath, catalogPath, executable), Stdin: []byte(prompt), MaxOutput: p.config.MaxOutput,
 		OnStdoutLine: func(line []byte) {
-			if message := progressMessage(line, bundle.Manifest); message != "" {
+			if message := progressMessage(line, bundle.Manifest); progress.Allow(message, time.Now()) {
 				emit(agent.Event{Kind: agent.EventProgress, Message: message})
 			}
 		},
@@ -354,15 +355,26 @@ func progressMessage(line []byte, manifest analysisbundle.Manifest) string {
 	switch event.Type {
 	case "thread.started", "turn.started":
 		return "Planning the review"
-	case "item.completed":
-		if event.Item.Type != "mcp_tool_call" || event.Item.Server != "reviewarc" {
-			return ""
+	case "item.started", "item.updated", "item.completed":
+		switch event.Item.Type {
+		case "reasoning":
+			return "Reasoning about the change"
+		case "agent_message":
+			return "Composing the structured review"
+		case "mcp_tool_call":
+			if event.Item.Server != "reviewarc" {
+				return ""
+			}
+			tool := event.Item.Tool
+			if tool == "" {
+				tool = event.Item.Name
+			}
+			if message := agent.ContextActivityMessage(tool, event.Item.Arguments, manifest); message != "" {
+				return message
+			}
+			return "Reading the prepared review context"
 		}
-		tool := event.Item.Tool
-		if tool == "" {
-			tool = event.Item.Name
-		}
-		return agent.ContextActivityMessage(tool, event.Item.Arguments, manifest)
+		return ""
 	case "turn.completed":
 		return "Analysis response received"
 	default:
@@ -373,6 +385,7 @@ func progressMessage(line []byte, manifest analysisbundle.Manifest) string {
 func parseJSONL(data []byte, tracker *agent.AccessTracker) (sharedanalysis.Document, []string, error) {
 	var final string
 	var warnings []string
+	recoverableWarningSeen := false
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	scanner.Buffer(make([]byte, 64<<10), 32<<20)
 	lineNo := 0
@@ -407,8 +420,9 @@ func parseJSONL(data []byte, tracker *agent.AccessTracker) (sharedanalysis.Docum
 				final = event.Item.Text
 			}
 		case "error":
-			if message := strings.TrimSpace(event.Item.Message); message != "" {
+			if message := strings.TrimSpace(event.Item.Message); message != "" && !recoverableWarningSeen {
 				warnings = append(warnings, "The harness reported a recoverable analysis warning.")
+				recoverableWarningSeen = true
 			}
 		}
 	}

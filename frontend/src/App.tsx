@@ -581,11 +581,20 @@ function mergeOperationEvents(history: Operation[], current: OperationEvent[]) {
 }
 
 export function OverviewScreen({session, analysisConfiguration = legacyOverviewAnalysisConfiguration, legacyAnalysis = true, onAnalysisConfiguration = () => {}, onRefreshHarnesses = () => {}, onOpenSettings = () => {}, onBack, onSession, onReview}: {session: ReviewSession; analysisConfiguration?: AnalysisConfiguration; legacyAnalysis?: boolean; onAnalysisConfiguration?: (configuration: AnalysisConfiguration) => void; onRefreshHarnesses?: () => void; onOpenSettings?: () => void; onBack: () => void; onSession: (session: ReviewSession) => void; onReview: (chapterId?: string) => void}) {
-  const pr = session.pullRequest; const analysis = session.analysis; const persistedFailure = session.latestAnalysisRun?.status === 'failed' ? session.latestAnalysisRun.failure : undefined; const [operation, setOperation] = useState<Operation>(); const [events, setEvents] = useState<OperationEvent[]>([]); const [failure, setFailure] = useState<AnalysisFailure | undefined>(persistedFailure); const [profile, setProfile] = useState<AnalysisProfile | undefined>(() => recommendedProfile(analysisConfiguration)); const [profileOpen, setProfileOpen] = useState(false); const [coverageOpen, setCoverageOpen] = useState(false)
+  const pr = session.pullRequest; const analysis = session.analysis; const persistedFailure = session.latestAnalysisRun?.status === 'failed' ? session.latestAnalysisRun.failure : undefined; const [operation, setOperation] = useState<Operation>(); const [events, setEvents] = useState<OperationEvent[]>([]); const [failure, setFailure] = useState<AnalysisFailure | undefined>(persistedFailure); const [profile, setProfile] = useState<AnalysisProfile | undefined>(() => recommendedProfile(analysisConfiguration)); const [profileOpen, setProfileOpen] = useState(false); const [coverageOpen, setCoverageOpen] = useState(false); const [coverageFocus, setCoverageFocus] = useState<{kind: 'previewed' | 'unseen' | 'legacy'; request: number}>({kind: 'legacy', request: 0})
   useEffect(() => { setProfile(recommendedProfile(analysisConfiguration)); setProfileOpen(false) }, [analysisConfiguration])
   useEffect(() => { setFailure(session.latestAnalysisRun?.status === 'failed' ? session.latestAnalysisRun.failure : undefined) }, [session.id, session.latestAnalysisRun?.id, session.latestAnalysisRun?.status, session.latestAnalysisRun?.failure])
   useEffect(() => { setOperation(undefined); setEvents([]) }, [session.id])
   useEffect(() => { setCoverageOpen(false) }, [session.latestAnalysisRun?.id])
+  useEffect(() => {
+    if (!coverageOpen || coverageFocus.request === 0) return
+    const frame = requestAnimationFrame(() => {
+      const target = document.querySelector<HTMLElement>(`[data-analysis-coverage-kind="${coverageFocus.kind}"]`)
+      target?.focus({preventScroll: true})
+      target?.scrollIntoView?.({behavior: 'smooth', block: 'nearest'})
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [coverageOpen, coverageFocus])
   useEffect(() => {
     let disposed = false
     let terminalSeen = false
@@ -627,13 +636,9 @@ export function OverviewScreen({session, analysisConfiguration = legacyOverviewA
   const running = session.analysisStatus === 'running' || Boolean(operation && !['complete', 'completed', 'failed', 'cancelled'].includes(operation.state))
   const cancel = async () => { if (!operation) return; try { await backend.cancelOperation(operation.id) } catch (err) { setFailure(operationFailure(errorText(err), Boolean(analysis))) } }
   const configured = Boolean(analysisConfiguration.defaultProfile)
-  const showCoverage = () => {
+  const showCoverage = (kind: 'previewed' | 'unseen' | 'legacy') => {
     setCoverageOpen(true)
-    requestAnimationFrame(() => {
-      const details = document.getElementById('analysis-run-details')
-      details?.scrollIntoView?.({behavior: 'smooth', block: 'start'})
-      details?.querySelector<HTMLElement>('summary')?.focus()
-    })
+    setCoverageFocus((current) => ({kind, request: current.request + 1}))
   }
   return <main className="detail-page overview-page"><div className="detail-top"><button className="button text" onClick={onBack}><ArrowLeft size={16}/>Inbox</button><div className="detail-actions">{analysis && profile && <AnalysisProfileSummary configuration={analysisConfiguration} profile={profile} expanded={profileOpen} onChange={running ? undefined : () => setProfileOpen((open) => !open)}/>} {analysis && !profile && <button className="button secondary" onClick={onOpenSettings}><Settings size={15}/>Configure AI analysis</button>} {session.isStale ? <><button className="button secondary" disabled={!analysis || running} onClick={() => onReview()}>Continue stale review</button>{profile && <button className="button primary" disabled={running} onClick={() => void analyze()}>{!running && <RefreshCw size={15}/>} {running ? 'Reanalysis running' : 'Reanalyze current revision'}</button>}</> : <>{analysis && profile && <button className="button secondary" disabled={running} onClick={() => void analyze()}>{!running && <RefreshCw size={15}/>} {running ? 'Reanalysis running' : 'Reanalyze'}</button>}<button className="button primary" disabled={!analysis || running} onClick={() => onReview()}>Start guided review<ArrowRight size={16}/></button></>}</div></div>
     {analysis && !running && profileOpen && profile && <div className="analysis-override" id="analysis-profile-override"><div><strong>For this run</strong><small>This changes the next analysis only. Your Settings default stays the same.</small></div><AnalysisProfilePicker configuration={analysisConfiguration} value={profile} onChange={setProfile}/><button className="button text small" onClick={() => { setProfile(recommendedProfile(analysisConfiguration)); setProfileOpen(false) }}>Use default</button></div>}
@@ -647,7 +652,7 @@ function AnalysisPanel({running, reanalysis, configured, configuration, profile,
   return <section className="analysis-launch" aria-busy={running}><div className="analysis-promise"><span><Sparkles size={24}/></span><h2>{running ? 'Building the review arc' : configured ? 'Turn this change into a guided review' : 'Choose how to analyze this change'}</h2><p>{running ? 'ReviewArc is analyzing the complete current pull request through a controlled, read-only context.' : 'ReviewArc uses a read-only repository snapshot and validates the structured result before it reaches your review.'}</p>{!running && !profile && <NoHarnessState configuration={configuration} onRefresh={onRefresh} onOpenSettings={onOpenSettings}/>} {!running && profile && <div className="analysis-profile-launch">{configured ? <AnalysisProfileSummary configuration={configuration} profile={profile} expanded={profileOpen} onChange={onToggleProfile}/> : <AnalysisProfilePicker configuration={configuration} value={profile} onChange={onProfileChange}/>} {configured && profileOpen && <AnalysisProfilePicker configuration={configuration} value={profile} onChange={onProfileChange} id="analysis-profile-override"/>}<button className="button primary" onClick={onStart}><Sparkles size={16}/>Analyze pull request</button>{!configured && <small>This becomes your default. You can change it later in Settings.</small>}</div>}</div><div><AnalysisProgress events={events} running={running} reanalysis={reanalysis} onCancel={onCancel}/>{failure && <AnalysisFailurePanel failure={failure} onRetry={onStart} onRefresh={onRefresh} onChangeProfile={onToggleProfile} onOpenSettings={onOpenSettings}/>}</div></section>
 }
 
-function AnalysisCoverageBanner({run, onViewCoverage}: {run?: AnalysisRun; onViewCoverage: () => void}) {
+function AnalysisCoverageBanner({run, onViewCoverage}: {run?: AnalysisRun; onViewCoverage: (kind: 'previewed' | 'unseen' | 'legacy') => void}) {
   if (!run) return null
   const coverage = analysisCoverageBreakdown(run.coverage)
   if (coverage.fullyRead >= coverage.total && coverage.partiallyRead === 0) return null
@@ -655,7 +660,7 @@ function AnalysisCoverageBanner({run, onViewCoverage}: {run?: AnalysisRun; onVie
   return <div className={hasUnseen ? 'warning-banner analysis-coverage-warning' : 'coverage-banner analysis-coverage-warning'}>
     {hasUnseen ? <AlertTriangle size={16}/> : <FileDiff size={16}/>}
     <span><strong>{hasUnseen ? `${coverage.unseen} changed file${coverage.unseen === 1 ? ' was' : 's were'} not inspected.` : `All ${coverage.total} changed files were inspected.`}</strong> {coverage.parts.join(' · ')}. {hasUnseen ? 'Findings may not cover the unseen changes.' : 'Previewed files were triaged but their full diffs were not read.'}</span>
-    <button className="analysis-coverage-action" onClick={onViewCoverage}>{hasUnseen ? `Review ${coverage.unseen} unseen file${coverage.unseen === 1 ? '' : 's'}` : coverage.previewed ? `Review ${coverage.previewed} previewed file${coverage.previewed === 1 ? '' : 's'}` : 'Review analysis coverage'}</button>
+    <button className="analysis-coverage-action" onClick={() => onViewCoverage(hasUnseen ? 'unseen' : coverage.previewed ? 'previewed' : 'legacy')}>View coverage details</button>
   </div>
 }
 
