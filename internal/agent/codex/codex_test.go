@@ -173,17 +173,32 @@ func TestParseJSONLTracksPreviewedInventoryFromRealEventShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	failedOmission, err := json.Marshal(map[string]any{
+		"type": "item.completed",
+		"item": map[string]any{"type": "mcp_tool_call", "server": "reviewarc", "tool": "explain_diff_omissions", "status": "failed", "arguments": map[string]any{"decisions": []any{map[string]any{"fileId": "f000002", "category": "generated", "reason": "This advisory call failed."}}}, "result": map[string]any{"error": "temporary failure"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	omission, err := json.Marshal(map[string]any{
+		"type": "item.completed",
+		"item": map[string]any{"type": "mcp_tool_call", "server": "reviewarc", "tool": "explain_diff_omissions", "status": "completed", "arguments": map[string]any{"decisions": []any{map[string]any{"fileId": "f000002", "category": "generated", "reason": "Generated output mirrors the source change."}}}, "result": map[string]any{"recorded": 1, "ignored": 0, "decisions": []any{map[string]any{"fileId": "f000002", "category": "generated", "reason": "Generated output mirrors the source change."}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	manifest := analysisbundle.Manifest{Changes: []analysisbundle.Change{
 		{ID: "f000001", Path: "src/greet.go", Diff: analysisbundle.Artifact{Bytes: int64(len(fixturePatch))}},
 		{ID: "f000002", Path: "generated/output.go", Diff: analysisbundle.Artifact{Bytes: 100}},
 	}}
 	tracker := agent.NewAccessTracker(manifest)
-	stream := append(append(inventory, '\n'), fixtureJSONL(t)...)
+	stream := append(append(append(append([]byte(nil), inventory...), '\n'), failedOmission...), '\n')
+	stream = append(append(append(stream, omission...), '\n'), fixtureJSONL(t)...)
 	if _, _, err := parseJSONL(stream, tracker); err != nil {
 		t.Fatal(err)
 	}
 	coverage := tracker.Coverage()
-	if coverage.DiffFilesFullyRead != 1 || coverage.DiffFilesPreviewed != 1 || coverage.DiffFilesUnseen != 0 {
+	if coverage.DiffFilesFullyRead != 1 || coverage.DiffFilesPreviewed != 1 || coverage.DiffFilesUnseen != 0 || len(coverage.PreviewDecisions) != 1 || coverage.PreviewDecisions[0].Path != "generated/output.go" {
 		t.Fatalf("coverage=%+v", coverage)
 	}
 }
@@ -261,6 +276,9 @@ func TestAnalyzeUsesBoundedPromptAndValidatesEvidence(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "using only the reviewarc read-only context tools") {
 		t.Fatalf("missing controlled-context instruction: %q", prompt)
+	}
+	if !strings.Contains(strings.Join(runner.command.Args, " "), "explain_diff_omissions") {
+		t.Fatal("Codex invocation did not allow the omission-provenance tool")
 	}
 }
 

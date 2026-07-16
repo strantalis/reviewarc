@@ -58,7 +58,10 @@ func TestLiveCodexUsesOnlyRequiredReviewArcMCP(t *testing.T) {
 		t.Fatalf("create bare fixture: %v: %s", err, output)
 	}
 
-	file := domain.ChangedFile{Path: "src/main.go", Status: domain.FileModified, Additions: 1, Deletions: 1}
+	files := []domain.ChangedFile{
+		{Path: "src/main.go", Status: domain.FileModified, Additions: 1, Deletions: 1},
+		{Path: "README.md", Status: domain.FileModified, Additions: 1, Deletions: 1},
+	}
 	input := analysisbundle.Input{
 		PullRequest: domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{
 			Ref:   domain.PullRequestRef{Repository: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}, Number: 91},
@@ -68,9 +71,12 @@ func TestLiveCodexUsesOnlyRequiredReviewArcMCP(t *testing.T) {
 			Repository: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}, PullRequest: 91,
 			BaseSHA: strings.Repeat("1", 40), HeadSHA: strings.Repeat("2", 40), MergeBaseSHA: strings.Repeat("3", 40),
 		},
-		ChangedFiles: []domain.ChangedFile{file},
+		ChangedFiles: files,
 	}
-	lease, err := (analysisbundle.Builder{Root: analysisbundle.BundleRoot(dataRoot), Source: bundlePatchSource{file.Path: "@@ -1 +1 @@\n-old\n+new\n"}}).Build(ctx, input)
+	lease, err := (analysisbundle.Builder{Root: analysisbundle.BundleRoot(dataRoot), Source: bundlePatchSource{
+		files[0].Path: "@@ -1 +1 @@\n-old\n+new\n",
+		files[1].Path: "@@ -1 +1 @@\n-Old docs\n+New docs\n",
+	}}).Build(ctx, input)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +115,7 @@ func TestLiveCodexUsesOnlyRequiredReviewArcMCP(t *testing.T) {
 		{"model_catalog_json", strconv.Quote(catalogPath)},
 		{"mcp_servers.reviewarc.command", strconv.Quote(testBinary)},
 		{"mcp_servers.reviewarc.required", "true"},
-		{"mcp_servers.reviewarc.enabled_tools", `["list_changes","read_diff"]`},
+		{"mcp_servers.reviewarc.enabled_tools", `["list_changes","read_diff","explain_diff_omissions"]`},
 		{"mcp_servers.reviewarc.default_tools_approval_mode", strconv.Quote("approve")},
 		{"mcp_servers.reviewarc.startup_timeout_sec", "15"},
 		{"mcp_servers.reviewarc.env." + liveContextHelperEnv, strconv.Quote("1")},
@@ -120,7 +126,7 @@ func TestLiveCodexUsesOnlyRequiredReviewArcMCP(t *testing.T) {
 		args = append(args, config(setting[0], setting[1])...)
 	}
 	args = append(args, "-C", dataRoot, "-")
-	prompt := `Call reviewarc.list_changes exactly once, then call reviewarc.read_diff exactly once for fileId f000001 with cursor 0. Do not call any other tool. Return a concise review matching the output schema. Use schemaVersion 1, baseSha ` + strings.Repeat("1", 40) + `, headSha ` + strings.Repeat("2", 40) + `, summary "The fixture changes old to new.", and one chapter with one fact citing src/main.go at head line 1. Use unique non-empty IDs and no other claims.`
+	prompt := `You must call reviewarc.list_changes exactly once, then reviewarc.read_diff exactly once for fileId f000001 with cursor 0, then reviewarc.explain_diff_omissions exactly once with this argument shape: {"decisions":[{"fileId":"f000002","category":"documentation","reason":"Documentation-only fixture; no runtime behavior changed."}]}. Do not flatten the decisions array. Do not call any other tool and do not return the review before all three calls succeed. Then return a concise review matching the output schema. Use schemaVersion 1, baseSha ` + strings.Repeat("1", 40) + `, headSha ` + strings.Repeat("2", 40) + `, summary "The fixture changes old to new.", and one chapter with one fact citing src/main.go at head line 1. Use unique non-empty IDs and no other claims.`
 	result, err := runner.Run(ctx, processpkg.Command{Tool: processpkg.Codex, Args: args, Dir: dataRoot, Stdin: []byte(prompt), Timeout: 2 * time.Minute, MaxOutput: 8 << 20})
 	if err != nil {
 		t.Fatalf("live Codex MCP invocation: %v\nstderr: %s\nstdout: %s", err, result.Stderr, result.Stdout)
@@ -134,11 +140,12 @@ func TestLiveCodexUsesOnlyRequiredReviewArcMCP(t *testing.T) {
 		var event struct {
 			Type string `json:"type"`
 			Item struct {
-				Type   string `json:"type"`
-				Server string `json:"server"`
-				Tool   string `json:"tool"`
-				Status string `json:"status"`
-				Text   string `json:"text"`
+				Type   string          `json:"type"`
+				Server string          `json:"server"`
+				Tool   string          `json:"tool"`
+				Status string          `json:"status"`
+				Text   string          `json:"text"`
+				Result json.RawMessage `json:"result"`
 			} `json:"item"`
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
@@ -148,10 +155,20 @@ func TestLiveCodexUsesOnlyRequiredReviewArcMCP(t *testing.T) {
 		case "command_execution", "file_change", "web_search":
 			t.Fatalf("forbidden Codex event %q: %s", event.Item.Type, scanner.Bytes())
 		case "mcp_tool_call":
-			if event.Item.Server != "reviewarc" || (event.Item.Tool != "list_changes" && event.Item.Tool != "read_diff") {
+			if event.Item.Server != "reviewarc" || (event.Item.Tool != "list_changes" && event.Item.Tool != "read_diff" && event.Item.Tool != "explain_diff_omissions") {
 				t.Fatalf("unexpected MCP call: %s", scanner.Bytes())
 			}
 			if event.Item.Status == "completed" || event.Item.Status == "success" {
+				if event.Item.Tool == "explain_diff_omissions" {
+					var output struct {
+						StructuredContent struct {
+							Recorded int `json:"recorded"`
+						} `json:"structured_content"`
+					}
+					if err := json.Unmarshal(event.Item.Result, &output); err != nil || output.StructuredContent.Recorded != 1 {
+						t.Fatalf("omission provenance was not recorded: result=%s err=%v", event.Item.Result, err)
+					}
+				}
 				completedTools[event.Item.Tool] = true
 			} else if event.Item.Status != "in_progress" && event.Item.Status != "started" {
 				t.Fatalf("unsuccessful MCP call: %s", scanner.Bytes())
@@ -163,7 +180,7 @@ func TestLiveCodexUsesOnlyRequiredReviewArcMCP(t *testing.T) {
 	if err := scanner.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if !completedTools["list_changes"] || !completedTools["read_diff"] {
+	if !completedTools["list_changes"] || !completedTools["read_diff"] || !completedTools["explain_diff_omissions"] {
 		t.Fatalf("missing successful MCP calls: completed=%v\n%s", completedTools, result.Stdout)
 	}
 	if _, err := sharedanalysis.Decode(structured); err != nil {

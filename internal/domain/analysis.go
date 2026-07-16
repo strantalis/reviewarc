@@ -119,20 +119,49 @@ type ContextAccess struct {
 	At        time.Time `json:"at"`
 }
 
+type DiffOmissionCategory string
+
+const (
+	DiffOmissionGenerated        DiffOmissionCategory = "generated"
+	DiffOmissionDocumentation    DiffOmissionCategory = "documentation"
+	DiffOmissionExampleOrTest    DiffOmissionCategory = "example_or_test"
+	DiffOmissionMetadata         DiffOmissionCategory = "metadata"
+	DiffOmissionCoveredElsewhere DiffOmissionCategory = "covered_elsewhere"
+	DiffOmissionNotRelevant      DiffOmissionCategory = "not_relevant"
+	DiffOmissionBudgetLimited    DiffOmissionCategory = "budget_limited"
+	DiffOmissionOther            DiffOmissionCategory = "other"
+)
+
+func (c DiffOmissionCategory) Valid() bool {
+	switch c {
+	case DiffOmissionGenerated, DiffOmissionDocumentation, DiffOmissionExampleOrTest, DiffOmissionMetadata, DiffOmissionCoveredElsewhere, DiffOmissionNotRelevant, DiffOmissionBudgetLimited, DiffOmissionOther:
+		return true
+	default:
+		return false
+	}
+}
+
+type DiffOmissionDecision struct {
+	Path     string               `json:"path"`
+	Category DiffOmissionCategory `json:"category"`
+	Reason   string               `json:"reason"`
+}
+
 type AnalysisCoverage struct {
-	ChangedFilesTotal      int             `json:"changedFilesTotal"`
-	DiffFilesFullyRead     int             `json:"diffFilesFullyRead"`
-	DiffFilesPartiallyRead int             `json:"diffFilesPartiallyRead"`
-	DiffFilesPreviewed     int             `json:"diffFilesPreviewed"`
-	DiffFilesUnseen        int             `json:"diffFilesUnseen"`
-	DiffFilesUnread        int             `json:"diffFilesUnread"`
-	DiffBytesTotal         int             `json:"diffBytesTotal"`
-	DiffBytesRead          int             `json:"diffBytesRead"`
-	Segments               int             `json:"segments"`
-	OmittedPaths           []string        `json:"omittedPaths"`
-	PreviewedPaths         []string        `json:"previewedPaths"`
-	UnseenPaths            []string        `json:"unseenPaths"`
-	Accesses               []ContextAccess `json:"accesses"`
+	ChangedFilesTotal      int                    `json:"changedFilesTotal"`
+	DiffFilesFullyRead     int                    `json:"diffFilesFullyRead"`
+	DiffFilesPartiallyRead int                    `json:"diffFilesPartiallyRead"`
+	DiffFilesPreviewed     int                    `json:"diffFilesPreviewed"`
+	DiffFilesUnseen        int                    `json:"diffFilesUnseen"`
+	DiffFilesUnread        int                    `json:"diffFilesUnread"`
+	DiffBytesTotal         int                    `json:"diffBytesTotal"`
+	DiffBytesRead          int                    `json:"diffBytesRead"`
+	Segments               int                    `json:"segments"`
+	OmittedPaths           []string               `json:"omittedPaths"`
+	PreviewedPaths         []string               `json:"previewedPaths"`
+	UnseenPaths            []string               `json:"unseenPaths"`
+	PreviewDecisions       []DiffOmissionDecision `json:"previewDecisions,omitempty"`
+	Accesses               []ContextAccess        `json:"accesses"`
 }
 
 type AnalysisRun struct {

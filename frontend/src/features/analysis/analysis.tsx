@@ -170,12 +170,13 @@ export function AnalysisRunDetails({run, configuration, open, onOpenChange}: {ru
   const coverage = `${breakdown.total} changed files · ${breakdown.parts.join(' · ')}`
   const completed = run.completedAt ? new Date(run.completedAt).toLocaleString() : 'In progress'
   const sourceReads = (path: string) => run.coverage.accesses.filter((access) => access.kind === 'read_file' && access.path === path).length
+  const previewDecision = (path: string) => run.coverage.previewDecisions?.find((decision) => decision.path === path)
   const coveragePaths = (paths: string[], kind: 'previewed' | 'unseen' | 'legacy') => <section className="analysis-coverage-files" aria-label={kind === 'previewed' ? 'Files previewed without a full diff read' : 'Files not fully inspected'}>
     <header><h3 data-analysis-coverage-kind={kind} tabIndex={-1}>{paths.length} {kind === 'previewed' ? `file${paths.length === 1 ? '' : 's'} previewed only` : kind === 'unseen' ? `file${paths.length === 1 ? '' : 's'} not inspected` : `file${paths.length === 1 ? '' : 's'} not fully read`}</h3><small>{kind === 'previewed' ? 'Full diff not read' : 'Coverage gap'}</small></header>
-    {kind === 'previewed' && <p>The harness saw a bounded sample from each diff but did not request the complete diff. ReviewArc does not receive a file-specific skip reason.</p>}
     <ul>{paths.map((path) => {
       const reads = sourceReads(path)
-      return <li key={path}><code title={path}>{path}</code>{kind === 'previewed' && <small>{reads ? `${reads} source range${reads === 1 ? '' : 's'} opened separately` : 'Bounded diff sample only'}</small>}</li>
+      const decision = previewDecision(path)
+      return <li key={path}><code title={path}>{path}</code>{kind === 'previewed' && <small>{decision ? <>Harness reason · {decision.reason}</> : 'No harness reason recorded for this run'}</small>}{kind === 'previewed' && reads > 0 && <small>{reads} source range{reads === 1 ? '' : 's'} opened separately</small>}</li>
     })}</ul>
   </section>
   return <details id="analysis-run-details" className="support-disclosure analysis-run-details" open={open} onToggle={(event) => onOpenChange?.(event.currentTarget.open)}><summary><span><ShieldCheck size={16}/>Analysis details</span><small>{labels.harness} · {labels.model} · {labels.reasoning}</small></summary><div className="support-content"><dl>

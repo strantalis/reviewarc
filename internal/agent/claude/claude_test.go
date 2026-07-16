@@ -237,6 +237,9 @@ func TestAnalyzeUsesOnlyControlledToolsAndStructuredOutput(t *testing.T) {
 			t.Errorf("isolated invocation missing %q: %s", want, joined)
 		}
 	}
+	if !strings.Contains(joined, "mcp__reviewarc__explain_diff_omissions") {
+		t.Fatal("Claude invocation did not allow the omission-provenance tool")
+	}
 	if len(command.Stdin) > maxLaunchPromptBytes || strings.Contains(string(command.Stdin), fixturePatch) || strings.Contains(string(command.Stdin), "package greet") {
 		t.Fatalf("launch prompt was not bounded and artifact-only: %q", command.Stdin)
 	}
@@ -272,18 +275,32 @@ func TestParseStreamTracksPreviewedInventoryFromRealEventShape(t *testing.T) {
 	toolResult, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"content": []any{map[string]any{
 		"type": "tool_result", "tool_use_id": "inventory_1", "content": map[string]any{"changes": []any{map[string]any{"id": "f000001", "preview": "+hello"}, map[string]any{"id": "f000002", "preview": "+generated"}}, "hasMore": false},
 	}}}})
+	failedOmissionUse, _ := json.Marshal(map[string]any{"type": "assistant", "message": map[string]any{"content": []any{map[string]any{
+		"type": "tool_use", "id": "failed_omission_1", "name": "mcp__reviewarc__explain_diff_omissions", "input": map[string]any{"decisions": []any{map[string]any{"fileId": "f000002", "category": "generated", "reason": "This advisory call failed."}}},
+	}}}})
+	failedOmissionResult, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"content": []any{map[string]any{
+		"type": "tool_result", "tool_use_id": "failed_omission_1", "is_error": true, "content": map[string]any{"error": "temporary failure"},
+	}}}})
+	omissionUse, _ := json.Marshal(map[string]any{"type": "assistant", "message": map[string]any{"content": []any{map[string]any{
+		"type": "tool_use", "id": "omission_1", "name": "mcp__reviewarc__explain_diff_omissions", "input": map[string]any{"decisions": []any{map[string]any{"fileId": "f000002", "category": "generated", "reason": "Generated output mirrors the source change."}}},
+	}}}})
+	omissionResult, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"content": []any{map[string]any{
+		"type": "tool_result", "tool_use_id": "omission_1", "content": map[string]any{"recorded": 1, "ignored": 0, "decisions": []any{map[string]any{"fileId": "f000002", "category": "generated", "reason": "Generated output mirrors the source change."}}},
+	}}}})
 	manifest := analysisbundle.Manifest{Changes: []analysisbundle.Change{
 		{ID: "f000001", Path: "src/greet.go", Diff: analysisbundle.Artifact{Bytes: int64(len(fixturePatch))}},
 		{ID: "f000002", Path: "generated/output.go", Diff: analysisbundle.Artifact{Bytes: 100}},
 	}}
 	tracker := agent.NewAccessTracker(manifest)
 	stream := append(append(append(toolUse, '\n'), toolResult...), '\n')
+	stream = append(append(append(append(stream, failedOmissionUse...), '\n'), failedOmissionResult...), '\n')
+	stream = append(append(append(append(stream, omissionUse...), '\n'), omissionResult...), '\n')
 	stream = append(stream, fixtureStream(t)...)
 	if _, err := parseStream(stream, tracker); err != nil {
 		t.Fatal(err)
 	}
 	coverage := tracker.Coverage()
-	if coverage.DiffFilesFullyRead != 1 || coverage.DiffFilesPreviewed != 1 || coverage.DiffFilesUnseen != 0 {
+	if coverage.DiffFilesFullyRead != 1 || coverage.DiffFilesPreviewed != 1 || coverage.DiffFilesUnseen != 0 || len(coverage.PreviewDecisions) != 1 || coverage.PreviewDecisions[0].Path != "generated/output.go" {
 		t.Fatalf("coverage=%+v", coverage)
 	}
 }

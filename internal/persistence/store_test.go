@@ -365,7 +365,7 @@ func TestAnalysisRunsAreAppendOnlyAndHydrateLatestProvenance(t *testing.T) {
 		t.Fatal("running analysis accepted a second preparing transition")
 	}
 	completed := domain.ReviewAnalysis{SchemaVersion: 1, BaseSHA: session.BaseSHA, HeadSHA: session.HeadSHA, Summary: "current", Chapters: []domain.ReviewChapter{{ID: "chapter"}}}
-	coverage := domain.AnalysisCoverage{ChangedFilesTotal: 3, DiffFilesFullyRead: 2, DiffFilesPreviewed: 1, DiffFilesUnread: 1, DiffBytesTotal: 120, DiffBytesRead: 100, Segments: 1, OmittedPaths: []string{"generated/file.go"}, PreviewedPaths: []string{"generated/file.go"}, UnseenPaths: []string{}}
+	coverage := domain.AnalysisCoverage{ChangedFilesTotal: 3, DiffFilesFullyRead: 2, DiffFilesPreviewed: 1, DiffFilesUnread: 1, DiffBytesTotal: 120, DiffBytesRead: 100, Segments: 1, OmittedPaths: []string{"generated/file.go"}, PreviewedPaths: []string{"generated/file.go"}, UnseenPaths: []string{}, PreviewDecisions: []domain.DiffOmissionDecision{{Path: "generated/file.go", Category: domain.DiffOmissionGenerated, Reason: "Generated output mirrors the reviewed source."}}}
 	if err := s.CompleteAnalysisRun(ctx, second.ID, completed, coverage); err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +373,7 @@ func TestAnalysisRunsAreAppendOnlyAndHydrateLatestProvenance(t *testing.T) {
 	if err != nil || loaded.LatestAnalysisRun == nil || loaded.LatestAnalysisRun.ID != second.ID || loaded.LatestAnalysisRun.Status != domain.AnalysisRunCompleted || loaded.LatestAnalysisRun.ContextTransport != domain.ContextArtifactFiles || loaded.Analysis == nil || loaded.Analysis.Summary != "current" {
 		t.Fatalf("completed session=%+v err=%v", loaded, err)
 	}
-	if loaded.LatestAnalysisRun.Coverage.DiffFilesPreviewed != 1 || !reflect.DeepEqual(loaded.LatestAnalysisRun.Coverage.PreviewedPaths, []string{"generated/file.go"}) {
+	if loaded.LatestAnalysisRun.Coverage.DiffFilesPreviewed != 1 || !reflect.DeepEqual(loaded.LatestAnalysisRun.Coverage.PreviewedPaths, []string{"generated/file.go"}) || !reflect.DeepEqual(loaded.LatestAnalysisRun.Coverage.PreviewDecisions, coverage.PreviewDecisions) {
 		t.Fatalf("persisted coverage=%+v", loaded.LatestAnalysisRun.Coverage)
 	}
 	runs, err := s.ListAnalysisRuns(ctx, session.ID)

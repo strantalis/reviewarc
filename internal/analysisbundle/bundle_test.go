@@ -77,7 +77,7 @@ func TestOversizedProviderPromptBecomesPagedLocalArtifact(t *testing.T) {
 		t.Fatalf("artifact=%+v", artifact)
 	}
 	prompt := LaunchPrompt(lease.Reference)
-	if len(prompt) >= 16<<10 || strings.Contains(prompt, strings.Repeat("x", 128)) || !strings.Contains(prompt, "continue paging until hasMore is false") {
+	if len(prompt) >= 16<<10 || strings.Contains(prompt, strings.Repeat("x", 128)) || !strings.Contains(prompt, "continue paging until hasMore is false") || !strings.Contains(prompt, "explain_diff_omissions") {
 		t.Fatalf("launch prompt bytes=%d content=%q", len(prompt), prompt)
 	}
 }

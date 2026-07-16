@@ -77,11 +77,14 @@ export interface AnalysisFailure {
 export interface ContextAccess {
   kind: string; path?: string; revision?: 'base' | 'head'; startLine?: number; endLine?: number; bytes?: number; at: string
 }
+export interface DiffOmissionDecision {
+  path: string; category: 'generated' | 'documentation' | 'example_or_test' | 'metadata' | 'covered_elsewhere' | 'not_relevant' | 'budget_limited' | 'other'; reason: string
+}
 export interface AnalysisCoverage {
   changedFilesTotal: number; diffFilesFullyRead: number; diffFilesPartiallyRead: number
   diffFilesPreviewed?: number; diffFilesUnseen?: number
   diffFilesUnread: number; diffBytesTotal: number; diffBytesRead: number; segments: number
-  omittedPaths: string[]; previewedPaths?: string[]; unseenPaths?: string[]; accesses: ContextAccess[]
+  omittedPaths: string[]; previewedPaths?: string[]; unseenPaths?: string[]; previewDecisions?: DiffOmissionDecision[]; accesses: ContextAccess[]
 }
 export interface AnalysisRun {
   id: string; sessionId: string; profile: AnalysisProfile; harnessVersion?: string; contextTransport: ContextTransport

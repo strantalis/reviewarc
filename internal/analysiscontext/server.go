@@ -12,7 +12,33 @@ import (
 
 const ServerName = "reviewarc-context"
 
-var ToolNames = []string{"list_changes", "read_pr_context", "read_diff", "read_file", "search_snapshot"}
+var ToolNames = []string{"list_changes", "read_pr_context", "read_diff", "read_file", "search_snapshot", "explain_diff_omissions"}
+
+var diffOmissionInputSchema = map[string]any{
+	"type":                 "object",
+	"additionalProperties": false,
+	"required":             []string{"decisions"},
+	"properties": map[string]any{
+		"decisions": map[string]any{
+			"type":     "array",
+			"minItems": 1,
+			"maxItems": 100,
+			"items": map[string]any{
+				"type":                 "object",
+				"additionalProperties": false,
+				"required":             []string{"fileId", "category", "reason"},
+				"properties": map[string]any{
+					"fileId": map[string]any{"type": "string", "minLength": 1, "description": "Generated file identifier from list_changes."},
+					"category": map[string]any{
+						"type": "string",
+						"enum": []string{"generated", "documentation", "example_or_test", "metadata", "covered_elsewhere", "not_relevant", "budget_limited", "other"},
+					},
+					"reason": map[string]any{"type": "string", "minLength": 1, "maxLength": 240, "description": "Concise file-specific reason the full diff was not needed; do not repeat the category."},
+				},
+			},
+		},
+	},
+}
 
 func Server(service *Service, stderr io.Writer) *mcp.Server {
 	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
@@ -43,6 +69,10 @@ func Server(service *Service, stderr io.Writer) *mcp.Server {
 	})
 	mcp.AddTool(server, &mcp.Tool{Name: "search_snapshot", Description: "Search a pinned base or head Git tree using a bounded literal fixed-string query.", Annotations: annotations("Search repository snapshot")}, func(ctx context.Context, _ *mcp.CallToolRequest, input SearchInput) (*mcp.CallToolResult, SearchOutput, error) {
 		output, err := service.SearchSnapshot(ctx, input)
+		return nil, output, err
+	})
+	mcp.AddTool(server, &mcp.Tool{Name: "explain_diff_omissions", Description: "Report concise file-specific reasons for changed files intentionally left at preview-only coverage. Pass one `decisions` array containing at most 100 objects; each object requires fileId, category, and reason. This records analysis provenance and does not modify the repository.", InputSchema: diffOmissionInputSchema, Annotations: annotations("Explain preview-only files")}, func(ctx context.Context, _ *mcp.CallToolRequest, input ExplainDiffOmissionsInput) (*mcp.CallToolResult, ExplainDiffOmissionsOutput, error) {
+		output, err := service.ExplainDiffOmissions(ctx, input)
 		return nil, output, err
 	})
 	return server

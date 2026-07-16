@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"reviewarc/internal/analysisbundle"
 	"reviewarc/internal/domain"
@@ -14,7 +16,7 @@ import (
 
 var allowedContextTools = map[string]bool{
 	"list_changes": true, "read_pr_context": true, "read_diff": true,
-	"read_file": true, "search_snapshot": true,
+	"read_file": true, "search_snapshot": true, "explain_diff_omissions": true,
 }
 
 // AccessTracker reconstructs persisted context coverage from successful
@@ -26,10 +28,11 @@ type AccessTracker struct {
 	diffs       map[string][][2]int
 	seen        map[string]bool
 	inventoried map[string]bool
+	omissions   map[string]domain.DiffOmissionDecision
 }
 
 func NewAccessTracker(manifest analysisbundle.Manifest) *AccessTracker {
-	return &AccessTracker{manifest: manifest, diffs: map[string][][2]int{}, seen: map[string]bool{}, inventoried: map[string]bool{}}
+	return &AccessTracker{manifest: manifest, diffs: map[string][][2]int{}, seen: map[string]bool{}, inventoried: map[string]bool{}, omissions: map[string]domain.DiffOmissionDecision{}}
 }
 
 func IsAllowedContextTool(name string) bool { return allowedContextTools[name] }
@@ -76,6 +79,8 @@ func ContextActivityMessage(tool string, arguments json.RawMessage, manifest ana
 			return "Searching the " + revision + " repository snapshot"
 		}
 		return "Searching the repository snapshot"
+	case "explain_diff_omissions":
+		return "Recording preview-only decisions"
 	default:
 		return ""
 	}
@@ -150,6 +155,31 @@ func (t *AccessTracker) Record(tool string, arguments, result json.RawMessage) e
 	case "search_snapshot":
 		access.Revision = domain.Revision(jsonString(args["revision"]))
 		access.Bytes = jsonSize(result)
+	case "explain_diff_omissions":
+		decisions := nestedArray(output, "decisions")
+		if len(decisions) == 0 || len(decisions) > 100 || nestedInt(output, "recorded") != len(decisions) {
+			return nil
+		}
+		seen := make(map[string]bool, len(decisions))
+		accepted := make(map[string]domain.DiffOmissionDecision, len(decisions))
+		for _, item := range decisions {
+			decision, ok := item.(map[string]any)
+			if !ok {
+				return nil
+			}
+			fileID := jsonString(decision["fileId"])
+			change, found := changeByID(t.manifest.Changes, fileID)
+			category := domain.DiffOmissionCategory(jsonString(decision["category"]))
+			reason := strings.TrimSpace(jsonString(decision["reason"]))
+			if !found || !t.inventoried[fileID] || seen[fileID] || !category.Valid() || !validOmissionReason(reason) {
+				return nil
+			}
+			seen[fileID] = true
+			accepted[fileID] = domain.DiffOmissionDecision{Path: change.Path, Category: category, Reason: reason}
+		}
+		for fileID, decision := range accepted {
+			t.omissions[fileID] = decision
+		}
 	}
 	t.accesses = append(t.accesses, access)
 	return nil
@@ -169,6 +199,9 @@ func (t *AccessTracker) Coverage() domain.AnalysisCoverage {
 			if t.inventoried[change.ID] {
 				coverage.DiffFilesPreviewed++
 				coverage.PreviewedPaths = append(coverage.PreviewedPaths, change.Path)
+				if decision, ok := t.omissions[change.ID]; ok {
+					coverage.PreviewDecisions = append(coverage.PreviewDecisions, decision)
+				}
 			} else {
 				coverage.DiffFilesUnseen++
 				coverage.UnseenPaths = append(coverage.UnseenPaths, change.Path)
@@ -198,6 +231,10 @@ func (t *AccessTracker) Coverage() domain.AnalysisCoverage {
 		}
 	}
 	return coverage
+}
+
+func validOmissionReason(reason string) bool {
+	return reason != "" && utf8.ValidString(reason) && len(reason) <= 320 && len([]rune(reason)) <= 240 && strings.IndexFunc(reason, func(r rune) bool { return r == 0 || r < 0x20 || r == 0x7f || unicode.Is(unicode.Bidi_Control, r) }) < 0
 }
 
 func changeByID(changes []analysisbundle.Change, id string) (analysisbundle.Change, bool) {

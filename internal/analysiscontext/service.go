@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"unicode"
 	"unicode/utf8"
 
 	"reviewarc/internal/analysisbundle"
@@ -233,6 +234,56 @@ type SearchOutput struct {
 	HasMore    bool          `json:"hasMore"`
 }
 
+type DiffOmissionInput struct {
+	FileID   string `json:"fileId" jsonschema:"generated file identifier from list_changes"`
+	Category string `json:"category" jsonschema:"one of generated, documentation, example_or_test, metadata, covered_elsewhere, not_relevant, budget_limited, or other"`
+	Reason   string `json:"reason" jsonschema:"concise file-specific reason the full diff was not needed; do not repeat the category"`
+}
+
+type ExplainDiffOmissionsInput struct {
+	Decisions []DiffOmissionInput `json:"decisions" jsonschema:"one to 100 preview-only decisions"`
+}
+
+type ExplainDiffOmissionsOutput struct {
+	Recorded  int                 `json:"recorded"`
+	Ignored   int                 `json:"ignored"`
+	Decisions []DiffOmissionInput `json:"decisions"`
+}
+
+func (s *Service) ExplainDiffOmissions(_ context.Context, input ExplainDiffOmissionsInput) (ExplainDiffOmissionsOutput, error) {
+	if err := s.begin(); err != nil {
+		return ExplainDiffOmissionsOutput{}, err
+	}
+	if len(input.Decisions) == 0 || len(input.Decisions) > 100 {
+		return ExplainDiffOmissionsOutput{}, s.failed("explain_diff_omissions", AccessRecord{}, errors.New("one to 100 omission decisions are required"))
+	}
+	seen := make(map[string]bool, len(input.Decisions))
+	accepted := make([]DiffOmissionInput, 0, len(input.Decisions))
+	for _, decision := range input.Decisions {
+		decision.FileID = strings.TrimSpace(decision.FileID)
+		decision.Category = strings.TrimSpace(decision.Category)
+		decision.Reason = strings.TrimSpace(decision.Reason)
+		if seen[decision.FileID] {
+			continue
+		}
+		seen[decision.FileID] = true
+		if _, ok := s.bundle.Change(decision.FileID); !ok {
+			continue
+		}
+		if !domain.DiffOmissionCategory(decision.Category).Valid() || !validOmissionReason(decision.Reason) {
+			continue
+		}
+		accepted = append(accepted, decision)
+	}
+	out := ExplainDiffOmissionsOutput{Recorded: len(accepted), Ignored: len(input.Decisions) - len(accepted), Decisions: accepted}
+	return out, s.successMetadata("explain_diff_omissions", AccessRecord{})
+}
+
+func validOmissionReason(reason string) bool {
+	reason = strings.TrimSpace(reason)
+	return reason != "" && utf8.ValidString(reason) && len(reason) <= 320 && len([]rune(reason)) <= 240 && strings.IndexFunc(reason, func(r rune) bool { return r == 0 || r < 0x20 || r == 0x7f || unicode.Is(unicode.Bidi_Control, r) }) < 0
+}
+
 func (s *Service) SearchSnapshot(ctx context.Context, input SearchInput) (SearchOutput, error) {
 	if err := s.begin(); err != nil {
 		return SearchOutput{}, err
@@ -324,6 +375,14 @@ func (s *Service) success(tool string, record AccessRecord, output any) error {
 	}
 	s.bytes += len(data)
 	record.Bytes, record.Success = len(data), true
+	s.records = append(s.records, record)
+	return nil
+}
+
+func (s *Service) successMetadata(tool string, record AccessRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record.Tool, record.Success = tool, true
 	s.records = append(s.records, record)
 	return nil
 }

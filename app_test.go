@@ -979,6 +979,25 @@ func TestStartAnalysisRejectsUnchangedOversizedRetry(t *testing.T) {
 	}
 }
 
+func TestPromptVersionChangeAllowsOversizedAnalysisReplan(t *testing.T) {
+	profile := domain.AnalysisProfile{Harness: domain.HarnessCodex, Model: "fixture", Reasoning: domain.ReasoningMedium}
+	session := domain.ReviewSession{PullRequest: domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}, Number: 7}}}, BaseSHA: strings.Repeat("1", 40), HeadSHA: strings.Repeat("2", 40)}
+	capabilities, _ := appAnalysisAdapter{}.Capabilities(context.Background())
+	current := analysisFingerprint(session, profile, capabilities.Version, domain.ContextReviewArcTools)
+	legacy := analysisFingerprintWithPromptVersion(session, profile, capabilities.Version, domain.ContextReviewArcTools, analysisPromptVersion-1)
+	if current == legacy {
+		t.Fatal("prompt version did not change the analysis fingerprint")
+	}
+	prior := &domain.AnalysisRun{InputFingerprint: legacy, Status: domain.AnalysisRunFailed, Failure: &domain.AnalysisFailure{Code: domain.FailureInputTooLarge}}
+	if unchangedOversizedRetryBlocked(prior, current) {
+		t.Fatal("a previous prompt version remained blocked after the analysis plan changed")
+	}
+	prior.InputFingerprint = current
+	if !unchangedOversizedRetryBlocked(prior, current) {
+		t.Fatal("an unchanged current analysis plan was not blocked")
+	}
+}
+
 func TestPublishRequiresMatchingConfirmationAndUsesFixtureBackedGitHubFlow(t *testing.T) {
 	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
 	if err != nil {

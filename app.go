@@ -88,6 +88,9 @@ type AnalysisRequest struct {
 	Profile       *domain.AnalysisProfile `json:"profile,omitempty"`
 	SaveAsDefault bool                    `json:"saveAsDefault"`
 }
+
+const analysisPromptVersion = 2
+
 type AnalysisConfiguration struct {
 	DefaultProfile *domain.AnalysisProfile `json:"defaultProfile,omitempty"`
 	Harnesses      []HarnessDescriptor     `json:"harnesses"`
@@ -922,7 +925,7 @@ func (a *App) startAnalysis(sessionID string, request AnalysisRequest) (Operatio
 	}
 	transport := controlledTransport(capabilities.ContextTransports)
 	fingerprint := analysisFingerprint(session, profile, capabilities.Version, transport)
-	if prior := session.LatestAnalysisRun; prior != nil && prior.InputFingerprint == fingerprint && prior.Status == domain.AnalysisRunFailed && prior.Failure != nil && (prior.Failure.Code == domain.FailureInputTooLarge || prior.Failure.Code == domain.FailureRetryRequiresReplan) {
+	if unchangedOversizedRetryBlocked(session.LatestAnalysisRun, fingerprint) {
 		return Operation{}, errors.New("input_too_large: ReviewArc will not repeat the unchanged oversized analysis request; change the profile or analysis plan")
 	}
 	if request.SaveAsDefault {
@@ -957,15 +960,23 @@ func (a *App) startAnalysis(sessionID string, request AnalysisRequest) (Operatio
 }
 
 func analysisFingerprint(session domain.ReviewSession, profile domain.AnalysisProfile, harnessVersion string, transport domain.ContextTransport) string {
+	return analysisFingerprintWithPromptVersion(session, profile, harnessVersion, transport, analysisPromptVersion)
+}
+
+func analysisFingerprintWithPromptVersion(session domain.ReviewSession, profile domain.AnalysisProfile, harnessVersion string, transport domain.ContextTransport, promptVersion int) string {
 	payload, _ := json.Marshal(struct {
 		BaseSHA, HeadSHA, HarnessVersion string
 		Profile                          domain.AnalysisProfile
 		Transport                        domain.ContextTransport
 		SchemaVersion, PromptVersion     int
 		PullRequest                      domain.PullRequest
-	}{session.BaseSHA, session.HeadSHA, harnessVersion, profile, transport, sharedanalysis.SchemaVersion, 1, session.PullRequest})
+	}{session.BaseSHA, session.HeadSHA, harnessVersion, profile, transport, sharedanalysis.SchemaVersion, promptVersion, session.PullRequest})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
+}
+
+func unchangedOversizedRetryBlocked(prior *domain.AnalysisRun, fingerprint string) bool {
+	return prior != nil && prior.InputFingerprint == fingerprint && prior.Status == domain.AnalysisRunFailed && prior.Failure != nil && (prior.Failure.Code == domain.FailureInputTooLarge || prior.Failure.Code == domain.FailureRetryRequiresReplan)
 }
 func (a *App) CancelOperation(id string) error {
 	a.mu.Lock()

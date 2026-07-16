@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 
@@ -181,6 +183,53 @@ func TestSearchUsesLiteralQueryAndValidatesInput(t *testing.T) {
 	}
 }
 
+func TestExplainDiffOmissionsAcceptsBoundedReasonsBestEffort(t *testing.T) {
+	service, lease := fixtureService(t, analysisbundle.DefaultLimits(), "patch", &fakeObjectReader{})
+	defer lease.Close()
+	out, err := service.ExplainDiffOmissions(context.Background(), ExplainDiffOmissionsInput{Decisions: []DiffOmissionInput{
+		{FileID: "f000001", Category: "documentation", Reason: "  README-only guidance; no runtime behavior changed.  "},
+		{FileID: "missing", Category: "not_relevant", Reason: "Unknown file."},
+		{FileID: "f000001", Category: "other", Reason: "Duplicate decision."},
+		{FileID: "f000001", Category: "invalid", Reason: "Invalid category."},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Recorded != 1 || out.Ignored != 3 || len(out.Decisions) != 1 || out.Decisions[0].Reason != "README-only guidance; no runtime behavior changed." {
+		t.Fatalf("output=%+v", out)
+	}
+	records := service.AccessRecords()
+	if len(records) != 1 || records[0].Tool != "explain_diff_omissions" || !records[0].Success {
+		t.Fatalf("records=%+v", records)
+	}
+}
+
+func TestExplainDiffOmissionsRejectsUnboundedCallsWithoutChargingRepositoryBytes(t *testing.T) {
+	service, lease := fixtureService(t, analysisbundle.DefaultLimits(), "patch", &fakeObjectReader{})
+	defer lease.Close()
+	for _, decisions := range [][]DiffOmissionInput{
+		nil,
+		make([]DiffOmissionInput, 101),
+	} {
+		if _, err := service.ExplainDiffOmissions(context.Background(), ExplainDiffOmissionsInput{Decisions: decisions}); err == nil {
+			t.Fatalf("accepted %d decisions", len(decisions))
+		}
+	}
+	for _, decision := range []DiffOmissionInput{
+		{FileID: "f000001", Category: "other", Reason: strings.Repeat("x", 321)},
+		{FileID: "f000001", Category: "other", Reason: "Visual order \u202espoof."},
+		{FileID: "f000001", Category: "invalid", Reason: "Invalid category."},
+	} {
+		out, err := service.ExplainDiffOmissions(context.Background(), ExplainDiffOmissionsInput{Decisions: []DiffOmissionInput{decision}})
+		if err != nil || out.Recorded != 0 || out.Ignored != 1 {
+			t.Fatalf("invalid decision=%+v output=%+v err=%v", decision, out, err)
+		}
+	}
+	if coverage := service.Coverage(); coverage.BytesServed != 0 {
+		t.Fatalf("advisory metadata consumed repository-byte budget: %+v", coverage)
+	}
+}
+
 func TestContextBudgetsFailClosed(t *testing.T) {
 	limits := analysisbundle.DefaultLimits()
 	limits.MaxCalls = 1
@@ -234,10 +283,79 @@ func TestMCPServerExposesOnlyAnnotatedReadTools(t *testing.T) {
 		if !want[tool.Name] || tool.Annotations == nil || !tool.Annotations.ReadOnlyHint || tool.Annotations.OpenWorldHint == nil || *tool.Annotations.OpenWorldHint || tool.Annotations.DestructiveHint == nil || *tool.Annotations.DestructiveHint {
 			t.Fatalf("tool=%+v", tool)
 		}
+		if tool.Name == "explain_diff_omissions" {
+			assertDiffOmissionSchema(t, tool.InputSchema)
+		}
 		delete(want, tool.Name)
 	}
 	if len(want) != 0 {
 		t.Fatalf("missing tools=%v", want)
+	}
+}
+
+func assertDiffOmissionSchema(t *testing.T, value any) {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Required   []string `json:"required"`
+		Properties map[string]struct {
+			MinItems int `json:"minItems"`
+			MaxItems int `json:"maxItems"`
+			Items    struct {
+				Required   []string `json:"required"`
+				Properties map[string]struct {
+					Enum      []string `json:"enum"`
+					MinLength int      `json:"minLength"`
+					MaxLength int      `json:"maxLength"`
+				} `json:"properties"`
+			} `json:"items"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatal(err)
+	}
+	decisions := schema.Properties["decisions"]
+	if !slices.Equal(schema.Required, []string{"decisions"}) || decisions.MinItems != 1 || decisions.MaxItems != 100 || !slices.Equal(decisions.Items.Required, []string{"fileId", "category", "reason"}) {
+		t.Fatalf("schema=%s", data)
+	}
+	category, reason := decisions.Items.Properties["category"], decisions.Items.Properties["reason"]
+	if len(category.Enum) != 8 || reason.MinLength != 1 || reason.MaxLength != 240 {
+		t.Fatalf("schema=%s", data)
+	}
+}
+
+func TestMCPServerAcceptsDiffOmissionProvenance(t *testing.T) {
+	service, lease := fixtureService(t, analysisbundle.DefaultLimits(), "patch", &fakeObjectReader{})
+	defer lease.Close()
+	server := Server(service, io.Discard)
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil)
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	serverSession, err := server.Connect(context.Background(), serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverSession.Close()
+	clientSession, err := client.Connect(context.Background(), clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientSession.Close()
+
+	result, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "explain_diff_omissions",
+		Arguments: map[string]any{"decisions": []any{map[string]any{
+			"fileId": "f000001", "category": "documentation", "reason": "README-only guidance; no runtime behavior changed.",
+		}}},
+	})
+	if err != nil || result.IsError {
+		t.Fatalf("CallTool result=%+v err=%v", result, err)
+	}
+	records := service.AccessRecords()
+	if len(records) != 1 || records[0].Tool != "explain_diff_omissions" || !records[0].Success {
+		t.Fatalf("records=%+v", records)
 	}
 }
 
