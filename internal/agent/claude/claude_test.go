@@ -179,6 +179,26 @@ func TestAnalyzeUsesOnlyControlledToolsAndStructuredOutput(t *testing.T) {
 	if len(command.Stdin) > maxLaunchPromptBytes || strings.Contains(string(command.Stdin), fixturePatch) || strings.Contains(string(command.Stdin), "package greet") {
 		t.Fatalf("launch prompt was not bounded and artifact-only: %q", command.Stdin)
 	}
+	var schemaArgument string
+	for index, argument := range command.Args {
+		if argument == "--json-schema" && index+1 < len(command.Args) {
+			schemaArgument = command.Args[index+1]
+			break
+		}
+	}
+	var schema map[string]any
+	if schemaArgument == "" {
+		t.Fatal("Claude invocation did not include a JSON schema argument")
+	}
+	if err := json.Unmarshal([]byte(schemaArgument), &schema); err != nil {
+		t.Fatalf("Claude schema argument is invalid JSON: %v", err)
+	}
+	if _, exists := schema["$schema"]; exists {
+		t.Fatal("Claude schema retained the unsupported Draft 2020-12 meta-schema declaration")
+	}
+	if schema["$id"] == nil || schema["$defs"] == nil {
+		t.Fatal("Claude schema lost the canonical schema definitions")
+	}
 	if !strings.Contains(string(mcpConfig), `"context-server"`) || strings.Contains(string(mcpConfig), "Bash") {
 		t.Fatalf("MCP config=%s", mcpConfig)
 	}

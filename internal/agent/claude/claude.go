@@ -153,13 +153,11 @@ func (p *Provider) analyze(parent context.Context, input agent.AnalyzeInput, bun
 		return
 	}
 	defer os.Remove(mcpPath)
-	schema, err := json.Marshal(json.RawMessage(sharedanalysis.Schema()))
+	schema, err := outputSchemaArgument()
 	if err != nil {
 		emit(failureEvent(domain.FailureConfigurationRequired, "Analysis could not start", "ReviewArc could not prepare the structured-output contract.", domain.RetrySamePlan, err))
 		return
 	}
-	// json.RawMessage marshals as the schema object; Claude expects the object as
-	// one CLI argument rather than a filesystem path.
 	prompt := analysisbundle.LaunchPrompt(input.Bundle)
 	if len(prompt) > maxLaunchPromptBytes {
 		emit(failureEvent(domain.FailureRetryRequiresReplan, "Analysis plan is too large", "ReviewArc must create a smaller analysis plan before retrying.", domain.RetryChangeProfile, errors.New("bounded launch prompt exceeded its invariant")))
@@ -168,7 +166,7 @@ func (p *Provider) analyze(parent context.Context, input agent.AnalyzeInput, bun
 	tracker := agent.NewAccessTracker(bundle.Manifest)
 	command := processpkg.Command{
 		Tool: processpkg.Claude, Dir: filepath.Join(bundle.Path, "run"), Timeout: p.config.Timeout,
-		Args: invocationArgs(input, mcpPath, string(schema)), Stdin: []byte(prompt), MaxOutput: p.config.MaxOutput,
+		Args: invocationArgs(input, mcpPath, schema), Stdin: []byte(prompt), MaxOutput: p.config.MaxOutput,
 		OnStdoutLine: func(line []byte) {
 			if message := progressMessage(line, bundle.Manifest); message != "" {
 				emit(agent.Event{Kind: agent.EventProgress, Message: message})
@@ -213,6 +211,23 @@ func (p *Provider) analyze(parent context.Context, input agent.AnalyzeInput, bun
 	}
 	coverage := tracker.Coverage()
 	emit(agent.Event{Kind: agent.EventCompleted, Message: "Analysis ready", Analysis: &analysis, Issues: analysis.ValidationIssues, Coverage: &coverage})
+}
+
+func outputSchemaArgument() (string, error) {
+	var schema map[string]any
+	if err := json.Unmarshal(sharedanalysis.Schema(), &schema); err != nil {
+		return "", fmt.Errorf("decode ReviewArc output schema: %w", err)
+	}
+	// Claude Code 2.1.x supports the schema's validation keywords but does not
+	// preload the Draft 2020-12 meta-schema, so its validator rejects the root
+	// declaration before analysis starts. ReviewArc retains the canonical schema
+	// for its own validation and removes only that adapter-incompatible annotation.
+	delete(schema, "$schema")
+	data, err := json.Marshal(schema)
+	if err != nil {
+		return "", fmt.Errorf("encode Claude output schema: %w", err)
+	}
+	return string(data), nil
 }
 
 func writeMCPConfig(executable string, input agent.AnalyzeInput) (string, error) {
