@@ -106,6 +106,7 @@ type HarnessDescriptor struct {
 	Eligible     bool                     `json:"eligible"`
 	Capabilities HarnessCapabilitySummary `json:"capabilities"`
 	Models       []HarnessModelDescriptor `json:"models"`
+	CustomModel  *HarnessModelDescriptor  `json:"customModel,omitempty"`
 }
 type HarnessCapabilitySummary struct {
 	JSONSchema       bool                      `json:"jsonSchema"`
@@ -821,11 +822,11 @@ func (a *App) analysisConfiguration(refresh bool) AnalysisConfiguration {
 			}
 		}
 		for _, model := range capability.Models {
-			item := HarnessModelDescriptor{ID: model.ID, Label: model.Name, Recommended: model.Recommended, ReasoningLevels: make([]ReasoningLevelDescriptor, 0, len(model.ReasoningLevels))}
-			for _, level := range model.ReasoningLevels {
-				item.ReasoningLevels = append(item.ReasoningLevels, ReasoningLevelDescriptor{ID: level, Label: reasoningLabel(level), Recommended: level == model.DefaultReasoningLevel})
-			}
-			descriptor.Models = append(descriptor.Models, item)
+			descriptor.Models = append(descriptor.Models, modelDescriptor(model))
+		}
+		if capability.CustomModel != nil {
+			item := modelDescriptor(*capability.CustomModel)
+			descriptor.CustomModel = &item
 		}
 		configuration.Harnesses = append(configuration.Harnesses, descriptor)
 	}
@@ -861,8 +862,23 @@ func profileSelectable(profile domain.AnalysisProfile, harnesses []HarnessDescri
 				}
 			}
 		}
+		if harness.CustomModel != nil && agent.IsValidCustomModelID(profile.Model) {
+			for _, level := range harness.CustomModel.ReasoningLevels {
+				if level.ID == profile.Reasoning {
+					return true
+				}
+			}
+		}
 	}
 	return false
+}
+
+func modelDescriptor(model domain.ModelCapability) HarnessModelDescriptor {
+	item := HarnessModelDescriptor{ID: model.ID, Label: model.Name, Recommended: model.Recommended, ReasoningLevels: make([]ReasoningLevelDescriptor, 0, len(model.ReasoningLevels))}
+	for _, level := range model.ReasoningLevels {
+		item.ReasoningLevels = append(item.ReasoningLevels, ReasoningLevelDescriptor{ID: level, Label: reasoningLabel(level), Recommended: level == model.DefaultReasoningLevel})
+	}
+	return item
 }
 
 func reasoningLabel(level domain.ReasoningLevel) string {

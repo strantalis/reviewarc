@@ -2,9 +2,27 @@ import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Check, CircleHelp, Clock3, LoaderCircle, RefreshCw, Settings, ShieldCheck, Sparkles, X } from 'lucide-react'
 import { SelectControl } from '../../components'
 import type {
-  AnalysisConfiguration, AnalysisCoverage, AnalysisFailure, AnalysisProfile, AnalysisRun, DependencyStatus,
+  AnalysisConfiguration, AnalysisCoverage, AnalysisFailure, AnalysisProfile, AnalysisRun, DependencyStatus, HarnessDescriptor,
   OperationEvent,
 } from '../../types'
+
+const customModelOption = '__reviewarc_custom_model__'
+
+function validCustomModelID(value: string) {
+  const trimmed = value.trim()
+  return trimmed.length > 0 && trimmed.length <= 256 && !trimmed.startsWith('-') && !/[\s\u0000-\u001f\u007f]/u.test(trimmed)
+}
+
+function fixedModel(harness: HarnessDescriptor | undefined, modelID: string | undefined) {
+  return harness?.models.find((model) => model.id === modelID)
+}
+
+export function analysisProfileReady(configuration: AnalysisConfiguration, profile?: AnalysisProfile) {
+  const harness = configuration.harnesses.find((item) => item.id === profile?.harness && item.eligible && item.availability === 'available')
+  const model = fixedModel(harness, profile?.model)
+  if (model) return model.reasoningLevels.some((level) => level.id === profile?.reasoning)
+  return Boolean(harness?.customModel && profile && validCustomModelID(profile.model) && harness.customModel.reasoningLevels.some((level) => level.id === profile.reasoning))
+}
 
 export function recommendedProfile(configuration: AnalysisConfiguration): AnalysisProfile | undefined {
   if (configuration.defaultProfile) return configuration.defaultProfile
@@ -55,7 +73,9 @@ export function AnalysisProfileSummary({configuration, profile, onChange, expand
 export function AnalysisProfilePicker({configuration, value, onChange, disabled = false, id = 'analysis-profile-picker'}: {configuration: AnalysisConfiguration; value?: AnalysisProfile; onChange: (profile: AnalysisProfile) => void; disabled?: boolean; id?: string}) {
   const eligible = configuration.harnesses.filter((harness) => harness.eligible && harness.availability === 'available' && harness.models.length > 0)
   const selectedHarness = eligible.find((harness) => harness.id === value?.harness) ?? eligible[0]
-  const selectedModel = selectedHarness?.models.find((model) => model.id === value?.model) ?? selectedHarness?.models[0]
+  const selectedFixedModel = fixedModel(selectedHarness, value?.model)
+  const customSelected = Boolean(selectedHarness?.customModel && value?.harness === selectedHarness.id && !selectedFixedModel)
+  const selectedModel = selectedFixedModel ?? (customSelected ? selectedHarness?.customModel : selectedHarness?.models[0])
   const selectedReasoning = selectedModel?.reasoningLevels.find((level) => level.id === value?.reasoning) ?? selectedModel?.reasoningLevels[0]
 
   const selectHarness = (harnessId: string) => {
@@ -65,6 +85,12 @@ export function AnalysisProfilePicker({configuration, value, onChange, disabled 
     if (harness && model && reasoning) onChange({harness: harness.id, model: model.id, reasoning: reasoning.id})
   }
   const selectModel = (modelId: string) => {
+    if (modelId === customModelOption) {
+      const model = selectedHarness?.customModel
+      const reasoning = model?.reasoningLevels.find((item) => item.recommended) ?? model?.reasoningLevels[0]
+      if (selectedHarness && model && reasoning) onChange({harness: selectedHarness.id, model: '', reasoning: reasoning.id})
+      return
+    }
     const model = selectedHarness?.models.find((item) => item.id === modelId)
     const reasoning = model?.reasoningLevels.find((item) => item.recommended) ?? model?.reasoningLevels[0]
     if (selectedHarness && model && reasoning) onChange({harness: selectedHarness.id, model: model.id, reasoning: reasoning.id})
@@ -76,8 +102,9 @@ export function AnalysisProfilePicker({configuration, value, onChange, disabled 
   if (!selectedHarness || !selectedModel || !selectedReasoning) return null
   return <div className="analysis-profile-picker" id={id}>
     <label><span>Harness</span><SelectControl label="Analysis harness" value={selectedHarness.id} disabled={disabled} onChange={selectHarness} options={eligible.map((harness) => ({value: harness.id, label: harness.label, description: harness.version}))}/></label>
-    <label><span>Model</span><SelectControl label="Analysis model" value={selectedModel.id} disabled={disabled} onChange={selectModel} options={selectedHarness.models.map((model) => ({value: model.id, label: model.label}))}/></label>
+    <label><span>Model</span><SelectControl label="Analysis model" value={customSelected ? customModelOption : selectedModel.id} disabled={disabled} onChange={selectModel} options={[...selectedHarness.models.map((model) => ({value: model.id, label: model.label})), ...(selectedHarness.customModel ? [{value: customModelOption, label: 'Custom model ID…'}] : [])]}/></label>
     <label><span>Reasoning</span><SelectControl label="Analysis reasoning level" value={selectedReasoning.id} disabled={disabled} onChange={selectReasoning} options={selectedModel.reasoningLevels.map((level) => ({value: level.id, label: level.label}))}/></label>
+    {customSelected && <label className="analysis-custom-model"><span>Custom model ID</span><input aria-label="Custom model ID" autoCapitalize="none" autoCorrect="off" autoComplete="off" spellCheck={false} disabled={disabled} value={value?.model ?? ''} onChange={(event) => onChange({harness: selectedHarness.id, model: event.target.value, reasoning: selectedReasoning.id})} placeholder="Exact model ID accepted by Claude Code"/><small>Use the provider or managed model ID exactly as Claude Code expects it.</small></label>}
   </div>
 }
 
@@ -207,6 +234,7 @@ export function AIAnalysisSettings({configuration, loading = false, busy = false
   useEffect(() => { setProfile(initial); setSaved(false) }, [initial])
   const available = configuration.harnesses.filter((harness) => harness.eligible && harness.availability === 'available')
   const selected = harnessFor(configuration, profile)
+  const profileReady = analysisProfileReady(configuration, profile)
   const save = async () => {
     if (!profile) return
     setSaving(true); setSaved(false)
@@ -215,7 +243,7 @@ export function AIAnalysisSettings({configuration, loading = false, busy = false
   return <section className="ai-analysis-settings"><div className="settings-section-heading"><h2>AI Analysis</h2><p>Choose the local AI harness ReviewArc uses for guided reviews.</p></div><div className="settings-section-body">
     {loading ? <div className="analysis-settings-status" role="status"><LoaderCircle className="spin" size={14}/><div><strong>Loading installed analysis harnesses…</strong><small>ReviewArc will show the saved default when inspection completes.</small></div></div> : available.length > 0 && profile ? <>
       <AnalysisProfilePicker configuration={configuration} value={profile} onChange={(next) => { setProfile(next); setSaved(false) }} disabled={busy || saving} id="settings-analysis-profile"/>
-      <div className="analysis-settings-status"><span className="setup-status available"><Check size={14}/></span><div><strong>{selected?.label} {selected?.version || 'detected'}</strong><small>Structured output and read-only analysis are available.</small>{selected?.path && <code title={selected.path}>{selected.path}</code>}</div><button className="button secondary small" disabled={busy || saving} onClick={() => void save()}>{saving ? <LoaderCircle className="spin" size={13}/> : <Check size={13}/>}Save defaults</button></div>
+      <div className="analysis-settings-status"><span className="setup-status available"><Check size={14}/></span><div><strong>{selected?.label} {selected?.version || 'detected'}</strong><small>Structured output and read-only analysis are available.</small>{selected?.path && <code title={selected.path}>{selected.path}</code>}</div><button className="button secondary small" disabled={busy || saving || !profileReady} onClick={() => void save()}>{saving ? <LoaderCircle className="spin" size={13}/> : <Check size={13}/>}Save defaults</button></div>
     </> : <NoHarnessState configuration={configuration} onRefresh={onRefresh}/>}
     <div className="analysis-settings-footer">{available.length > 0 && <button className="button text small" disabled={busy || saving} onClick={onRefresh}>{busy ? <LoaderCircle className="spin" size={13}/> : <RefreshCw size={13}/>}Check again</button>}{saved && <span role="status">Defaults saved.</span>}{error && <span className="analysis-settings-error" role="alert">{error}</span>}</div>
   </div></section>

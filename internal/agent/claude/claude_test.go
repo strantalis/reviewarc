@@ -200,12 +200,55 @@ func TestCapabilitiesExposeSecondEligibleAdapter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if capabilities.ID != domain.HarnessClaude || capabilities.State != domain.HarnessAvailable || capabilities.Version != "2.1.210 (Claude Code)" || capabilities.DefaultModel != "sonnet" || len(capabilities.Models) != 2 {
+	if capabilities.ID != domain.HarnessClaude || capabilities.State != domain.HarnessAvailable || capabilities.Version != "2.1.210 (Claude Code)" || capabilities.DefaultModel != defaultModel || len(capabilities.Models) != 4 {
 		t.Fatalf("capabilities=%+v", capabilities)
+	}
+	wantModels := []string{defaultModel, "fable", "sonnet", "opus"}
+	for index, want := range wantModels {
+		if capabilities.Models[index].ID != want {
+			t.Fatalf("models=%+v", capabilities.Models)
+		}
+	}
+	if capabilities.CustomModel == nil || capabilities.CustomModel.Name != "Custom model ID" || len(capabilities.CustomModel.ReasoningLevels) != 5 {
+		t.Fatalf("custom model capability=%+v", capabilities.CustomModel)
 	}
 	if !capabilities.SupportsJSONSchema || !capabilities.EnforcesReadOnly || !capabilities.SupportsProgress || len(capabilities.ContextTransports) != 1 || capabilities.ContextTransports[0] != domain.ContextReviewArcTools {
 		t.Fatalf("contract capabilities=%+v", capabilities)
 	}
+}
+
+func TestInvocationArgsUsesClaudeDefaultWithoutModelFlag(t *testing.T) {
+	input := validInput(t)
+	input.Profile.Model = defaultModel
+	args := invocationArgs(input, "/tmp/mcp.json", `{}`)
+	for _, argument := range args {
+		if argument == "--model" {
+			t.Fatalf("default invocation included --model: %v", args)
+		}
+	}
+	if !containsArgumentPair(args, "--effort", "high") {
+		t.Fatalf("default invocation omitted effort: %v", args)
+	}
+}
+
+func TestInvocationArgsPassesAliasOrCustomModel(t *testing.T) {
+	for _, model := range []string{"fable", "claude-fable-5[1m]"} {
+		input := validInput(t)
+		input.Profile.Model = model
+		args := invocationArgs(input, "/tmp/mcp.json", `{}`)
+		if !containsArgumentPair(args, "--model", model) {
+			t.Fatalf("model %q invocation=%v", model, args)
+		}
+	}
+}
+
+func containsArgumentPair(arguments []string, name, value string) bool {
+	for index := 0; index+1 < len(arguments); index++ {
+		if arguments[index] == name && arguments[index+1] == value {
+			return true
+		}
+	}
+	return false
 }
 
 func TestAnalyzeUsesOnlyControlledToolsAndStructuredOutput(t *testing.T) {

@@ -66,7 +66,7 @@ export interface HarnessCapabilities {
 }
 export interface HarnessDescriptor {
   id: string; label: string; availability: HarnessAvailability; path?: string; version?: string; message?: string
-  eligible: boolean; capabilities: HarnessCapabilities; models: HarnessModel[]
+  eligible: boolean; capabilities: HarnessCapabilities; models: HarnessModel[]; customModel?: HarnessModel
 }
 export interface AnalysisProfile { harness: string; model: string; reasoning: string }
 export interface AnalysisConfiguration { defaultProfile?: AnalysisProfile; harnesses: HarnessDescriptor[]; refreshedAt?: string }

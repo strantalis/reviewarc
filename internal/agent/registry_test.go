@@ -72,6 +72,34 @@ func TestRegistryRejectsMissingProfileAndInvalidChoices(t *testing.T) {
 	}
 }
 
+func TestRegistryResolvesSupportedCustomModels(t *testing.T) {
+	capabilities := eligibleCapabilities()
+	capabilities.CustomModel = &domain.ModelCapability{Name: "Custom model", ReasoningLevels: []domain.ReasoningLevel{domain.ReasoningMedium, domain.ReasoningHigh}, DefaultReasoningLevel: domain.ReasoningMedium}
+	registry, _ := NewRegistry(fixtureAdapter{id: domain.HarnessClaude, caps: capabilities})
+	_, profile, _, err := registry.Resolve(context.Background(), domain.AnalysisProfile{Harness: domain.HarnessClaude, Model: "  claude-fable-5[1m]  "})
+	if err != nil || profile.Model != "claude-fable-5[1m]" || profile.Reasoning != domain.ReasoningMedium {
+		t.Fatalf("custom profile=%+v err=%v", profile, err)
+	}
+	for _, model := range []string{"", "-flag", "model with spaces"} {
+		reasoning := domain.ReasoningMedium
+		if model == "" {
+			reasoning = ""
+		}
+		_, _, _, err := registry.Resolve(context.Background(), domain.AnalysisProfile{Harness: domain.HarnessClaude, Model: model, Reasoning: reasoning})
+		if model == "" {
+			// Empty means the harness default, not a custom model.
+			if err != nil {
+				t.Fatalf("default model resolution failed: %v", err)
+			}
+			continue
+		}
+		var resolution *ResolutionError
+		if !errors.As(err, &resolution) || resolution.Failure.Code != domain.FailureInvalidProfile {
+			t.Fatalf("invalid custom model %q error=%v", model, err)
+		}
+	}
+}
+
 func TestRegistryRequiresSchemaReadOnlyAndControlledContext(t *testing.T) {
 	for _, mutate := range []func(*domain.HarnessCapabilities){
 		func(c *domain.HarnessCapabilities) { c.SupportsJSONSchema = false },

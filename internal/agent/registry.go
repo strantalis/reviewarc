@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 
 	"reviewarc/internal/domain"
 )
@@ -118,7 +119,26 @@ func resolveModel(capabilities domain.HarnessCapabilities, selected string) (dom
 			return model, true
 		}
 	}
+	if capabilities.CustomModel != nil && IsValidCustomModelID(selected) {
+		model := *capabilities.CustomModel
+		model.ID = selected
+		model.Name = selected
+		return model, true
+	}
 	return domain.ModelCapability{}, false
+}
+
+func IsValidCustomModelID(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 256 || strings.HasPrefix(value, "-") {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsSpace(character) || unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
 }
 
 func supportsReasoning(model domain.ModelCapability, selected domain.ReasoningLevel) bool {

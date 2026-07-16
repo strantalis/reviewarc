@@ -118,6 +118,31 @@ func (r *pullRequestFixtureRunner) Run(_ context.Context, command proc.Command) 
 
 type protocolRunner struct{ protocol string }
 
+func TestProfileSelectableSupportsCustomHarnessModels(t *testing.T) {
+	reasoning := []ReasoningLevelDescriptor{{ID: domain.ReasoningMedium, Label: "Medium", Recommended: true}}
+	harnesses := []HarnessDescriptor{{
+		ID: domain.HarnessClaude, Eligible: true,
+		Models:      []HarnessModelDescriptor{{ID: "default", Label: "Claude Code default", ReasoningLevels: reasoning}},
+		CustomModel: &HarnessModelDescriptor{Label: "Custom model ID", ReasoningLevels: reasoning},
+	}}
+	for _, profile := range []domain.AnalysisProfile{
+		{Harness: domain.HarnessClaude, Model: "default", Reasoning: domain.ReasoningMedium},
+		{Harness: domain.HarnessClaude, Model: "claude-fable-5[1m]", Reasoning: domain.ReasoningMedium},
+	} {
+		if !profileSelectable(profile, harnesses) {
+			t.Fatalf("selectable profile rejected: %+v", profile)
+		}
+	}
+	for _, profile := range []domain.AnalysisProfile{
+		{Harness: domain.HarnessClaude, Model: "model with spaces", Reasoning: domain.ReasoningMedium},
+		{Harness: domain.HarnessClaude, Model: "claude-fable-5[1m]", Reasoning: domain.ReasoningHigh},
+	} {
+		if profileSelectable(profile, harnesses) {
+			t.Fatalf("invalid profile accepted: %+v", profile)
+		}
+	}
+}
+
 type bootstrapRefreshRunner struct{ refreshed bool }
 
 type bootstrapConcurrentRunner struct {

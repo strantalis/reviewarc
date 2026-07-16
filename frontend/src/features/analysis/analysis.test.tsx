@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import {
-  AIAnalysisSettings, AnalysisFailurePanel, AnalysisProgress, AnalysisRunDetails, NoHarnessState, recommendedProfile,
+  AIAnalysisSettings, AnalysisFailurePanel, AnalysisProgress, AnalysisRunDetails, NoHarnessState, analysisProfileReady, recommendedProfile,
 } from './analysis'
 import type { AnalysisConfiguration, AnalysisRun } from '../../types'
 
@@ -13,6 +13,21 @@ const configuration: AnalysisConfiguration = {
       {id: 'gpt-5', label: 'GPT-5', recommended: true, reasoningLevels: [{id: 'medium', label: 'Medium', recommended: true}, {id: 'high', label: 'High'}]},
       {id: 'gpt-5-mini', label: 'GPT-5 mini', reasoningLevels: [{id: 'low', label: 'Low'}]},
     ],
+  }],
+}
+
+const claudeConfiguration: AnalysisConfiguration = {
+  defaultProfile: {harness: 'claude', model: 'claude-fable-5[1m]', reasoning: 'medium'},
+  harnesses: [{
+    id: 'claude', label: 'Claude Code', availability: 'available', eligible: true, version: '2.1.211',
+    capabilities: {jsonSchema: true, readOnly: true, progress: true, contextTransport: ['reviewarcTools']},
+    models: [
+      {id: 'default', label: 'Claude Code default', recommended: true, reasoningLevels: [{id: 'medium', label: 'Medium', recommended: true}, {id: 'high', label: 'High'}]},
+      {id: 'fable', label: 'Fable', reasoningLevels: [{id: 'medium', label: 'Medium', recommended: true}, {id: 'high', label: 'High'}]},
+      {id: 'sonnet', label: 'Sonnet', reasoningLevels: [{id: 'medium', label: 'Medium', recommended: true}, {id: 'high', label: 'High'}]},
+      {id: 'opus', label: 'Opus', reasoningLevels: [{id: 'medium', label: 'Medium'}, {id: 'high', label: 'High', recommended: true}]},
+    ],
+    customModel: {id: '', label: 'Custom model ID', reasoningLevels: [{id: 'medium', label: 'Medium', recommended: true}, {id: 'high', label: 'High'}]},
   }],
 }
 
@@ -44,6 +59,27 @@ describe('analysis configuration components', () => {
     fireEvent.click(screen.getByRole('button', {name: 'Save defaults'}))
     await waitFor(() => expect(onSave).toHaveBeenCalledWith({harness: 'codex', model: 'gpt-5', reasoning: 'medium'}))
     expect(await screen.findByRole('status')).toHaveTextContent('Defaults saved.')
+  })
+
+  it('restores and validates a custom Claude model without adding permanent settings', async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined)
+    render(<AIAnalysisSettings configuration={claudeConfiguration} onRefresh={vi.fn()} onSave={onSave}/>)
+    expect(screen.getByRole('combobox', {name: 'Analysis model'})).toHaveTextContent('Custom model ID')
+    const input = screen.getByRole('textbox', {name: 'Custom model ID'})
+    expect(input).toHaveValue('claude-fable-5[1m]')
+    fireEvent.change(input, {target: {value: 'model with spaces'}})
+    expect(screen.getByRole('button', {name: 'Save defaults'})).toBeDisabled()
+    fireEvent.change(input, {target: {value: 'provider/claude-custom-v2'}})
+    expect(screen.getByRole('button', {name: 'Save defaults'})).toBeEnabled()
+    fireEvent.click(screen.getByRole('button', {name: 'Save defaults'}))
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith({harness: 'claude', model: 'provider/claude-custom-v2', reasoning: 'medium'}))
+  })
+
+  it('accepts Claude defaults and exact custom IDs but rejects incomplete custom profiles', () => {
+    expect(analysisProfileReady(claudeConfiguration, {harness: 'claude', model: 'default', reasoning: 'medium'})).toBe(true)
+    expect(analysisProfileReady(claudeConfiguration, {harness: 'claude', model: 'claude-fable-5[1m]', reasoning: 'high'})).toBe(true)
+    expect(analysisProfileReady(claudeConfiguration, {harness: 'claude', model: '', reasoning: 'medium'})).toBe(false)
+    expect(analysisProfileReady(claudeConfiguration, {harness: 'claude', model: '-flag', reasoning: 'medium'})).toBe(false)
   })
 
   it('does not show a fallback harness while settings are still loading', () => {

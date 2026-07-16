@@ -85,6 +85,7 @@ type HarnessCapabilities struct {
 	State                HarnessState       `json:"state"`
 	Message              string             `json:"message,omitempty"`
 	Models               []ModelCapability  `json:"models"`
+	CustomModel          *ModelCapability   `json:"customModel,omitempty"`
 	DefaultModel         string             `json:"defaultModel,omitempty"`
 	ContextTransports    []ContextTransport `json:"contextTransports"`
 	SupportsJSONSchema   bool               `json:"supportsJsonSchema"`
