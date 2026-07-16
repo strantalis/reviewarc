@@ -74,6 +74,22 @@ describe('analysis configuration components', () => {
     expect(screen.getByRole('progressbar', {name: 'Analyzing the change'})).toHaveAttribute('aria-valuenow', '42')
   })
 
+  it('shows one active indicator and consolidates repeated progress phases', () => {
+    const {container} = render(<AnalysisProgress running events={[
+      {stage: 'loadingPullRequestContext', message: 'Loading GitHub discussion and checks', status: 'running'},
+      {stage: 'preparingSnapshot', message: 'Preparing isolated repository snapshot', status: 'running'},
+      {stage: 'preparingContext', message: 'Preparing bounded review context', status: 'running'},
+      {stage: 'runningCodex', message: 'Starting read-only analysis', status: 'running'},
+      {stage: 'runningCodex', message: 'Reading src/greet.go lines 10–24', status: 'running'},
+    ]} onCancel={vi.fn()}/>)
+    expect(container.querySelectorAll('.event-row')).toHaveLength(3)
+    expect(container.querySelectorAll('.event-row .spin')).toHaveLength(1)
+    expect(container.querySelectorAll('.event-row.complete')).toHaveLength(2)
+    expect(screen.getAllByText('Preparing review context', {selector: 'strong'})).toHaveLength(1)
+    expect(screen.getAllByText('Analyzing the change', {selector: 'strong'})).toHaveLength(1)
+    expect(screen.getByText('Reading src/greet.go lines 10–24')).toBeInTheDocument()
+  })
+
   it('explains that missing harnesses do not block the rest of ReviewArc', () => {
     const onRefresh = vi.fn()
     render(<NoHarnessState configuration={{harnesses: []}} onRefresh={onRefresh}/>)

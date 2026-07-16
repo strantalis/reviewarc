@@ -99,12 +99,20 @@ export function AnalysisProgress({events, running, reanalysis = false, onCancel}
   const current = events.at(-1)
   const currentCopy = current ? (stageCopy[current.stage] ?? {label: 'Analysis in progress', detail: 'ReviewArc is processing the change.'}) : undefined
   const liveStatus = current && currentCopy ? `${currentCopy.label}: ${current.message || currentCopy.detail}` : 'Starting analysis'
+  const steps = events.reduce<Array<{event: OperationEvent; copy: {label: string; detail: string}}>>((result, event) => {
+    const copy = stageCopy[event.stage] ?? {label: event.status === 'failed' ? 'Analysis stopped' : 'Analysis in progress', detail: event.status === 'failed' ? 'ReviewArc could not complete this step.' : 'ReviewArc is processing the change.'}
+    const existing = result.findIndex((step) => step.copy.label === copy.label)
+    if (existing >= 0) result[existing] = {event, copy}
+    else result.push({event, copy})
+    return result
+  }, [])
   return <div className="analysis-events" aria-busy={running}>
     <div className="event-heading"><strong>{running ? (reanalysis ? 'Reanalysis progress' : 'Analysis progress') : 'What happens next'}</strong>{running && <button className="button text small" onClick={onCancel}>Cancel</button>}</div>
     <div className="analysis-live-status" role="status" aria-live="polite">{running ? liveStatus : 'Ready to analyze'}</div>
-    {!events.length ? <div className="event-placeholder"><CircleHelp size={17}/><p>{running ? 'Preparing the read-only analysis context…' : 'ReviewArc prepares a bounded context, validates the structured result, checks evidence, and saves the guided review.'}</p></div> : <ol className="event-list">{events.map((event, index) => {
-      const copy = stageCopy[event.stage] ?? {label: event.status === 'failed' ? 'Analysis stopped' : 'Analysis in progress', detail: event.status === 'failed' ? 'ReviewArc could not complete this step.' : 'ReviewArc is processing the change.'}
-      return <li className="event-row" key={`${event.stage}-${index}`}><span className={event.status ?? 'running'}>{event.status === 'complete' ? <Check size={13}/> : event.status === 'failed' ? <X size={13}/> : <LoaderCircle className="spin" size={13}/>}</span><div><strong>{copy.label}</strong><small>{event.message || copy.detail}</small></div>{event.progress != null && <em role="progressbar" aria-label={copy.label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(event.progress)}>{Math.round(event.progress)}%</em>}</li>
+    {!steps.length ? <div className="event-placeholder"><CircleHelp size={17}/><p>{running ? 'Preparing the read-only analysis context…' : 'ReviewArc prepares a bounded context, validates the structured result, checks evidence, and saves the guided review.'}</p></div> : <ol className="event-list">{steps.map(({event, copy}, index) => {
+      const currentStep = index === steps.length - 1
+      const status = event.status === 'failed' ? 'failed' : currentStep && running && event.status !== 'complete' ? 'running' : 'complete'
+      return <li className={`event-row ${status}`} key={copy.label}><span className={status}>{status === 'complete' ? <Check size={13}/> : status === 'failed' ? <X size={13}/> : <LoaderCircle className="spin" size={13}/>}</span><div><strong>{copy.label}</strong><small>{event.message || copy.detail}</small></div>{status === 'running' && event.progress != null && <em role="progressbar" aria-label={copy.label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(event.progress)}>{Math.round(event.progress)}%</em>}</li>
     })}</ol>}
   </div>
 }
