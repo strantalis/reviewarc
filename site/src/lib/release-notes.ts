@@ -57,6 +57,15 @@ const releaseNotes: Record<string, PublicReleaseNotes> = {
       "Stricter frontend and Go linting, expanded tests, and internal maintainability work catch regressions earlier.",
     ],
   },
+  "0.1.0-beta.12": {
+    summary: "Repository source discovery now reaches every repository you can access, and releases carry a verifiable software inventory.",
+    changes: [
+      "Search personal, organization, and collaborator repositories beyond the first GitHub results page, then load additional matches without losing your current selections.",
+      "Refresh repository access from the source picker to discover newly granted access without restarting ReviewArc.",
+      "Every signed macOS release now includes an SPDX 2.3 SBOM and checksum bound to the exact notarized DMG.",
+      "Stricter frontend and Go linting, expanded tests, and internal maintainability work catch regressions earlier.",
+    ],
+  },
 };
 
 export function releaseNotesFor(version: string): PublicReleaseNotes | null {
