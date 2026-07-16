@@ -6,11 +6,13 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "lint": "oxlint src scripts vite.config.ts",
+    "lint:fix": "oxlint --fix src scripts vite.config.ts",
     "normalize:bindings": "node scripts/normalize-wails-bindings.mjs",
     "wails:dev": "npm run dev",
     "wails:build": "npm run normalize:bindings && npm run build",
     "test": "vitest run",
-    "check": "npm run test && npm run build"
+    "check": "npm run lint && npm run test && npm run build"
   },
   "dependencies": {
     "@pierre/diffs": "1.2.12",
@@ -27,6 +29,8 @@
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
     "jsdom": "29.1.1",
+    "oxlint": "1.74.0",
+    "oxlint-tsgolint": "0.24.0",
     "typescript": "7.0.2",
     "vitest": "4.1.10"
   }

@@ -13,6 +13,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  go-lint:
+    name: Lint Go
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Run GolangCI-Lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
+        with:
+          version-file: .golangci-lint-version
+
   verify:
     name: Test and build macOS app
     runs-on: macos-15
@@ -45,6 +65,14 @@ jobs:
         working-directory: frontend
         run: npm run check
 
+      - name: Check Go formatting
+        run: |
+          unformatted="$(git ls-files '*.go' | xargs gofmt -l)"
+          if [[ -n "$unformatted" ]]; then
+            echo "$unformatted"
+            exit 1
+          fi
+
       - name: Install documentation site dependencies
         working-directory: site
         run: npm ci
@@ -62,6 +90,11 @@ jobs:
         run: |
           scripts/release/test_release.sh
           node scripts/release/test_semver.mjs
+
+      - name: Verify third-party notices
+        run: |
+          build/darwin/updater/fetch_sparkle.sh
+          node scripts/release/generate_third_party_notices.mjs --check
 
       - name: Build ReviewArc
         run: go run github.com/wailsapp/wails/v2/cmd/wails@v2.13.0 build

@@ -1,0 +1,32 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "deny",
+    "suspicious": "deny",
+    "perf": "deny"
+  },
+  "env": {
+    "astro": true,
+    "browser": true,
+    "node": true,
+    "vitest": true
+  },
+  "ignorePatterns": [".astro/**", ".vercel/**", "dist/**", "coverage/**"],
+  "options": {
+    "denyWarnings": true,
+    "reportUnusedDisableDirectives": "deny"
+  },
+  "plugins": ["eslint", "typescript", "unicorn", "oxc", "import", "vitest", "jsx-a11y", "promise", "node"],
+  "rules": {
+    "eslint/eqeqeq": "error",
+    "eslint/no-await-in-loop": "off",
+    "eslint/no-console": ["error", { "allow": ["warn", "error"] }],
+    "import/no-unassigned-import": "off",
+    "promise/always-return": "off",
+    "typescript/no-explicit-any": "error",
+    "unicorn/consistent-function-scoping": "off",
+    "unicorn/no-array-sort": "off",
+    "vitest/require-to-throw-message": "off",
+    "vitest/require-mock-type-parameters": "off"
+  }
+}
