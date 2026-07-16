@@ -696,6 +696,8 @@ func classifyAuth(stderr []byte, cause error) error {
 		return &AuthError{Kind: AuthRequired, Message: "Sign in with gh auth login to use GitHub."}
 	case strings.Contains(message, "403"), strings.Contains(message, "forbidden"):
 		return &AuthError{Kind: AuthForbidden, Message: "GitHub denied access to this resource."}
+	case strings.Contains(message, "http 500"), strings.Contains(message, "http 502"), strings.Contains(message, "http 503"), strings.Contains(message, "http 504"):
+		return &AuthError{Kind: AuthNetwork, Message: "GitHub is temporarily unavailable. Try again in a moment."}
 	case strings.Contains(message, "could not resolve"), strings.Contains(message, "connection"), strings.Contains(message, "network"):
 		return &AuthError{Kind: AuthNetwork, Message: "GitHub is unreachable. Check the network and try again."}
 	default:

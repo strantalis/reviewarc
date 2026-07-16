@@ -40,9 +40,10 @@ type AccountState struct {
 	Message string             `json:"message,omitempty"`
 }
 type SourceState struct {
-	Organizations []domain.Organization    `json:"organizations"`
-	Repositories  []domain.Repository      `json:"repositories"`
-	Selections    []domain.SourceSelection `json:"selections"`
+	Organizations     []domain.Organization    `json:"organizations"`
+	Repositories      []domain.Repository      `json:"repositories"`
+	Selections        []domain.SourceSelection `json:"selections"`
+	OrganizationError string                   `json:"organizationError,omitempty"`
 }
 type RepositoryPage struct {
 	Items           []domain.Repository `json:"items"`
@@ -475,9 +476,16 @@ func (a *App) RefreshAccount() AccountState {
 }
 func (a *App) ListSources() (SourceState, error) {
 	ctx := a.appContext()
+	organizationError := ""
 	orgs, err := a.github.ListOrganizations(ctx)
 	if err != nil {
-		return SourceState{}, err
+		var auth *githubclient.AuthError
+		if errors.As(err, &auth) {
+			organizationError = auth.Message
+		} else {
+			organizationError = "GitHub organizations could not be loaded. Try again in a moment."
+		}
+		orgs = []domain.Organization{}
 	}
 	for i := range orgs {
 		orgs[i].AccessStatus = githubclient.OrganizationAccessUnknown
@@ -500,7 +508,7 @@ func (a *App) ListSources() (SourceState, error) {
 	if selections == nil {
 		selections = []domain.SourceSelection{}
 	}
-	return SourceState{Organizations: orgs, Repositories: repos, Selections: selections}, nil
+	return SourceState{Organizations: orgs, Repositories: repos, Selections: selections, OrganizationError: organizationError}, nil
 }
 func (a *App) RefreshSourceAccess(organizations []domain.Organization) []domain.Organization {
 	return a.github.CheckOrganizationAccess(a.appContext(), organizations)

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Check, ExternalLink, Globe2, ListChecks, LoaderCircle, RefreshCw, Search, ShieldCheck } from 'lucide-react'
+import { AlertTriangle, Check, ExternalLink, Globe2, ListChecks, LoaderCircle, RefreshCw, Search, ShieldCheck } from 'lucide-react'
 import { backend } from '../../bridge'
 import { ErrorBanner } from '../../components'
 import { errorText } from '../../errors'
@@ -18,25 +18,28 @@ function OrganizationSourceRow({org, count, active, checked, onFilter, onToggle}
 }
 
 export function SourceSelector({state, onDone}: {state: BootstrapState; onDone: () => Promise<void>}) {
+  const initialScope = state.selections.some((selection) => selection.enabled) ? includedScope : accessibleScope
   const [catalog, setCatalog] = useState<SourceState>()
   const [selected, setSelected] = useState<Set<string>>(new Set(state.selections.filter((x) => x.enabled).map((x) => `${x.kind}:${x.key}`)))
   const [query, setQuery] = useState('')
-  const [scope, setScope] = useState(accessibleScope)
+  const [scope, setScope] = useState(initialScope)
   const [page, setPage] = useState<RepositoryPage>()
   const [browsePage, setBrowsePage] = useState<RepositoryPage>()
   const [ownerCounts, setOwnerCounts] = useState<Record<string, number>>({})
   const [sync, setSync] = useState({running: false, processed: 0, total: 0})
   const [busy, setBusy] = useState(false)
   const [accessBusy, setAccessBusy] = useState(false)
-  const [pageBusy, setPageBusy] = useState(true)
+  const [pageBusy, setPageBusy] = useState(initialScope === accessibleScope)
   const [error, setError] = useState('')
+	const [organizationError, setOrganizationError] = useState('')
+	const [organizationBusy, setOrganizationBusy] = useState(false)
   const ownerRequest = useRef(0)
   const searchRequest = useRef(0)
   const syncRequest = useRef(0)
   const searchMounted = useRef(false)
   const previousSearch = useRef('')
   const queryRef = useRef('')
-  const scopeRef = useRef(accessibleScope)
+  const scopeRef = useRef(initialScope)
   queryRef.current = query
   scopeRef.current = scope
   const selectedOrganization = catalog?.organizations.find((org) => org.login.toLowerCase() === scope.toLowerCase())
@@ -107,12 +110,27 @@ export function SourceSelector({state, onDone}: {state: BootstrapState; onDone: 
     try {
       const next = await backend.listSources()
       setCatalog(next)
-      void refreshOrganizationAccess(next.organizations).catch((err) => setError(errorText(err)))
+	  setOrganizationError(next.organizationError ?? '')
+	  if (!next.organizationError) void refreshOrganizationAccess(next.organizations).catch((err) => setError(errorText(err)))
       void refreshSelectedRepositories()
     } catch (err) { setError(errorText(err)) }
   }
+  const retryOrganizations = async () => {
+    setOrganizationBusy(true)
+    try {
+      const next = await backend.listSources()
+      setCatalog((current) => current ? {...current, organizations: next.organizations, organizationError: next.organizationError} : next)
+      setOrganizationError(next.organizationError ?? '')
+      if (!next.organizationError) await refreshOrganizationAccess(next.organizations)
+    } catch (err) {
+      setOrganizationError(errorText(err))
+    } finally {
+      setOrganizationBusy(false)
+    }
+  }
   useEffect(() => {
     void loadCatalog()
+    if (scopeRef.current !== accessibleScope) return undefined
     const initializeAccessible = async () => {
       try {
         const initial = await loadAccessible('')
@@ -120,6 +138,7 @@ export function SourceSelector({state, onDone}: {state: BootstrapState; onDone: 
       } catch (err) { setPageBusy(false); setError(errorText(err)) }
     }
     void initializeAccessible()
+    return undefined
     // The catalog refresh intentionally continues if the user leaves this screen.
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -268,13 +287,14 @@ export function SourceSelector({state, onDone}: {state: BootstrapState; onDone: 
       <aside>
         <div className="source-section-heading"><h2>Repository scope</h2></div>
         <div className="source-scope-choices">
-          <button className={`source-scope-row${scope === accessibleScope ? ' active' : ''}`} aria-pressed={scope === accessibleScope} onClick={() => selectStaticScope(accessibleScope)}><span><Globe2 size={15}/></span><span><b>All accessible</b><small>Owned, collaborator, and organization repositories</small></span>{page && scope === accessibleScope ? <em>{page.totalCount}</em> : null}</button>
-          <button className={`source-scope-row${scope === includedScope ? ' active' : ''}`} aria-pressed={scope === includedScope} onClick={() => selectStaticScope(includedScope)}><span><ListChecks size={15}/></span><span><b>Included sources</b><small>Your current inbox scope</small></span><em>{selected.size}</em></button>
+          <button className={`source-scope-row${scope === accessibleScope ? ' active' : ''}`} aria-label="All accessible repositories" aria-pressed={scope === accessibleScope} onClick={() => selectStaticScope(accessibleScope)}><span><Globe2 size={15}/></span><b>All accessible</b>{page && scope === accessibleScope ? <em>{page.totalCount}</em> : null}</button>
+          <button className={`source-scope-row${scope === includedScope ? ' active' : ''}`} aria-label="Included sources" aria-pressed={scope === includedScope} onClick={() => selectStaticScope(includedScope)}><span><ListChecks size={15}/></span><b>Included sources</b><em>{selected.size}</em></button>
         </div>
         <div className="source-section-heading source-owner-heading"><h2>Repository owners</h2></div>
         <div className="organization-choices">
           {personalLogin && <><p className="source-group-label">Personal account</p><div className={`source-org-row personal${personalSelected ? ' active' : ''}`}><button className="org-focus" aria-label={`Show personal repositories from ${personalLogin}`} aria-pressed={personalSelected} onClick={() => void loadOwner(personalLogin)}>{state.account?.avatarUrl ? <img src={state.account.avatarUrl} alt=""/> : <span className="org-avatar">{personalLogin.slice(0, 1).toUpperCase()}</span>}<span><b>{personalLogin}</b><small>{personalCount === undefined ? 'Open to load repositories' : `${personalCount} personal ${personalCount === 1 ? 'repository' : 'repositories'}`}</small></span></button></div></>}
           <p className="source-group-label">Organizations</p>
+		  {organizationError && <div className="owner-warning" role="status"><AlertTriangle size={14}/><div><strong>Owners unavailable</strong><small>{organizationError} Saved sources still work.</small></div><button className="button text small owner-warning-retry" aria-label="Retry loading owners" title="Retry loading owners" disabled={organizationBusy} onClick={() => void retryOrganizations()}>{organizationBusy ? <LoaderCircle className="spin" size={14}/> : <RefreshCw size={14}/>}</button></div>}
           {catalog?.organizations.map((org) => {
             const key = `organization:${org.login}`
             const blocked = org.accessStatus === 'ssoRequired' || org.accessStatus === 'denied'

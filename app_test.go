@@ -266,6 +266,36 @@ func TestSelectedRepositoriesExcludeArchivedCachedRows(t *testing.T) {
 	}
 }
 
+func TestListSourcesKeepsCachedSelectionsWhenOrganizationDiscoveryFails(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	selection := domain.SourceSelection{Kind: domain.SelectionRepository, Key: "acme/api", Enabled: true}
+	repository := domain.Repository{Ref: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}}
+	if err := store.ReplaceSelections(ctx, []domain.SourceSelection{selection}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertRepositories(ctx, []domain.Repository{repository}); err != nil {
+		t.Fatal(err)
+	}
+	runner := &appFixtureRunner{results: []proc.Result{{Stderr: []byte("gh: HTTP 503")}}, errors: []error{errors.New("exit 1")}}
+	app := &App{ctx: ctx, github: githubclient.New(runner), store: store}
+
+	state, err := app.ListSources()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Organizations) != 0 || !reflect.DeepEqual(state.Selections, []domain.SourceSelection{selection}) || len(state.Repositories) != 1 {
+		t.Fatalf("state=%+v", state)
+	}
+	if state.OrganizationError != "GitHub is temporarily unavailable. Try again in a moment." {
+		t.Fatalf("organization error=%q", state.OrganizationError)
+	}
+}
+
 func TestRefreshSelectedRepositoriesDetectsArchiveTransition(t *testing.T) {
 	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
 	if err != nil {

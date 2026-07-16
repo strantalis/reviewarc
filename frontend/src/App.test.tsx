@@ -577,7 +577,7 @@ describe('Repository sources', () => {
     const state: BootstrapState = {dependencies: [], paths, account: {login: 'sean', name: 'Sean', avatarUrl: ''}, selections: [{kind: 'organization', key: 'acme', enabled: true}, {kind: 'repository', key: 'sean/reviewarc', enabled: true}], inbox: []}
     window.go = {main: {App: {ListSources: vi.fn(() => new Promise(() => {})), ...accessibleSourceMethods()}}}
     render(<SourceSelector state={state} onDone={vi.fn()}/>)
-    fireEvent.click(screen.getByRole('button', {name: /Included sources/}))
+    expect(screen.getByRole('button', {name: 'Included sources'})).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('heading', {name: 'Included sources'})).toBeInTheDocument()
     expect(screen.getByText('2 sources included')).toBeInTheDocument()
     expect(screen.getByText('Every active repository in this organization')).toBeInTheDocument()
@@ -593,6 +593,19 @@ describe('Repository sources', () => {
     expect(search).toHaveAttribute('autocorrect', 'off')
     expect(search).toHaveAttribute('spellcheck', 'false')
   })
+
+	it('keeps saved sources usable when GitHub owner discovery is unavailable', async () => {
+	  const state: BootstrapState = {dependencies: [], paths, account: {login: 'sean', name: 'Sean', avatarUrl: ''}, selections: [{kind: 'repository', key: 'sean/reviewarc', enabled: true}], inbox: []}
+	  const listSources = vi.fn().mockResolvedValue({organizations: [], repositories: [{ref: {host: 'github.com', owner: 'sean', name: 'reviewarc', cloneUrl: '', databaseId: '1'}, description: '', isPrivate: true, isArchived: false, updatedAt: '2026-07-12T00:00:00Z'}], selections: state.selections, organizationError: 'GitHub is temporarily unavailable. Try again in a moment.'})
+	  window.go = {main: {App: {ListSources: listSources, RefreshSelectedRepositories: vi.fn().mockResolvedValue({repositories: [], archivedKeys: [], errors: {}}), ...accessibleSourceMethods()}}}
+	  render(<SourceSelector state={state} onDone={vi.fn()}/>)
+	  expect(await screen.findByText('Owners unavailable')).toBeInTheDocument()
+	  expect(screen.getByText(/Saved sources still work/)).toBeInTheDocument()
+	  expect(screen.queryByText('Something went wrong')).not.toBeInTheDocument()
+	  expect(screen.getByText('sean/reviewarc')).toBeInTheDocument()
+	  fireEvent.click(screen.getByRole('button', {name: 'Retry loading owners'}))
+	  await waitFor(() => expect(listSources).toHaveBeenCalledTimes(2))
+	})
 
   it('keeps loaded included repositories removable instead of rendering selection checkboxes', async () => {
     const state: BootstrapState = {dependencies: [], paths, account: {login: 'sean', name: 'Sean', avatarUrl: ''}, selections: [{kind: 'repository', key: 'sean/reviewarc', enabled: true}], inbox: []}

@@ -130,6 +130,7 @@ func TestCurrentUserClassifiesAuthenticationFailures(t *testing.T) {
 		{name: "required", stderr: "not logged into any GitHub hosts", want: AuthRequired},
 		{name: "expired", stderr: "HTTP 401: Bad credentials", want: AuthExpired},
 		{name: "forbidden", stderr: "HTTP 403: Forbidden", want: AuthForbidden},
+		{name: "service unavailable", stderr: "gh: HTTP 503", want: AuthNetwork},
 		{name: "network", stderr: "could not resolve host github.com", want: AuthNetwork},
 		{name: "unknown", stderr: "unexpected gh failure", want: AuthUnavailable},
 	}
@@ -142,6 +143,15 @@ func TestCurrentUserClassifiesAuthenticationFailures(t *testing.T) {
 				t.Fatalf("error=%v, want kind %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestCurrentUserExplainsTemporaryGitHubOutage(t *testing.T) {
+	f := &fakeRunner{responses: []proc.Result{{Stderr: []byte("gh: HTTP 503")}}, errors: []error{errors.New("exit 1")}}
+	_, err := New(f).CurrentUser(context.Background())
+	var auth *AuthError
+	if !errors.As(err, &auth) || auth.Message != "GitHub is temporarily unavailable. Try again in a moment." {
+		t.Fatalf("error=%v", err)
 	}
 }
 
