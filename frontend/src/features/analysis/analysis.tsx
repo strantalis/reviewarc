@@ -164,17 +164,26 @@ export function NoHarnessState({configuration, onRefresh, onOpenSettings}: {conf
   return <div className="no-harness-state"><span><AlertTriangle size={20}/></span><div><h3>No compatible AI harness found</h3><p>Install or update a supported harness, then check again. Your inbox and existing reviews remain available.</p><div className="no-harness-actions"><button className="button secondary" onClick={onRefresh}><RefreshCw size={14}/>Check again</button>{onOpenSettings && <button className="button text" onClick={onOpenSettings}><Settings size={14}/>Open AI Analysis settings</button>}</div>{unavailable.length > 0 && <details><summary>Why isn’t my harness available?</summary>{unavailable.map((harness) => <p key={harness.id}><strong>{harness.label}:</strong> {harness.message || 'This harness does not meet ReviewArc’s structured-output and read-only requirements.'}</p>)}</details>}</div></div>
 }
 
-export function AnalysisRunDetails({run, configuration}: {run: AnalysisRun; configuration?: AnalysisConfiguration}) {
+export function AnalysisRunDetails({run, configuration, open, onOpenChange}: {run: AnalysisRun; configuration?: AnalysisConfiguration; open?: boolean; onOpenChange?: (open: boolean) => void}) {
   const labels = configuration ? profileLabels(configuration, run.profile) : {harness: run.profile.harness, model: run.profile.model, reasoning: run.profile.reasoning}
   const breakdown = analysisCoverageBreakdown(run.coverage)
   const coverage = `${breakdown.total} changed files · ${breakdown.parts.join(' · ')}`
   const completed = run.completedAt ? new Date(run.completedAt).toLocaleString() : 'In progress'
-  return <details className="support-disclosure analysis-run-details"><summary><span><ShieldCheck size={16}/>Analysis details</span><small>{labels.harness} · {labels.model} · {labels.reasoning}</small></summary><div className="support-content"><dl>
+  const sourceReads = (path: string) => run.coverage.accesses.filter((access) => access.kind === 'read_file' && access.path === path).length
+  const coveragePaths = (paths: string[], kind: 'previewed' | 'unseen' | 'legacy') => <section className="analysis-coverage-files" aria-label={kind === 'previewed' ? 'Files previewed without a full diff read' : 'Files not fully inspected'}>
+    <header><strong>{paths.length} {kind === 'previewed' ? `file${paths.length === 1 ? '' : 's'} previewed only` : kind === 'unseen' ? `file${paths.length === 1 ? '' : 's'} not inspected` : `file${paths.length === 1 ? '' : 's'} not fully read`}</strong><small>{kind === 'previewed' ? 'Full diff not read' : 'Coverage gap'}</small></header>
+    {kind === 'previewed' && <p>The harness saw a bounded sample from each diff but did not request the complete diff. ReviewArc does not receive a file-specific skip reason.</p>}
+    <ul>{paths.map((path) => {
+      const reads = sourceReads(path)
+      return <li key={path}><code title={path}>{path}</code>{kind === 'previewed' && <small>{reads ? `${reads} source range${reads === 1 ? '' : 's'} opened separately` : 'Bounded diff sample only'}</small>}</li>
+    })}</ul>
+  </section>
+  return <details id="analysis-run-details" className="support-disclosure analysis-run-details" open={open} onToggle={(event) => onOpenChange?.(event.currentTarget.open)}><summary><span><ShieldCheck size={16}/>Analysis details</span><small>{labels.harness} · {labels.model} · {labels.reasoning}</small></summary><div className="support-content"><dl>
     <div><dt>Harness</dt><dd>{labels.harness}{run.harnessVersion ? ` ${run.harnessVersion}` : ''}</dd></div>
     <div><dt>Model</dt><dd>{labels.model}</dd></div><div><dt>Reasoning</dt><dd>{labels.reasoning}</dd></div>
     <div><dt>Schema</dt><dd>Version {run.schemaVersion}</dd></div>
     <div><dt>Coverage</dt><dd>{coverage}</dd></div><div><dt>Completed</dt><dd>{completed}</dd></div>
-  </dl>{run.coverage.previewedPaths?.length ? <details><summary>Previewed without a full diff read</summary><ul>{run.coverage.previewedPaths.map((path) => <li key={path}><code title={path}>{path}</code></li>)}</ul></details> : null}{run.coverage.unseenPaths?.length ? <details><summary>Not inspected</summary><ul>{run.coverage.unseenPaths.map((path) => <li key={path}><code title={path}>{path}</code></li>)}</ul></details> : null}{!run.coverage.previewedPaths && !run.coverage.unseenPaths && run.coverage.omittedPaths.length ? <details><summary>Not fully read</summary><ul>{run.coverage.omittedPaths.map((path) => <li key={path}><code title={path}>{path}</code></li>)}</ul></details> : null}</div></details>
+  </dl>{run.coverage.previewedPaths?.length ? coveragePaths(run.coverage.previewedPaths, 'previewed') : null}{run.coverage.unseenPaths?.length ? coveragePaths(run.coverage.unseenPaths, 'unseen') : null}{!run.coverage.previewedPaths && !run.coverage.unseenPaths && run.coverage.omittedPaths.length ? coveragePaths(run.coverage.omittedPaths, 'legacy') : null}</div></details>
 }
 
 export function analysisCoverageBreakdown(coverage: AnalysisCoverage) {

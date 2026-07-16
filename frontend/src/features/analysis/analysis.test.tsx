@@ -147,4 +147,16 @@ describe('analysis provenance', () => {
     expect(screen.getByText(/22 changed files · 18 fully read · 4 partially read/)).toBeInTheDocument()
     expect(screen.getByText('large.generated.ts')).toBeInTheDocument()
   })
+
+  it('explains preview-only files and reports separate source reads', () => {
+    const run: AnalysisRun = {
+      id: 'run-preview', sessionId: 'session-1', profile: {harness: 'claude', model: 'sonnet', reasoning: 'medium'}, contextTransport: 'reviewarcTools', schemaVersion: 1, inputFingerprint: 'fixture',
+      coverage: {changedFilesTotal: 3, diffFilesFullyRead: 1, diffFilesPartiallyRead: 0, diffFilesPreviewed: 2, diffFilesUnseen: 0, diffFilesUnread: 2, diffBytesTotal: 1200, diffBytesRead: 500, segments: 1, omittedPaths: ['README.md', 'examples/tool/main.go'], previewedPaths: ['README.md', 'examples/tool/main.go'], unseenPaths: [], accesses: [{kind: 'read_file', path: 'examples/tool/main.go', revision: 'head', startLine: 1, endLine: 30, bytes: 900, at: '2026-07-15T12:00:30Z'}]},
+      startedAt: '2026-07-15T12:00:00Z', completedAt: '2026-07-15T12:04:00Z', updatedAt: '2026-07-15T12:04:00Z', status: 'completed',
+    }
+    render(<AnalysisRunDetails run={run} configuration={configuration} open/>)
+    expect(screen.getByText(/bounded sample from each diff/)).toHaveTextContent('does not receive a file-specific skip reason')
+    expect(screen.getByText('README.md').nextSibling).toHaveTextContent('Bounded diff sample only')
+    expect(screen.getByText('examples/tool/main.go').nextSibling).toHaveTextContent('1 source range opened separately')
+  })
 })

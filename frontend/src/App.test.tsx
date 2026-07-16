@@ -762,9 +762,13 @@ describe('Reanalysis state', () => {
 
     const banner = screen.getByText('All 21 changed files were inspected.').closest('.analysis-coverage-warning')
     expect(banner).toHaveTextContent('18 fully read · 3 previewed')
-    expect(banner).toHaveTextContent('bounded previews')
+    expect(banner).toHaveTextContent('Previewed files were triaged')
     expect(screen.queryByText(/Full diffs were available/)).not.toBeInTheDocument()
-    expect(screen.getByRole('link', {name: 'View coverage'})).toHaveAttribute('href', '#analysis-run-details')
+    const coverageDetails = screen.getByText('Analysis details').closest('details')
+    expect(coverageDetails).not.toHaveAttribute('open')
+    fireEvent.click(screen.getByRole('button', {name: 'Review 3 previewed files'}))
+    expect(coverageDetails).toHaveAttribute('open')
+    expect(screen.getByText('3 files previewed only')).toBeInTheDocument()
   })
 
   it('warns when changed files were never inventoried', () => {
@@ -780,6 +784,8 @@ describe('Reanalysis state', () => {
     const banner = screen.getByText('2 changed files were not inspected.').closest('.warning-banner')
     expect(banner).toHaveTextContent('15 fully read · 1 partially read · 3 previewed · 2 unseen')
     expect(banner).toHaveTextContent('Findings may not cover the unseen changes')
+    fireEvent.click(screen.getByRole('button', {name: 'Review 2 unseen files'}))
+    expect(screen.getByText('2 files not inspected')).toBeInTheDocument()
   })
 })
 
