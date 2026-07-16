@@ -21,14 +21,15 @@ var allowedContextTools = map[string]bool{
 // provider tool events. The MCP server enforces the actual limits; this tracker
 // never grants authority and deliberately under-counts malformed event data.
 type AccessTracker struct {
-	manifest analysisbundle.Manifest
-	accesses []domain.ContextAccess
-	diffs    map[string][][2]int
-	seen     map[string]bool
+	manifest    analysisbundle.Manifest
+	accesses    []domain.ContextAccess
+	diffs       map[string][][2]int
+	seen        map[string]bool
+	inventoried map[string]bool
 }
 
 func NewAccessTracker(manifest analysisbundle.Manifest) *AccessTracker {
-	return &AccessTracker{manifest: manifest, diffs: map[string][][2]int{}, seen: map[string]bool{}}
+	return &AccessTracker{manifest: manifest, diffs: map[string][][2]int{}, seen: map[string]bool{}, inventoried: map[string]bool{}}
 }
 
 func IsAllowedContextTool(name string) bool { return allowedContextTools[name] }
@@ -104,6 +105,19 @@ func (t *AccessTracker) Record(tool string, arguments, result json.RawMessage) e
 	output := jsonValue(result)
 	access := domain.ContextAccess{Kind: tool, At: time.Now().UTC()}
 	switch tool {
+	case "list_changes":
+		access.Bytes = jsonSize(result)
+		for _, item := range nestedArray(output, "changes") {
+			change, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			fileID := jsonString(change["id"])
+			if _, found := changeByID(t.manifest.Changes, fileID); !found {
+				return errors.New("context event inventoried an unknown changed file")
+			}
+			t.inventoried[fileID] = true
+		}
 	case "read_diff":
 		fileID, _ := args["fileId"].(string)
 		change, ok := changeByID(t.manifest.Changes, fileID)
@@ -136,8 +150,6 @@ func (t *AccessTracker) Record(tool string, arguments, result json.RawMessage) e
 	case "search_snapshot":
 		access.Revision = domain.Revision(jsonString(args["revision"]))
 		access.Bytes = jsonSize(result)
-	case "list_changes":
-		access.Bytes = jsonSize(result)
 	}
 	t.accesses = append(t.accesses, access)
 	return nil
@@ -147,13 +159,20 @@ func (t *AccessTracker) Coverage() domain.AnalysisCoverage {
 	if t == nil {
 		return domain.AnalysisCoverage{OmittedPaths: []string{}, Accesses: []domain.ContextAccess{}}
 	}
-	coverage := domain.AnalysisCoverage{ChangedFilesTotal: len(t.manifest.Changes), OmittedPaths: []string{}, Accesses: append([]domain.ContextAccess(nil), t.accesses...)}
+	coverage := domain.AnalysisCoverage{ChangedFilesTotal: len(t.manifest.Changes), OmittedPaths: []string{}, PreviewedPaths: []string{}, UnseenPaths: []string{}, Accesses: append([]domain.ContextAccess(nil), t.accesses...)}
 	for _, change := range t.manifest.Changes {
 		coverage.DiffBytesTotal += int(change.Diff.Bytes)
 		ranges := append([][2]int(nil), t.diffs[change.ID]...)
 		if !t.seen[change.ID] {
 			coverage.DiffFilesUnread++
 			coverage.OmittedPaths = append(coverage.OmittedPaths, change.Path)
+			if t.inventoried[change.ID] {
+				coverage.DiffFilesPreviewed++
+				coverage.PreviewedPaths = append(coverage.PreviewedPaths, change.Path)
+			} else {
+				coverage.DiffFilesUnseen++
+				coverage.UnseenPaths = append(coverage.UnseenPaths, change.Path)
+			}
 			continue
 		}
 		coverage.Segments += len(ranges)
@@ -233,6 +252,13 @@ func nestedValue(value any, key string) any {
 		if json.Valid([]byte(typed)) {
 			return nestedValue(jsonValue(json.RawMessage(typed)), key)
 		}
+	}
+	return nil
+}
+
+func nestedArray(value any, key string) []any {
+	if items, ok := nestedValue(value, key).([]any); ok {
+		return items
 	}
 	return nil
 }

@@ -749,6 +749,38 @@ describe('Reanalysis state', () => {
     await waitFor(() => expect(getSession).toHaveBeenCalledWith(session.id))
     expect(onSession).toHaveBeenCalledWith(session)
   })
+
+  it('explains targeted coverage when every changed file was at least previewed', () => {
+    const session = reviewSession()
+    session.latestAnalysisRun = {
+      id: 'run-coverage', sessionId: session.id, profile: {harness: 'claude', model: 'sonnet', reasoning: 'medium'}, contextTransport: 'reviewarcTools', schemaVersion: 1, inputFingerprint: 'fixture',
+      coverage: {changedFilesTotal: 21, diffFilesFullyRead: 18, diffFilesPartiallyRead: 0, diffFilesPreviewed: 3, diffFilesUnseen: 0, diffFilesUnread: 3, diffBytesTotal: 2100, diffBytesRead: 1800, segments: 18, omittedPaths: ['generated/a.ts', 'generated/b.ts', 'package-lock.json'], previewedPaths: ['generated/a.ts', 'generated/b.ts', 'package-lock.json'], unseenPaths: [], accesses: []},
+      status: 'completed', startedAt: '2026-07-15T12:00:00Z', completedAt: '2026-07-15T12:01:00Z', updatedAt: '2026-07-15T12:01:00Z',
+    }
+    window.runtime = {EventsOn: vi.fn(() => () => {})}
+    render(<OverviewScreen session={session} onBack={vi.fn()} onSession={vi.fn()} onReview={vi.fn()}/>)
+
+    const banner = screen.getByText('All 21 changed files were inspected.').closest('.analysis-coverage-warning')
+    expect(banner).toHaveTextContent('18 fully read · 3 previewed')
+    expect(banner).toHaveTextContent('bounded previews')
+    expect(screen.queryByText(/Full diffs were available/)).not.toBeInTheDocument()
+    expect(screen.getByRole('link', {name: 'View coverage'})).toHaveAttribute('href', '#analysis-run-details')
+  })
+
+  it('warns when changed files were never inventoried', () => {
+    const session = reviewSession()
+    session.latestAnalysisRun = {
+      id: 'run-unseen', sessionId: session.id, profile: {harness: 'codex', model: 'gpt-5', reasoning: 'medium'}, contextTransport: 'reviewarcTools', schemaVersion: 1, inputFingerprint: 'fixture',
+      coverage: {changedFilesTotal: 21, diffFilesFullyRead: 15, diffFilesPartiallyRead: 1, diffFilesPreviewed: 3, diffFilesUnseen: 2, diffFilesUnread: 5, diffBytesTotal: 2100, diffBytesRead: 1600, segments: 16, omittedPaths: ['a', 'b', 'c', 'd', 'e'], previewedPaths: ['a', 'b', 'c'], unseenPaths: ['d', 'e'], accesses: []},
+      status: 'completed', startedAt: '2026-07-15T12:00:00Z', completedAt: '2026-07-15T12:01:00Z', updatedAt: '2026-07-15T12:01:00Z',
+    }
+    window.runtime = {EventsOn: vi.fn(() => () => {})}
+    render(<OverviewScreen session={session} onBack={vi.fn()} onSession={vi.fn()} onReview={vi.fn()}/>)
+
+    const banner = screen.getByText('2 changed files were not inspected.').closest('.warning-banner')
+    expect(banner).toHaveTextContent('15 fully read · 1 partially read · 3 previewed · 2 unseen')
+    expect(banner).toHaveTextContent('Findings may not cover the unseen changes')
+  })
 })
 
 describe('Review brief and chapter reader', () => {

@@ -116,6 +116,29 @@ func TestProgressMessageDescribesApprovedContextActivity(t *testing.T) {
 	}
 }
 
+func TestParseJSONLTracksPreviewedInventoryFromRealEventShape(t *testing.T) {
+	inventory, err := json.Marshal(map[string]any{
+		"type": "item.completed",
+		"item": map[string]any{"type": "mcp_tool_call", "server": "reviewarc", "tool": "list_changes", "status": "completed", "arguments": map[string]any{"cursor": 0}, "result": map[string]any{"changes": []any{map[string]any{"id": "f000001", "preview": "+hello"}, map[string]any{"id": "f000002", "preview": "+generated"}}, "hasMore": false}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := analysisbundle.Manifest{Changes: []analysisbundle.Change{
+		{ID: "f000001", Path: "src/greet.go", Diff: analysisbundle.Artifact{Bytes: int64(len(fixturePatch))}},
+		{ID: "f000002", Path: "generated/output.go", Diff: analysisbundle.Artifact{Bytes: 100}},
+	}}
+	tracker := agent.NewAccessTracker(manifest)
+	stream := append(append(inventory, '\n'), fixtureJSONL(t)...)
+	if _, _, err := parseJSONL(stream, tracker); err != nil {
+		t.Fatal(err)
+	}
+	coverage := tracker.Coverage()
+	if coverage.DiffFilesFullyRead != 1 || coverage.DiffFilesPreviewed != 1 || coverage.DiffFilesUnseen != 0 {
+		t.Fatalf("coverage=%+v", coverage)
+	}
+}
+
 func validInput(t *testing.T) agent.AnalyzeInput {
 	t.Helper()
 	dataRoot := t.TempDir()

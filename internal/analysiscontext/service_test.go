@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -91,6 +92,62 @@ func TestReadDiffPagesAndRecordsCoverage(t *testing.T) {
 	coverage := service.Coverage()
 	if coverage.DiffFilesRead != 1 || coverage.DiffFilesPartiallyRead != 1 || coverage.BytesServed == 0 {
 		t.Fatalf("coverage=%+v", coverage)
+	}
+}
+
+func TestListChangesIncludesBoundedDiffPreviewForTriage(t *testing.T) {
+	patch := "diff --git a/src/main.go b/src/main.go\n@@ -1 +1 @@\n-old\n+new\n"
+	service, lease := fixtureService(t, analysisbundle.DefaultLimits(), patch, &fakeObjectReader{})
+	defer lease.Close()
+	out, err := service.ListChanges(context.Background(), ListChangesInput{})
+	if err != nil || len(out.Changes) != 1 {
+		t.Fatalf("changes=%+v err=%v", out.Changes, err)
+	}
+	change := out.Changes[0]
+	if !strings.Contains(change.Preview, "+new") || change.PreviewTruncated || change.Diff.Path != "" || change.Diff.SHA256 != "" {
+		t.Fatalf("change=%+v", change)
+	}
+}
+
+func TestListChangesPagesCompleteLargePullRequestInventory(t *testing.T) {
+	dataRoot := t.TempDir()
+	files := make([]domain.ChangedFile, 171)
+	patches := bundlePatchSource{}
+	for index := range files {
+		path := fmt.Sprintf("src/file-%03d.go", index+1)
+		files[index] = domain.ChangedFile{Path: path, Status: domain.FileModified, Additions: 1}
+		patches[path] = fmt.Sprintf("diff --git a/%s b/%s\n@@ -1 +1 @@\n-old\n+new-%d\n", path, path, index+1)
+	}
+	input := analysisbundle.Input{
+		PullRequest:  domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}, Number: 9}, Title: "Large context fixture"}},
+		Repository:   gitcache.ManagedRepository{Repository: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}, PullRequest: 9, BaseSHA: strings.Repeat("1", 40), HeadSHA: strings.Repeat("2", 40), MergeBaseSHA: strings.Repeat("3", 40)},
+		ChangedFiles: files, Limits: analysisbundle.DefaultLimits(),
+	}
+	lease, err := (analysisbundle.Builder{Root: analysisbundle.BundleRoot(dataRoot), Source: patches}).Build(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Close()
+	bundle, err := analysisbundle.Open(dataRoot, lease.Reference.Path, lease.Reference.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := New(bundle, &fakeObjectReader{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := service.ListChanges(context.Background(), ListChangesInput{})
+	if err != nil || len(first.Changes) != 100 || !first.HasMore || first.NextCursor != 100 {
+		t.Fatalf("first page changes=%d hasMore=%t next=%d err=%v", len(first.Changes), first.HasMore, first.NextCursor, err)
+	}
+	second, err := service.ListChanges(context.Background(), ListChangesInput{Cursor: first.NextCursor})
+	if err != nil || len(second.Changes) != 71 || second.HasMore || second.NextCursor != 0 {
+		t.Fatalf("second page changes=%d hasMore=%t next=%d err=%v", len(second.Changes), second.HasMore, second.NextCursor, err)
+	}
+	for _, change := range append(first.Changes, second.Changes...) {
+		if change.Preview == "" {
+			t.Fatalf("change %s had no triage preview", change.Path)
+		}
 	}
 }
 

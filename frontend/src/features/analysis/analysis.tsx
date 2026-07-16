@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Check, CircleHelp, Clock3, LoaderCircle, RefreshCw, Settings, ShieldCheck, Sparkles, X } from 'lucide-react'
 import { SelectControl } from '../../components'
 import type {
-  AnalysisConfiguration, AnalysisFailure, AnalysisProfile, AnalysisRun, DependencyStatus,
+  AnalysisConfiguration, AnalysisCoverage, AnalysisFailure, AnalysisProfile, AnalysisRun, DependencyStatus,
   OperationEvent,
 } from '../../types'
 
@@ -166,14 +166,27 @@ export function NoHarnessState({configuration, onRefresh, onOpenSettings}: {conf
 
 export function AnalysisRunDetails({run, configuration}: {run: AnalysisRun; configuration?: AnalysisConfiguration}) {
   const labels = configuration ? profileLabels(configuration, run.profile) : {harness: run.profile.harness, model: run.profile.model, reasoning: run.profile.reasoning}
-  const coverage = `Full diff coverage for ${run.coverage.diffFilesFullyRead} of ${run.coverage.changedFilesTotal} changed files${run.coverage.diffFilesPartiallyRead ? ` · ${run.coverage.diffFilesPartiallyRead} partial` : ''}`
+  const breakdown = analysisCoverageBreakdown(run.coverage)
+  const coverage = `${breakdown.total} changed files · ${breakdown.parts.join(' · ')}`
   const completed = run.completedAt ? new Date(run.completedAt).toLocaleString() : 'In progress'
   return <details className="support-disclosure analysis-run-details"><summary><span><ShieldCheck size={16}/>Analysis details</span><small>{labels.harness} · {labels.model} · {labels.reasoning}</small></summary><div className="support-content"><dl>
     <div><dt>Harness</dt><dd>{labels.harness}{run.harnessVersion ? ` ${run.harnessVersion}` : ''}</dd></div>
     <div><dt>Model</dt><dd>{labels.model}</dd></div><div><dt>Reasoning</dt><dd>{labels.reasoning}</dd></div>
     <div><dt>Schema</dt><dd>Version {run.schemaVersion}</dd></div>
     <div><dt>Coverage</dt><dd>{coverage}</dd></div><div><dt>Completed</dt><dd>{completed}</dd></div>
-  </dl>{run.coverage.omittedPaths.length ? <details><summary>Files not inspected</summary><ul>{run.coverage.omittedPaths.map((path) => <li key={path}><code>{path}</code></li>)}</ul></details> : null}</div></details>
+  </dl>{run.coverage.previewedPaths?.length ? <details><summary>Previewed without a full diff read</summary><ul>{run.coverage.previewedPaths.map((path) => <li key={path}><code title={path}>{path}</code></li>)}</ul></details> : null}{run.coverage.unseenPaths?.length ? <details><summary>Not inspected</summary><ul>{run.coverage.unseenPaths.map((path) => <li key={path}><code title={path}>{path}</code></li>)}</ul></details> : null}{!run.coverage.previewedPaths && !run.coverage.unseenPaths && run.coverage.omittedPaths.length ? <details><summary>Not fully read</summary><ul>{run.coverage.omittedPaths.map((path) => <li key={path}><code title={path}>{path}</code></li>)}</ul></details> : null}</div></details>
+}
+
+export function analysisCoverageBreakdown(coverage: AnalysisCoverage) {
+  const previewed = coverage.diffFilesPreviewed ?? 0
+  const unseen = coverage.diffFilesUnseen ?? Math.max(0, coverage.diffFilesUnread - previewed)
+  const parts = [
+    `${coverage.diffFilesFullyRead} fully read`,
+    coverage.diffFilesPartiallyRead ? `${coverage.diffFilesPartiallyRead} partially read` : '',
+    previewed ? `${previewed} previewed` : '',
+    unseen ? `${unseen} unseen` : '',
+  ].filter(Boolean)
+  return {total: coverage.changedFilesTotal, fullyRead: coverage.diffFilesFullyRead, partiallyRead: coverage.diffFilesPartiallyRead, previewed, unseen, parts}
 }
 
 export function AIAnalysisSettings({configuration, loading = false, busy = false, error = '', onRefresh, onSave}: {configuration: AnalysisConfiguration; loading?: boolean; busy?: boolean; error?: string; onRefresh: () => void; onSave: (profile: AnalysisProfile) => Promise<void> | void}) {

@@ -109,6 +109,9 @@ func validateManifest(m Manifest) error {
 		if change.ID != expectedID || change.Diff.Path != expectedPath || seenIDs[change.ID] || seenPaths[change.Path] || gitcache.ValidatePath(change.Path) != nil || (change.PreviousPath != "" && gitcache.ValidatePath(change.PreviousPath) != nil) || change.Additions < 0 || change.Deletions < 0 || !validStatus(change.Status) {
 			return errors.New("invalid analysis bundle change entry")
 		}
+		if len(change.Preview) > diffPreviewBytes || (change.Binary && change.Preview != "") || (!change.Binary && change.Diff.Bytes > 0 && change.Preview == "") {
+			return errors.New("invalid analysis bundle diff preview")
+		}
 		if err := validateArtifactPageMetadata(change.Diff, m.Limits.PageBytes); err != nil {
 			return err
 		}

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -24,16 +25,21 @@ func TestAccessTrackerReconstructsPagedCoverageWithoutDoubleCounting(t *testing.
 		args   string
 		result string
 	}{
+		{`{"cursor":0}`, `{"changes":[{"id":"f000001"},{"id":"f000002"},{"id":"f000003"}],"hasMore":false}`},
 		{`{"fileId":"f000001","cursor":40}`, `{"bytes":60,"hasMore":false}`},
 		{`{"fileId":"f000001","cursor":0}`, `{"bytes":60,"hasMore":true}`},
 		{`{"fileId":"f000002","cursor":10}`, `{"bytes":20,"hasMore":true}`},
 	} {
-		if err := tracker.Record("read_diff", json.RawMessage(record.args), json.RawMessage(record.result)); err != nil {
+		tool := "read_diff"
+		if strings.Contains(record.result, `"changes"`) {
+			tool = "list_changes"
+		}
+		if err := tracker.Record(tool, json.RawMessage(record.args), json.RawMessage(record.result)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	coverage := tracker.Coverage()
-	if coverage.ChangedFilesTotal != 3 || coverage.DiffFilesFullyRead != 1 || coverage.DiffFilesPartiallyRead != 1 || coverage.DiffFilesUnread != 1 {
+	if coverage.ChangedFilesTotal != 3 || coverage.DiffFilesFullyRead != 1 || coverage.DiffFilesPartiallyRead != 1 || coverage.DiffFilesPreviewed != 1 || coverage.DiffFilesUnseen != 0 || coverage.DiffFilesUnread != 1 {
 		t.Fatalf("coverage=%+v", coverage)
 	}
 	if coverage.DiffBytesTotal != 175 || coverage.DiffBytesRead != 120 || coverage.Segments != 3 {
@@ -41,6 +47,34 @@ func TestAccessTrackerReconstructsPagedCoverageWithoutDoubleCounting(t *testing.
 	}
 	if !reflect.DeepEqual(coverage.OmittedPaths, []string{"src/third.go"}) {
 		t.Fatalf("omitted=%v", coverage.OmittedPaths)
+	}
+	if !reflect.DeepEqual(coverage.PreviewedPaths, []string{"src/third.go"}) || len(coverage.UnseenPaths) != 0 {
+		t.Fatalf("previewed=%v unseen=%v", coverage.PreviewedPaths, coverage.UnseenPaths)
+	}
+}
+
+func TestAccessTrackerInventoriesLargePullRequestInPagedBatches(t *testing.T) {
+	manifest := analysisbundle.Manifest{Changes: make([]analysisbundle.Change, 171)}
+	for index := range manifest.Changes {
+		manifest.Changes[index] = analysisbundle.Change{ID: fmt.Sprintf("f%06d", index+1), Path: fmt.Sprintf("src/file-%03d.go", index+1), Diff: analysisbundle.Artifact{Bytes: 100}}
+	}
+	tracker := NewAccessTracker(manifest)
+	for start, end := 0, 100; start < len(manifest.Changes); start, end = end, min(end+100, len(manifest.Changes)) {
+		changes := make([]map[string]string, 0, end-start)
+		for _, change := range manifest.Changes[start:end] {
+			changes = append(changes, map[string]string{"id": change.ID, "preview": "+bounded change"})
+		}
+		result, err := json.Marshal(map[string]any{"changes": changes, "hasMore": end < len(manifest.Changes), "nextCursor": end})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := tracker.Record("list_changes", json.RawMessage(fmt.Sprintf(`{"cursor":%d}`, start)), result); err != nil {
+			t.Fatal(err)
+		}
+	}
+	coverage := tracker.Coverage()
+	if coverage.DiffFilesPreviewed != 171 || coverage.DiffFilesUnseen != 0 || len(coverage.PreviewedPaths) != 171 {
+		t.Fatalf("coverage=%+v", coverage)
 	}
 }
 
@@ -70,6 +104,7 @@ func TestAccessTrackerRejectsUnknownToolsFilesAndRanges(t *testing.T) {
 		tool, args, result string
 	}{
 		{"exec_command", `{}`, `{}`},
+		{"list_changes", `{}`, `{"changes":[{"id":"missing"}]}`},
 		{"read_diff", `{"fileId":"missing"}`, `{"bytes":1}`},
 		{"read_diff", `{"fileId":"f000001","cursor":101}`, `{"bytes":1}`},
 	} {

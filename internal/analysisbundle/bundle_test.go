@@ -38,7 +38,7 @@ func TestBuildFinalizesPrivateVerifiedBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bundle.Manifest.Changes[0].ID != "f000001" || bundle.Manifest.Changes[0].Diff.Path != "diffs/f000001.patch" {
+	if bundle.Manifest.Changes[0].ID != "f000001" || bundle.Manifest.Changes[0].Diff.Path != "diffs/f000001.patch" || !strings.Contains(bundle.Manifest.Changes[0].Preview, "+new") {
 		t.Fatalf("manifest change=%+v", bundle.Manifest.Changes[0])
 	}
 	for _, name := range []string{"manifest.json", "pr.json", "discussion.json", "diffs/f000001.patch"} {
@@ -77,8 +77,21 @@ func TestOversizedProviderPromptBecomesPagedLocalArtifact(t *testing.T) {
 		t.Fatalf("artifact=%+v", artifact)
 	}
 	prompt := LaunchPrompt(lease.Reference)
-	if len(prompt) >= 16<<10 || strings.Contains(prompt, strings.Repeat("x", 128)) {
+	if len(prompt) >= 16<<10 || strings.Contains(prompt, strings.Repeat("x", 128)) || !strings.Contains(prompt, "continue paging until hasMore is false") {
 		t.Fatalf("launch prompt bytes=%d content=%q", len(prompt), prompt)
+	}
+}
+
+func TestRepresentativeDiffPreviewSamplesLargePatchWithoutEmbeddingIt(t *testing.T) {
+	patch := strings.Repeat("A", 1200) + strings.Repeat("B", 1200) + strings.Repeat("C", 1200)
+	preview, truncated := representativeDiffPreview(patch)
+	if !truncated || len(preview) > diffPreviewBytes {
+		t.Fatalf("preview bytes=%d truncated=%t", len(preview), truncated)
+	}
+	for _, marker := range []string{"AAAA", "BBBB", "CCCC"} {
+		if !strings.Contains(preview, marker) {
+			t.Fatalf("preview did not sample %q: %q", marker, preview)
+		}
 	}
 }
 

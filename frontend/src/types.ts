@@ -79,8 +79,9 @@ export interface ContextAccess {
 }
 export interface AnalysisCoverage {
   changedFilesTotal: number; diffFilesFullyRead: number; diffFilesPartiallyRead: number
+  diffFilesPreviewed?: number; diffFilesUnseen?: number
   diffFilesUnread: number; diffBytesTotal: number; diffBytesRead: number; segments: number
-  omittedPaths: string[]; accesses: ContextAccess[]
+  omittedPaths: string[]; previewedPaths?: string[]; unseenPaths?: string[]; accesses: ContextAccess[]
 }
 export interface AnalysisRun {
   id: string; sessionId: string; profile: AnalysisProfile; harnessVersion?: string; contextTransport: ContextTransport

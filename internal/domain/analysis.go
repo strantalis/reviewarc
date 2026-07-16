@@ -123,11 +123,15 @@ type AnalysisCoverage struct {
 	ChangedFilesTotal      int             `json:"changedFilesTotal"`
 	DiffFilesFullyRead     int             `json:"diffFilesFullyRead"`
 	DiffFilesPartiallyRead int             `json:"diffFilesPartiallyRead"`
+	DiffFilesPreviewed     int             `json:"diffFilesPreviewed"`
+	DiffFilesUnseen        int             `json:"diffFilesUnseen"`
 	DiffFilesUnread        int             `json:"diffFilesUnread"`
 	DiffBytesTotal         int             `json:"diffBytesTotal"`
 	DiffBytesRead          int             `json:"diffBytesRead"`
 	Segments               int             `json:"segments"`
 	OmittedPaths           []string        `json:"omittedPaths"`
+	PreviewedPaths         []string        `json:"previewedPaths"`
+	UnseenPaths            []string        `json:"unseenPaths"`
 	Accesses               []ContextAccess `json:"accesses"`
 }
 

@@ -144,7 +144,7 @@ describe('analysis provenance', () => {
     render(<AnalysisRunDetails run={run} configuration={configuration}/>)
     expect(screen.getByText('Analysis details')).toBeInTheDocument()
     fireEvent.click(screen.getByText('Analysis details'))
-    expect(screen.getByText(/Full diff coverage for 18 of 22 changed files/)).toBeInTheDocument()
+    expect(screen.getByText(/22 changed files · 18 fully read · 4 partially read/)).toBeInTheDocument()
     expect(screen.getByText('large.generated.ts')).toBeInTheDocument()
   })
 })

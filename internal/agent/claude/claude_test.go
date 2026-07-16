@@ -204,6 +204,29 @@ func TestAnalyzeUsesOnlyControlledToolsAndStructuredOutput(t *testing.T) {
 	}
 }
 
+func TestParseStreamTracksPreviewedInventoryFromRealEventShape(t *testing.T) {
+	toolUse, _ := json.Marshal(map[string]any{"type": "assistant", "message": map[string]any{"content": []any{map[string]any{
+		"type": "tool_use", "id": "inventory_1", "name": "mcp__reviewarc__list_changes", "input": map[string]any{"cursor": 0},
+	}}}})
+	toolResult, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"content": []any{map[string]any{
+		"type": "tool_result", "tool_use_id": "inventory_1", "content": map[string]any{"changes": []any{map[string]any{"id": "f000001", "preview": "+hello"}, map[string]any{"id": "f000002", "preview": "+generated"}}, "hasMore": false},
+	}}}})
+	manifest := analysisbundle.Manifest{Changes: []analysisbundle.Change{
+		{ID: "f000001", Path: "src/greet.go", Diff: analysisbundle.Artifact{Bytes: int64(len(fixturePatch))}},
+		{ID: "f000002", Path: "generated/output.go", Diff: analysisbundle.Artifact{Bytes: 100}},
+	}}
+	tracker := agent.NewAccessTracker(manifest)
+	stream := append(append(append(toolUse, '\n'), toolResult...), '\n')
+	stream = append(stream, fixtureStream(t)...)
+	if _, err := parseStream(stream, tracker); err != nil {
+		t.Fatal(err)
+	}
+	coverage := tracker.Coverage()
+	if coverage.DiffFilesFullyRead != 1 || coverage.DiffFilesPreviewed != 1 || coverage.DiffFilesUnseen != 0 {
+		t.Fatalf("coverage=%+v", coverage)
+	}
+}
+
 func TestParseStreamRejectsMalformedUnknownToolsAndMissingStructuredOutput(t *testing.T) {
 	tracker := agent.NewAccessTracker(analysisbundle.Manifest{})
 	if _, err := parseStream([]byte("not json\n"), tracker); err == nil {

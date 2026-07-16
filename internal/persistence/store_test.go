@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -364,13 +365,16 @@ func TestAnalysisRunsAreAppendOnlyAndHydrateLatestProvenance(t *testing.T) {
 		t.Fatal("running analysis accepted a second preparing transition")
 	}
 	completed := domain.ReviewAnalysis{SchemaVersion: 1, BaseSHA: session.BaseSHA, HeadSHA: session.HeadSHA, Summary: "current", Chapters: []domain.ReviewChapter{{ID: "chapter"}}}
-	coverage := domain.AnalysisCoverage{ChangedFilesTotal: 3, DiffFilesFullyRead: 3, DiffBytesTotal: 120, DiffBytesRead: 120, Segments: 1}
+	coverage := domain.AnalysisCoverage{ChangedFilesTotal: 3, DiffFilesFullyRead: 2, DiffFilesPreviewed: 1, DiffFilesUnread: 1, DiffBytesTotal: 120, DiffBytesRead: 100, Segments: 1, OmittedPaths: []string{"generated/file.go"}, PreviewedPaths: []string{"generated/file.go"}, UnseenPaths: []string{}}
 	if err := s.CompleteAnalysisRun(ctx, second.ID, completed, coverage); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err = s.GetSession(ctx, session.ID)
 	if err != nil || loaded.LatestAnalysisRun == nil || loaded.LatestAnalysisRun.ID != second.ID || loaded.LatestAnalysisRun.Status != domain.AnalysisRunCompleted || loaded.LatestAnalysisRun.ContextTransport != domain.ContextArtifactFiles || loaded.Analysis == nil || loaded.Analysis.Summary != "current" {
 		t.Fatalf("completed session=%+v err=%v", loaded, err)
+	}
+	if loaded.LatestAnalysisRun.Coverage.DiffFilesPreviewed != 1 || !reflect.DeepEqual(loaded.LatestAnalysisRun.Coverage.PreviewedPaths, []string{"generated/file.go"}) {
+		t.Fatalf("persisted coverage=%+v", loaded.LatestAnalysisRun.Coverage)
 	}
 	runs, err := s.ListAnalysisRuns(ctx, session.ID)
 	if err != nil || len(runs) != 2 || runs[0].ID != second.ID || runs[1].ID != first.ID {
