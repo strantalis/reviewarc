@@ -2,7 +2,8 @@
 set -euo pipefail
 
 dmg="${1:?DMG path required}"
-assets=("$dmg" "$dmg.sha256")
+sbom="${2:?SPDX JSON path required}"
+assets=("$dmg" "$dmg.sha256" "$sbom" "$sbom.sha256")
 if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
   args=(release create "$GITHUB_REF_NAME" "${assets[@]}" \
     --verify-tag --generate-notes --title "ReviewArc ${GITHUB_REF_NAME#v}")

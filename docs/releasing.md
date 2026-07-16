@@ -72,6 +72,8 @@ Create the site project under the intended Vercel team with `site/` as its Root 
 
 The release workflow still needs the Blob store's read-write token as `BLOB_READ_WRITE_TOKEN` because GitHub Actions is outside Vercel's workload identity boundary. It uploads immutable versioned DMGs and manifests, verifies the downloaded DMG checksum, then promotes either `channels/beta/latest.json` or `channels/stable/latest.json`. The Astro site's existing `/api/release.json` endpoint continues to read stable first and fall back to beta only when no stable manifest exists, so release publication does not redeploy the site and GitHub Actions needs no Vercel deployment token.
 
+Each release also generates an SPDX 2.3 JSON SBOM from the signed application bundle with pinned Syft. ReviewArc enriches the artifact scan with the exact bundled frontend and Sparkle inventory used by `THIRD_PARTY_NOTICES.txt`, binds the document to the notarized DMG's SHA-256, preserves the SBOM with the release candidate, and publishes both the SBOM and its checksum as GitHub release assets. The human-readable notices remain bundled in the app and DMG; the SBOM is the machine-readable supply-chain inventory.
+
 The updater reads `/api/appcast.xml`. That feed validates both current channel manifests and includes:
 
 - the monotonic GitHub run number as `sparkle:version`;
@@ -96,7 +98,7 @@ git tag -s v0.1.0-beta.1 -m "ReviewArc 0.1.0 beta 1"
 git push origin v0.1.0-beta.1
 ```
 
-The first job builds, signs, notarizes, staples, verifies, Sparkle-signs, and preserves the exact candidate as a private Actions artifact. Sparkle signing reads but does not modify the final DMG. The second job publishes that preserved candidate. If publication fails, rerun only the failed job so the exact notarized bytes are reused.
+The first job builds, signs, notarizes, staples, verifies, generates and validates the release SBOM, Sparkle-signs, and preserves the exact candidate as a private Actions artifact. Sparkle signing reads but does not modify the final DMG. The second job revalidates the DMG and SBOM checksums before publishing that preserved candidate. If publication fails, rerun only the failed job so the exact notarized bytes and SBOM are reused.
 
 ## Pausing an update channel
 

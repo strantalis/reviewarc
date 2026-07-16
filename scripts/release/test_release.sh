@@ -81,6 +81,67 @@ printf 'notarized-dmg-fixture' > "$tmp/ReviewArc-0.3.0-beta.2-macOS-universal.dm
   ' dist/release.json >/dev/null
 )
 
+sbom="$tmp/ReviewArc-0.3.0-beta.2-macOS-universal.spdx.json"
+cat > "$sbom" <<'EOF'
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "fixture",
+  "documentNamespace": "https://example.invalid/reviewarc/fixture",
+  "creationInfo": {
+    "creators": ["Tool: syft-test"],
+    "created": "2026-01-01T00:00:00Z"
+  },
+  "packages": [
+    {
+      "name": "fixture.app",
+      "SPDXID": "SPDXRef-Root",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "reviewarc",
+      "SPDXID": "SPDXRef-GoModule",
+      "versionInfo": "0.3.0-beta.2",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [{
+        "referenceCategory": "PACKAGE-MANAGER",
+        "referenceType": "purl",
+        "referenceLocator": "pkg:golang/reviewarc@0.3.0-beta.2"
+      }]
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relatedSpdxElement": "SPDXRef-Root",
+      "relationshipType": "DESCRIBES"
+    },
+    {
+      "spdxElementId": "SPDXRef-Root",
+      "relatedSpdxElement": "SPDXRef-GoModule",
+      "relationshipType": "CONTAINS"
+    }
+  ]
+}
+EOF
+shasum -a 256 "$tmp/ReviewArc-0.3.0-beta.2-macOS-universal.dmg" > "$tmp/ReviewArc-0.3.0-beta.2-macOS-universal.dmg.sha256"
+node "$script_dir/augment_sbom.mjs" "$sbom" 0.3.0-beta.2 "$tmp/ReviewArc-0.3.0-beta.2-macOS-universal.dmg"
+"$script_dir/verify_sbom.sh" "$sbom" "$tmp/ReviewArc-0.3.0-beta.2-macOS-universal.dmg"
+jq -e '
+  .name == "ReviewArc-0.3.0-beta.2-macOS-universal" and
+  ([.packages[] | select(.name == "react")] | length) == 1 and
+  ([.packages[] | select(.name == "Sparkle" and .versionInfo == "2.9.2")] | length) == 1
+' "$sbom" >/dev/null
+
 node "$script_dir/test_channel_policy.mjs"
 node "$script_dir/test_blob_consistency.mjs"
 echo "release script tests passed"

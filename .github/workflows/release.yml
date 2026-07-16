@@ -155,6 +155,28 @@ jobs:
           APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
         run: scripts/release/notarize_dmg.sh "${{ steps.package.outputs.dmg }}"
 
+      - name: Generate SPDX SBOM from signed app
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: build/bin/ReviewArc.app
+          format: spdx-json
+          output-file: dist/ReviewArc-${{ steps.metadata.outputs.release_version }}-macOS-universal.spdx.json
+          artifact-name: ReviewArc-${{ steps.metadata.outputs.release_version }}-macOS-universal.spdx.json
+          syft-version: v1.46.0
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Bind and verify release SBOM
+        shell: bash
+        run: |
+          SBOM="dist/ReviewArc-${{ steps.metadata.outputs.release_version }}-macOS-universal.spdx.json"
+          node scripts/release/augment_sbom.mjs \
+            "$SBOM" \
+            "${{ steps.metadata.outputs.release_version }}" \
+            "${{ steps.package.outputs.dmg }}"
+          scripts/release/verify_sbom.sh "$SBOM" "${{ steps.package.outputs.dmg }}"
+          shasum -a 256 "$SBOM" > "$SBOM.sha256"
+
       - name: Sign exact notarized DMG for Sparkle
         id: sparkle-signature
         shell: bash
@@ -182,6 +204,7 @@ jobs:
           path: |
             dist/*.dmg
             dist/*.sha256
+            dist/*.spdx.json
             dist/notary-result.json
             dist/release.json
           if-no-files-found: error
@@ -236,7 +259,15 @@ jobs:
             exit 1
           fi
           shasum -a 256 -c "$DMG.sha256"
+          SBOM="$(find dist -maxdepth 1 -type f -name '*.spdx.json' -print)"
+          if [[ -z "$SBOM" || "$(printf '%s\n' "$SBOM" | wc -l | tr -d ' ')" != 1 ]]; then
+            echo "::error::Expected exactly one SPDX SBOM in the release candidate."
+            exit 1
+          fi
+          shasum -a 256 -c "$SBOM.sha256"
+          scripts/release/verify_sbom.sh "$SBOM" "$DMG"
           echo "dmg=$DMG" >> "$GITHUB_OUTPUT"
+          echo "sbom=$SBOM" >> "$GITHUB_OUTPUT"
 
       - name: Upload immutable release to Vercel Blob
         shell: bash
@@ -248,7 +279,10 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: scripts/release/publish_github_release.sh "${{ steps.candidate.outputs.dmg }}"
+        run: >-
+          scripts/release/publish_github_release.sh
+          "${{ steps.candidate.outputs.dmg }}"
+          "${{ steps.candidate.outputs.sbom }}"
 
       - name: Promote latest release manifest
         shell: bash
