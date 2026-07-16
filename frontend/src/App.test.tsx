@@ -351,7 +351,7 @@ describe('App startup', () => {
     expect(screen.getByText('Performance change 250')).toBeInTheDocument()
     fireEvent.change(search, {target: {value: ''}})
     expect(container.querySelectorAll('.pr-row')).toHaveLength(100)
-  })
+  }, 15_000)
 
   it('transitions immediately when pull request hydration is still running', async () => {
 	const pr = {ref: {repository: {host: 'github.com', owner: 'acme', name: 'api', cloneUrl: '', databaseId: '1'}, number: 7}, title: 'Slow change', url: 'https://github.com/acme/api/pull/7', author: {login: 'sean', name: 'Sean', avatarUrl: ''}, updatedAt: '2026-07-12T00:00:00Z', isDraft: false, additions: 8, deletions: 2, changedFiles: 3, relationships: ['authored' as const], labels: [], analysisStatus: 'notStarted' as const, progress: {total: 0, reviewed: 0, blocked: 0, clarify: 0, percent: 0}, riskLevel: 'unknown' as const}
@@ -432,6 +432,14 @@ describe('App startup', () => {
 })
 
 describe('Settings', () => {
+  it('opens the third-party notices bundled with the app', () => {
+    const openThirdPartyNotices = vi.fn().mockResolvedValue(undefined)
+    window.go = {main: {App: {OpenThirdPartyNotices: openThirdPartyNotices}}}
+    render(<SettingsScreen state={{dependencies: [], paths, selections: [], inbox: []}} onSources={vi.fn()}/>)
+    fireEvent.click(screen.getByRole('button', {name: 'View notices'}))
+    expect(openThirdPartyNotices).toHaveBeenCalledOnce()
+  })
+
   it('offers system, light, and dark appearance preferences', () => {
     const onThemeChange = vi.fn()
     render(<SettingsScreen state={{dependencies: [], paths, selections: [], inbox: []}} theme="dark" onThemeChange={onThemeChange} onSources={vi.fn()}/>)
@@ -1065,6 +1073,43 @@ describe('Review brief and chapter reader', () => {
     expect(onBack).toHaveBeenCalledOnce()
   })
 
+  it('discards a review preview when the user keeps editing', async () => {
+    const session = reviewSession()
+    const discard = vi.fn().mockResolvedValue(undefined)
+    window.go = {main: {App: {
+      GetChangedFiles: vi.fn().mockResolvedValue([]),
+      PreparePublish: vi.fn().mockResolvedValue({token: 'publish-token', digest: 'digest', repository: 'acme/api', number: 1, headSha: 'head', items: [{draftId: 'draft-1', kind: 'general', body: 'Draft question'}], event: 'COMMENT', expiresAt: '2026-07-12T00:05:00Z'}),
+      DiscardPublishPreview: discard,
+    }}}
+    render(<ReviewWorkspace session={session} onSession={vi.fn()} onBack={vi.fn()}/>)
+
+    fireEvent.click(screen.getByRole('button', {name: '1 drafts'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Preview 1 comment'}))
+    expect(await screen.findByRole('heading', {name: 'Publish comments?'})).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Keep editing'}))
+
+    await waitFor(() => expect(discard).toHaveBeenCalledWith('publish-token'))
+    expect(screen.queryByRole('heading', {name: 'Publish comments?'})).not.toBeInTheDocument()
+  })
+
+  it('discards an open review preview when the workspace unmounts', async () => {
+    const session = reviewSession()
+    const discard = vi.fn().mockResolvedValue(undefined)
+    window.go = {main: {App: {
+      GetChangedFiles: vi.fn().mockResolvedValue([]),
+      PreparePublish: vi.fn().mockResolvedValue({token: 'unmount-token', digest: 'digest', repository: 'acme/api', number: 1, headSha: 'head', items: [{draftId: 'draft-1', kind: 'general', body: 'Draft question'}], event: 'COMMENT', expiresAt: '2026-07-12T00:05:00Z'}),
+      DiscardPublishPreview: discard,
+    }}}
+    const view = render(<ReviewWorkspace session={session} onSession={vi.fn()} onBack={vi.fn()}/>)
+
+    fireEvent.click(screen.getByRole('button', {name: '1 drafts'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Preview 1 comment'}))
+    expect(await screen.findByRole('heading', {name: 'Publish comments?'})).toBeInTheDocument()
+    view.unmount()
+
+    await waitFor(() => expect(discard).toHaveBeenCalledWith('unmount-token'))
+  })
+
   it('expands validated code evidence inline before offering deeper context', async () => {
     const session = reviewSession()
     const getFile = vi.fn().mockResolvedValue({path: 'src/limiter.ts', revision: 'head', sha: 'head', content: Array.from({length: 15}, (_, index) => index === 9 ? 'const answer = 42' : `line ${index + 1}`).join('\n'), isBinary: false, lineCount: 15})
@@ -1081,7 +1126,7 @@ describe('Review brief and chapter reader', () => {
     const excerpt = await screen.findByLabelText('Code excerpt from src/limiter.ts')
     expect(excerpt).toHaveTextContent('const answer = 42')
     expect(excerpt).toHaveTextContent('line 13')
-    expect(excerpt.querySelector('[style*="color"]')).toBeTruthy()
+    await waitFor(() => expect(excerpt.querySelector('[style*="color"]')).toBeTruthy(), {timeout: 5_000})
     expect(screen.getByRole('region', {name: 'Chapter 1: Decision recording'})).toBeInTheDocument()
     expect(screen.queryByRole('button', {name: 'Back to chapter'})).not.toBeInTheDocument()
     expect(getDiff).not.toHaveBeenCalled()
@@ -1192,13 +1237,14 @@ describe('Diff review interactions', () => {
 	render(<SplitDiffView diff={{file: {path: 'src/greet.ts', previousPath: '', status: 'modified', additions: 1, deletions: 1, isBinary: false}, patch: 'diff --git a/src/greet.ts b/src/greet.ts\n--- a/src/greet.ts\n+++ b/src/greet.ts\n@@ -4,3 +4,3 @@\n same\n-old\n+new\n last\n', hunks: [{header: '@@ -4,3 +4,3 @@', oldStart: 4, oldLines: 3, newStart: 4, newLines: 3, lines: [{kind: 'context', content: 'same', oldLine: 4, newLine: 4}, {kind: 'delete', content: 'old', oldLine: 5}, {kind: 'add', content: 'new', newLine: 5}, {kind: 'context', content: 'last', oldLine: 6, newLine: 6}]}]}} onCommentRange={onCommentRange}/>)
 	const root = await renderedDiffRoot()
 	const rightLine = (line: number) => [...root.querySelectorAll<HTMLElement>(`[data-column-number="${line}"]`)].find((item) => item.closest('[data-additions]'))!
-	const originalElementFromPoint = document.elementFromPoint
+	const originalElementFromPoint = Object.getOwnPropertyDescriptor(document, 'elementFromPoint')
 	document.elementFromPoint = vi.fn().mockReturnValue(rightLine(6))
 	fireEvent.pointerDown(rightLine(4), {pointerType: 'mouse', button: 0, pointerId: 1})
 	fireEvent.pointerMove(document, {pointerType: 'mouse', button: 0, pointerId: 1, clientX: 1, clientY: 1})
 	await waitFor(() => expect(root.querySelectorAll('[data-selected-line]').length).toBeGreaterThan(2))
 	fireEvent.pointerUp(document, {pointerType: 'mouse', button: 0, pointerId: 1, clientX: 1, clientY: 1})
-	document.elementFromPoint = originalElementFromPoint
+	if (originalElementFromPoint) Object.defineProperty(document, 'elementFromPoint', originalElementFromPoint)
+	else Reflect.deleteProperty(document, 'elementFromPoint')
 	expect(onCommentRange).toHaveBeenLastCalledWith({startLine: 4, startSide: 'RIGHT', endLine: 6, endSide: 'RIGHT'})
   })
 

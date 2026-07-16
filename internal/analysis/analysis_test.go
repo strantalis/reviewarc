@@ -105,12 +105,12 @@ func TestDecodeEnforcesRequiredSchemaFieldsLocally(t *testing.T) {
 	}
 	for _, field := range []string{"summaryEvidence", "affectedAreas", "behavioralChanges", "risks", "facts", "inferences", "unknowns"} {
 		t.Run(field, func(t *testing.T) {
-			copy := make(map[string]any, len(root))
+			cloned := make(map[string]any, len(root))
 			for key, value := range root {
-				copy[key] = value
+				cloned[key] = value
 			}
-			delete(copy, field)
-			payload, _ := json.Marshal(copy)
+			delete(cloned, field)
+			payload, _ := json.Marshal(cloned)
 			if _, err := Decode(payload); err == nil || !strings.Contains(err.Error(), "does not match") {
 				t.Fatalf("missing required field %q error=%v", field, err)
 			}

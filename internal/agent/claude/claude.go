@@ -80,7 +80,7 @@ func (p *Provider) Capabilities(ctx context.Context) (domain.HarnessCapabilities
 	} {
 		if !strings.Contains(text, required) {
 			capabilities.State = domain.HarnessUnsupported
-			return capabilities, fmt.Errorf("Claude Code does not expose required flag %s", required)
+			return capabilities, fmt.Errorf("required flag %s is unavailable in Claude Code", required)
 		}
 	}
 	auth, authErr := p.runner.Run(ctx, processpkg.Command{Tool: processpkg.Claude, Args: []string{"auth", "status"}, Timeout: 5 * time.Second, MaxOutput: 64 << 10})
@@ -90,7 +90,7 @@ func (p *Provider) Capabilities(ctx context.Context) (domain.HarnessCapabilities
 	if json.Unmarshal(auth.Stdout, &status) != nil || authErr != nil || !status.LoggedIn {
 		capabilities.State = domain.HarnessBroken
 		capabilities.Message = "Sign in to Claude Code before using it for analysis"
-		return capabilities, errors.New("Claude Code authentication is required")
+		return capabilities, errors.New("authentication is required for Claude Code")
 	}
 	reasoning := []domain.ReasoningLevel{domain.ReasoningLow, domain.ReasoningMedium, domain.ReasoningHigh, domain.ReasoningXHigh, domain.ReasoningMax}
 	capabilities.Models = []domain.ModelCapability{
@@ -161,7 +161,7 @@ func (p *Provider) analyze(parent context.Context, input agent.AnalyzeInput, bun
 		emit(failureEvent(domain.FailureConfigurationRequired, "Analysis could not start", "ReviewArc could not prepare the controlled context server.", domain.RetrySamePlan, err))
 		return
 	}
-	defer os.Remove(mcpPath)
+	defer func() { _ = os.Remove(mcpPath) }()
 	schema, err := outputSchemaArgument()
 	if err != nil {
 		emit(failureEvent(domain.FailureConfigurationRequired, "Analysis could not start", "ReviewArc could not prepare the structured-output contract.", domain.RetrySamePlan, err))
@@ -336,7 +336,7 @@ func parseStream(data []byte, tracker *agent.AccessTracker) (sharedanalysis.Docu
 		line++
 		var event streamEvent
 		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			return sharedanalysis.Document{}, fmt.Errorf("Claude stream line %d is invalid: %w", line, err)
+			return sharedanalysis.Document{}, fmt.Errorf("invalid Claude stream line %d: %w", line, err)
 		}
 		for _, block := range event.Message.Content {
 			switch block.Type {
@@ -369,9 +369,9 @@ func parseStream(data []byte, tracker *agent.AccessTracker) (sharedanalysis.Docu
 		if event.Type == "result" {
 			if event.IsError {
 				if event.Subtype == "error_max_structured_output_retries" {
-					return sharedanalysis.Document{}, errors.New("Claude could not produce output matching ReviewArc's schema")
+					return sharedanalysis.Document{}, errors.New("structured output from Claude did not match ReviewArc's schema")
 				}
-				return sharedanalysis.Document{}, errors.New("Claude returned an error result")
+				return sharedanalysis.Document{}, errors.New("error result returned by Claude")
 			}
 			if len(event.StructuredOutput) > 0 && string(event.StructuredOutput) != "null" {
 				final = event.StructuredOutput
@@ -386,7 +386,7 @@ func parseStream(data []byte, tracker *agent.AccessTracker) (sharedanalysis.Docu
 		return sharedanalysis.Document{}, err
 	}
 	if len(final) == 0 {
-		return sharedanalysis.Document{}, errors.New("Claude completed without structured output")
+		return sharedanalysis.Document{}, errors.New("structured output was not returned by Claude")
 	}
 	return sharedanalysis.Decode(final)
 }

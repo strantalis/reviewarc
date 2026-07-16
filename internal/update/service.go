@@ -356,6 +356,8 @@ func (s *Service) applyEventLocked(event AdapterEvent) error {
 	}
 
 	switch event.State {
+	case StateChecking, StateDownloading, StateInstalling, StateUnsupported:
+		return nil
 	case StateIdle:
 		s.checkActive = false
 		s.status.Release = nil
@@ -432,8 +434,8 @@ func cloneRelease(release *Release) *Release {
 	if release == nil {
 		return nil
 	}
-	copy := *release
-	return &copy
+	cloned := *release
+	return &cloned
 }
 
 func timePointer(value time.Time) *time.Time { return &value }

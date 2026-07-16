@@ -1,7 +1,8 @@
 import type { AccountState, AnalysisConfiguration, AnalysisProfile, AnalysisRequest, BootstrapState, ChapterStatus, ChangedFile, DiffFile, EnvironmentState, FileContent, InboxAnalysis, InboxResult, Operation, OperationSnapshot, PublishPreview, PullRequestRef, PullRequestReviewComment, RepositoryPage, ReviewComment, ReviewNote, ReviewSession, SelectedRepositoryRefresh, SoftwareUpdateStatus, SourceSelection, SourceState, ThreadReplyPreview, UpdateChannel, Organization } from './types'
 
 type WailsMethod = (...args: unknown[]) => Promise<unknown>
-type AppBinding = Record<string, WailsMethod>
+type AppMethodName = keyof typeof import('../wailsjs/go/main/App')
+type AppBinding = Partial<Record<AppMethodName, WailsMethod>>
 
 declare global {
   interface Window {
@@ -20,15 +21,16 @@ export class BridgeUnavailableError extends Error {
   constructor(method: string) { super(`The desktop backend does not expose ${method}. Rebuild the Wails bindings and try again.`) }
 }
 
-async function call<T>(names: string[], ...args: unknown[]): Promise<T> {
+async function call<T>(names: AppMethodName[], ...args: unknown[]): Promise<T> {
   const app = window.go?.main?.App
   const name = names.find((candidate) => typeof app?.[candidate] === 'function')
   if (!app || !name) throw new BridgeUnavailableError(names[0])
-  return app[name](...args) as Promise<T>
+  return (app[name] as WailsMethod)(...args) as Promise<T>
 }
 
 export const backend = {
   bootstrap: () => call<BootstrapState>(['Bootstrap']),
+  openThirdPartyNotices: () => call<void>(['OpenThirdPartyNotices']),
   refreshEnvironment: () => call<EnvironmentState>(['RefreshEnvironment']),
   getUpdateStatus: () => call<SoftwareUpdateStatus>(['GetUpdateStatus']),
   checkForUpdates: () => call<SoftwareUpdateStatus>(['CheckForUpdates']),
@@ -64,8 +66,10 @@ export const backend = {
   preparePublish: (sessionId: string, commentIds: string[]) => call<PublishPreview>(['PreparePublish'], sessionId, commentIds),
   prepareReview: (sessionId: string, commentIds: string[], event: 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES') => call<PublishPreview>(['PrepareReview'], sessionId, commentIds, event),
   confirmPublish: (token: string, digest: string) => call<ReviewComment[]>(['ConfirmPublish'], token, digest),
+  discardPublishPreview: (token: string) => call<void>(['DiscardPublishPreview'], token),
   prepareThreadReply: (sessionId: string, targetCommentId: number, body: string) => call<ThreadReplyPreview>(['PrepareThreadReply'], sessionId, targetCommentId, body),
   confirmThreadReply: (token: string, digest: string) => call<PullRequestReviewComment>(['ConfirmThreadReply'], token, digest),
+  discardThreadReplyPreview: (token: string) => call<void>(['DiscardThreadReplyPreview'], token),
   on: (name: string, callback: (payload: unknown) => void) => window.runtime?.EventsOn?.(name, callback) ?? (() => {}),
   openGitHubSSO: (rawUrl: string) => {
     const url = new URL(rawUrl)

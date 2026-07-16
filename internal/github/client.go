@@ -102,7 +102,7 @@ func (c *Client) CurrentUser(ctx context.Context) (domain.GitHubUser, error) {
 		return domain.GitHubUser{}, fmt.Errorf("parse GitHub user: %w", err)
 	}
 	if raw.Login == "" {
-		return domain.GitHubUser{}, errors.New("GitHub returned an account without a login")
+		return domain.GitHubUser{}, errors.New("authenticated GitHub account has no login")
 	}
 	return raw.domain(), nil
 }
@@ -353,7 +353,7 @@ func (c *Client) GetRepository(ctx context.Context, ref domain.RepositoryRef) (d
 		return domain.Repository{}, fmt.Errorf("parse repository %s/%s: %w", ref.Owner, ref.Name, err)
 	}
 	if raw.Owner.Login == "" || raw.Name == "" || raw.NameWithOwner == "" {
-		return domain.Repository{}, fmt.Errorf("GitHub returned incomplete repository data for %s/%s", ref.Owner, ref.Name)
+		return domain.Repository{}, fmt.Errorf("incomplete GitHub repository data for %s/%s", ref.Owner, ref.Name)
 	}
 	return raw.domain(), nil
 }
@@ -629,7 +629,7 @@ func (c *Client) ReplyToReviewComment(ctx context.Context, ref domain.PullReques
 	}
 	var raw reviewCommentJSON
 	if err := json.Unmarshal(result.Stdout, &raw); err != nil || raw.ID <= 0 || raw.InReplyToID != rootCommentID || raw.HTMLURL == "" {
-		return domain.PullRequestReviewComment{}, errors.New("GitHub published the reply but returned malformed confirmation")
+		return domain.PullRequestReviewComment{}, errors.New("reply was published on GitHub but confirmation was malformed")
 	}
 	return raw.domain(), nil
 }

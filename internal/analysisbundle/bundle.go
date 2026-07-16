@@ -145,12 +145,7 @@ type Lease struct {
 
 func (l *Lease) Close() error {
 	l.once.Do(func() {
-		_ = filepath.WalkDir(l.Reference.Path, func(path string, entry os.DirEntry, err error) error {
-			if err == nil && entry.IsDir() {
-				_ = os.Chmod(path, 0o700)
-			}
-			return nil
-		})
+		makeWritableForRemoval(l.Reference.Path)
 		l.err = os.RemoveAll(l.Reference.Path)
 	})
 	return l.err
@@ -190,6 +185,7 @@ func (b Builder) Build(ctx context.Context, input Input) (*Lease, error) {
 			_ = os.RemoveAll(stage)
 		}
 	}()
+	// #nosec G302 -- this is a private directory and owner execute is required for traversal.
 	if err := os.Chmod(stage, 0o700); err != nil {
 		return nil, err
 	}
@@ -270,7 +266,7 @@ func (b Builder) Build(ctx context.Context, input Input) (*Lease, error) {
 	}
 	cleanup = false
 	if err := makeReadOnly(final); err != nil {
-		_ = os.Chmod(final, 0o700)
+		makeWritableForRemoval(final)
 		_ = os.RemoveAll(final)
 		return nil, err
 	}
@@ -300,6 +296,11 @@ func writeArtifact(root, relative string, data []byte, pageBytes int) (Artifact,
 }
 
 func makeReadOnly(root string) error {
+	rooted, err := os.OpenRoot(root)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rooted.Close() }()
 	return filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -307,10 +308,34 @@ func makeReadOnly(root string) error {
 		if entry.Type()&os.ModeSymlink != 0 {
 			return errors.New("analysis bundle contains a symlink")
 		}
-		if entry.IsDir() {
-			return os.Chmod(path, 0o500)
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
 		}
-		return os.Chmod(path, 0o400)
+		if entry.IsDir() {
+			// #nosec G302 -- read-only private directories require owner execute for traversal.
+			return rooted.Chmod(relative, 0o500)
+		}
+		return rooted.Chmod(relative, 0o400)
+	})
+}
+
+func makeWritableForRemoval(root string) {
+	rooted, err := os.OpenRoot(root)
+	if err != nil {
+		return
+	}
+	defer func() { _ = rooted.Close() }()
+	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil || !entry.IsDir() {
+			return walkErr
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		// #nosec G302 -- private directories need owner write and execute before recursive removal.
+		return rooted.Chmod(relative, 0o700)
 	})
 }
 
@@ -349,12 +374,13 @@ func validateLimits(l Limits) error {
 	return nil
 }
 
-func validName(value string, max int, dots bool) bool {
-	if value == "" || len(value) > max || value == "." || value == ".." {
+func validName(value string, maxLength int, dots bool) bool {
+	if value == "" || len(value) > maxLength || value == "." || value == ".." {
 		return false
 	}
 	for _, r := range value {
-		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || dots && (r == '_' || r == '.')) {
+		allowed := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || dots && (r == '_' || r == '.')
+		if !allowed {
 			return false
 		}
 	}

@@ -8,6 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -147,39 +150,6 @@ type CommentInput struct {
 	Line      *int               `json:"line"`
 	Side      domain.DiffSide    `json:"side"`
 }
-type PublishItem struct {
-	DraftID   string             `json:"draftId"`
-	Kind      domain.CommentKind `json:"kind"`
-	Body      string             `json:"body"`
-	Path      string             `json:"path,omitempty"`
-	StartLine *int               `json:"startLine,omitempty"`
-	StartSide domain.DiffSide    `json:"startSide,omitempty"`
-	Line      *int               `json:"line,omitempty"`
-	Side      domain.DiffSide    `json:"side,omitempty"`
-}
-type PublishPreview struct {
-	Token      string        `json:"token"`
-	Digest     string        `json:"digest"`
-	Repository string        `json:"repository"`
-	Number     int           `json:"number"`
-	HeadSHA    string        `json:"headSha"`
-	Items      []PublishItem `json:"items"`
-	Event      string        `json:"event"`
-	ExpiresAt  time.Time     `json:"expiresAt"`
-}
-type ThreadReplyPreview struct {
-	Token         string    `json:"token"`
-	Digest        string    `json:"digest"`
-	Repository    string    `json:"repository"`
-	Number        int       `json:"number"`
-	HeadSHA       string    `json:"headSha"`
-	RootCommentID int64     `json:"rootCommentId"`
-	RootAuthor    string    `json:"rootAuthor"`
-	Path          string    `json:"path"`
-	Body          string    `json:"body"`
-	ExpiresAt     time.Time `json:"expiresAt"`
-}
-
 type preparedState struct {
 	repository gitcache.ManagedRepository
 	files      []domain.ChangedFile
@@ -189,15 +159,6 @@ type analysisPlan struct {
 	profile   domain.AnalysisProfile
 	transport domain.ContextTransport
 	runID     string
-}
-type pendingPublish struct {
-	preview PublishPreview
-	ref     domain.PullRequestRef
-}
-type pendingThreadReply struct {
-	preview   ThreadReplyPreview
-	ref       domain.PullRequestRef
-	sessionID string
 }
 
 const environmentSnapshotSetting = "environment_snapshot_v1"
@@ -213,7 +174,7 @@ type App struct {
 	repos             *gitcache.Manager
 	runner            proc.Runner
 	harnesses         *agent.Registry
-	prepared          map[string]preparedState
+	prepared          *preparedReviewCache
 	active            map[string]context.CancelFunc
 	analysisBySession map[string]string
 	operationHistory  map[string][]Operation
@@ -248,7 +209,7 @@ func NewApp() (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	app := &App{paths: paths, detector: dependencies.New(runner), github: githubclient.New(runner), store: store, repos: gitcache.NewManager(paths.Repositories, paths.Worktrees, runner, gitcache.Options{RemoteURL: remoteURL}), runner: runner, harnesses: registry, prepared: map[string]preparedState{}, active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}, operationHistory: map[string][]Operation{}, analysisWake: make(chan struct{}, 2), publish: map[string]pendingPublish{}, threadReplies: map[string]pendingThreadReply{}, gitProtocol: gitProtocol}
+	app := &App{paths: paths, detector: dependencies.New(runner), github: githubclient.New(runner), store: store, repos: gitcache.NewManager(paths.Repositories, paths.Worktrees, runner, gitcache.Options{RemoteURL: remoteURL}), runner: runner, harnesses: registry, prepared: newPreparedReviewCache(0, 0, 0), active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}, operationHistory: map[string][]Operation{}, analysisWake: make(chan struct{}, 2), publish: map[string]pendingPublish{}, threadReplies: map[string]pendingThreadReply{}, gitProtocol: gitProtocol}
 	app.configureUpdater()
 	return app, nil
 }
@@ -379,6 +340,29 @@ func (a *App) Bootstrap() domain.BootstrapState {
 		Account:           environment.Account,
 		EnvironmentCached: cached,
 	}
+}
+
+func bundledThirdPartyNoticesPath(executablePath string) string {
+	return filepath.Clean(filepath.Join(filepath.Dir(executablePath), "..", "Resources", "ThirdPartyNotices.txt"))
+}
+
+func (a *App) OpenThirdPartyNotices() error {
+	executablePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate ReviewArc executable: %w", err)
+	}
+	noticePath := bundledThirdPartyNoticesPath(executablePath)
+	info, err := os.Stat(noticePath)
+	if err != nil {
+		return fmt.Errorf("locate bundled third-party notices: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("bundled third-party notices are not a regular file: %s", noticePath)
+	}
+	if err := exec.CommandContext(a.appContext(), "/usr/bin/open", noticePath).Run(); err != nil {
+		return fmt.Errorf("open bundled third-party notices: %w", err)
+	}
+	return nil
 }
 
 func (a *App) cachedEnvironment(ctx context.Context) (domain.EnvironmentState, bool) {
@@ -564,24 +548,14 @@ func (a *App) RefreshInbox() (InboxState, error) {
 		result.Errors[key] = message
 		result.Partial = true
 	}
-	for i := range result.Items {
-		item := &result.Items[i]
-		if item.BaseSHA != "" && item.HeadSHA != "" {
-			if _, staleErr := a.store.MarkStaleIfChanged(ctx, item.Ref, item.BaseSHA, item.HeadSHA); staleErr != nil {
-				return InboxState{}, staleErr
-			}
-		}
-		if s, e := a.store.LatestSessionForPullRequest(ctx, item.Ref); e == nil {
-			item.SessionID = s.ID
-			item.AnalysisStatus, item.Progress = s.AnalysisStatus, s.Progress
-			if s.Analysis != nil {
-				item.RiskLevel = highestRisk(s.Analysis.Risks)
-			}
-		}
-		if persistErr := a.store.UpsertPullRequest(ctx, domain.PullRequest{PullRequestSummary: *item, BaseSHA: item.BaseSHA, HeadSHA: item.HeadSHA}); persistErr != nil {
-			return InboxState{}, persistErr
-		}
+	if _, err := a.store.RefreshInboxPullRequests(ctx, result.Items); err != nil {
+		return InboxState{}, err
 	}
+	local, err := a.store.ListPullRequestSummaries(ctx)
+	if err != nil {
+		return InboxState{}, err
+	}
+	result.Items = mergeInboxReviewState(result.Items, local)
 	return InboxState{Items: result.Items, Errors: result.Errors, Partial: result.Partial}, nil
 }
 
@@ -714,7 +688,7 @@ func (a *App) OpenPullRequest(ref domain.PullRequestRef) (domain.ReviewSession, 
 			a.mu.Unlock()
 			return domain.ReviewSession{}, err
 		}
-		delete(a.prepared, session.ID)
+		a.prepared.Delete(session.ID)
 		a.mu.Unlock()
 	} else if err := a.store.SaveSession(ctx, session); err != nil {
 		return domain.ReviewSession{}, err
@@ -979,7 +953,7 @@ func (a *App) startAnalysis(sessionID string, request AnalysisRequest) (Operatio
 	if err != nil {
 		return Operation{}, err
 	}
-	profile := domain.AnalysisProfile{}
+	var profile domain.AnalysisProfile
 	if request.Profile != nil {
 		profile = *request.Profile
 	} else if profile, err = a.store.GetAnalysisProfile(a.appContext()); err != nil {
@@ -1019,7 +993,6 @@ func (a *App) startAnalysis(sessionID string, request AnalysisRequest) (Operatio
 	}
 	a.mu.Unlock()
 	if queued {
-		cancel()
 		op.Stage = "queued"
 		op.State = "queued"
 		op.Message = "Waiting for an analysis worker"
@@ -1030,9 +1003,7 @@ func (a *App) startAnalysis(sessionID string, request AnalysisRequest) (Operatio
 	}
 	run := domain.AnalysisRun{ID: runID, SessionID: sessionID, Profile: profile, HarnessVersion: capabilities.Version, ContextTransport: transport, SchemaVersion: sharedanalysis.SchemaVersion, InputFingerprint: fingerprint, Coverage: domain.AnalysisCoverage{OmittedPaths: []string{}, Accesses: []domain.ContextAccess{}}, Status: runStatus}
 	if err := a.store.StartAnalysisRun(a.appContext(), run); err != nil {
-		if !queued {
-			cancel()
-		}
+		cancel()
 		a.mu.Lock()
 		delete(a.active, op.ID)
 		delete(a.analysisBySession, sessionID)
@@ -1041,10 +1012,14 @@ func (a *App) startAnalysis(sessionID string, request AnalysisRequest) (Operatio
 	}
 	a.emitOperation(op)
 	if queued {
+		cancel()
 		a.wakeAnalysisWorkers()
 		return op, nil
 	}
-	go a.prepareAndRunAnalysis(ctx, op, session, analysisPlan{adapter: adapter, profile: profile, transport: transport, runID: runID})
+	go func() {
+		defer cancel()
+		a.prepareAndRunAnalysis(ctx, op, session, analysisPlan{adapter: adapter, profile: profile, transport: transport, runID: runID})
+	}()
 	return op, nil
 }
 
@@ -1104,6 +1079,7 @@ func (a *App) runQueuedAnalysis(workerCtx context.Context, run domain.AnalysisRu
 		return
 	}
 	ctx, cancel := context.WithCancel(workerCtx)
+	defer cancel()
 	a.mu.Lock()
 	a.active[op.ID] = cancel
 	a.analysisBySession[run.SessionID] = op.ID
@@ -1220,187 +1196,6 @@ func (a *App) SaveDraftComment(input CommentInput) (domain.ReviewComment, error)
 	return comment, nil
 }
 func (a *App) DeleteDraftComment(id string) error { return a.store.DeleteComment(a.appContext(), id) }
-func (a *App) PreparePublish(sessionID string, draftIDs []string) (PublishPreview, error) {
-	return a.PrepareReview(sessionID, draftIDs, "COMMENT")
-}
-func (a *App) PrepareReview(sessionID string, draftIDs []string, event string) (PublishPreview, error) {
-	event = strings.ToUpper(strings.TrimSpace(event))
-	if event != "COMMENT" && event != "APPROVE" && event != "REQUEST_CHANGES" {
-		return PublishPreview{}, errors.New("invalid GitHub review event")
-	}
-	session, err := a.store.GetSession(a.appContext(), sessionID)
-	if err != nil {
-		return PublishPreview{}, err
-	}
-	wanted := map[string]bool{}
-	for _, id := range draftIDs {
-		wanted[id] = true
-	}
-	items := make([]PublishItem, 0, len(wanted))
-	for _, draft := range session.Comments {
-		if !wanted[draft.ID] || draft.Status != domain.CommentDraft {
-			continue
-		}
-		if draft.Kind == domain.CommentInline {
-			normalized, err := a.normalizeInline(sessionID, draft.Path, draft.StartLine, draft.StartSide, draft.Line, draft.Side)
-			if err != nil {
-				return PublishPreview{}, err
-			}
-			draft.StartLine, draft.StartSide, draft.Line, draft.Side = normalized.StartLine, normalized.StartSide, normalized.Line, normalized.Side
-		}
-		items = append(items, PublishItem{DraftID: draft.ID, Kind: draft.Kind, Body: draft.Body, Path: draft.Path, StartLine: draft.StartLine, StartSide: draft.StartSide, Line: draft.Line, Side: draft.Side})
-	}
-	if len(items) != len(wanted) || (event == "COMMENT" && len(items) == 0) {
-		return PublishPreview{}, errors.New("one or more draft comments are unavailable")
-	}
-	if event == "REQUEST_CHANGES" {
-		hasBody := false
-		for _, item := range items {
-			if item.Kind == domain.CommentGeneral && strings.TrimSpace(item.Body) != "" {
-				hasBody = true
-				break
-			}
-		}
-		if !hasBody {
-			return PublishPreview{}, errors.New("request changes requires a selected general draft explaining the decision")
-		}
-	}
-	preview := PublishPreview{Token: newID(), Repository: session.PullRequest.Ref.Repository.Owner + "/" + session.PullRequest.Ref.Repository.Name, Number: session.PullRequest.Ref.Number, HeadSHA: session.HeadSHA, Items: items, Event: event, ExpiresAt: time.Now().UTC().Add(5 * time.Minute)}
-	payload, _ := json.Marshal(struct {
-		Repository string
-		Number     int
-		HeadSHA    string
-		Items      []PublishItem
-		Event      string
-	}{preview.Repository, preview.Number, preview.HeadSHA, preview.Items, preview.Event})
-	sum := sha256.Sum256(payload)
-	preview.Digest = hex.EncodeToString(sum[:])
-	a.mu.Lock()
-	a.publish[preview.Token] = pendingPublish{preview, session.PullRequest.Ref}
-	a.mu.Unlock()
-	return preview, nil
-}
-func (a *App) ConfirmPublish(token, digest string) ([]domain.ReviewComment, error) {
-	a.mu.Lock()
-	pending, ok := a.publish[token]
-	delete(a.publish, token)
-	a.mu.Unlock()
-	if !ok || pending.preview.Digest != digest || time.Now().After(pending.preview.ExpiresAt) {
-		return nil, errors.New("publish confirmation is invalid or expired")
-	}
-	current, err := a.github.GetPullRequest(a.appContext(), pending.ref)
-	if err != nil {
-		return nil, err
-	}
-	if current.PullRequest.HeadSHA != pending.preview.HeadSHA {
-		return nil, errors.New("pull request changed; refresh before publishing")
-	}
-	response, err := a.github.PublishReview(a.appContext(), pending.ref, buildReviewPayload(pending.preview))
-	if err != nil {
-		return nil, err
-	}
-	var published struct {
-		ID      any    `json:"id"`
-		HTMLURL string `json:"html_url"`
-	}
-	if err := json.Unmarshal(response, &published); err != nil {
-		return nil, errors.New("GitHub published the review but returned malformed confirmation")
-	}
-	out := make([]domain.ReviewComment, 0, len(pending.preview.Items))
-	for _, item := range pending.preview.Items {
-		id := fmt.Sprint(published.ID)
-		if err := a.store.SetCommentPublication(a.appContext(), item.DraftID, domain.CommentPublished, id, published.HTMLURL); err != nil {
-			return nil, err
-		}
-		out = append(out, domain.ReviewComment{ID: item.DraftID, Kind: item.Kind, Body: item.Body, Path: item.Path, StartLine: item.StartLine, StartSide: item.StartSide, Line: item.Line, Side: item.Side, Status: domain.CommentPublished, GitHubID: id, GitHubURL: published.HTMLURL})
-	}
-	return out, nil
-}
-
-func (a *App) PrepareThreadReply(sessionID string, targetCommentID int64, body string) (ThreadReplyPreview, error) {
-	if targetCommentID <= 0 || strings.TrimSpace(body) == "" || len(body) > 65536 {
-		return ThreadReplyPreview{}, errors.New("reply must contain 1 to 65,536 characters")
-	}
-	session, err := a.store.GetSession(a.appContext(), sessionID)
-	if err != nil {
-		return ThreadReplyPreview{}, err
-	}
-	var target *domain.PullRequestReviewComment
-	for i := range session.PullRequest.ReviewComments {
-		if session.PullRequest.ReviewComments[i].ID == targetCommentID {
-			target = &session.PullRequest.ReviewComments[i]
-			break
-		}
-	}
-	if target == nil {
-		return ThreadReplyPreview{}, errors.New("review thread is no longer available")
-	}
-	rootID := target.ID
-	if target.ReplyToID > 0 {
-		rootID = target.ReplyToID
-	}
-	var root *domain.PullRequestReviewComment
-	for i := range session.PullRequest.ReviewComments {
-		comment := &session.PullRequest.ReviewComments[i]
-		if comment.ID == rootID && comment.ReplyToID == 0 {
-			root = comment
-			break
-		}
-	}
-	if root == nil {
-		return ThreadReplyPreview{}, errors.New("review thread root is no longer available")
-	}
-	preview := ThreadReplyPreview{
-		Token: newID(), Repository: session.PullRequest.Ref.Repository.Owner + "/" + session.PullRequest.Ref.Repository.Name,
-		Number: session.PullRequest.Ref.Number, HeadSHA: session.HeadSHA, RootCommentID: root.ID, RootAuthor: root.Author.Login,
-		Path: root.Path, Body: body, ExpiresAt: time.Now().UTC().Add(5 * time.Minute),
-	}
-	payload, _ := json.Marshal(struct {
-		Repository    string
-		Number        int
-		HeadSHA       string
-		RootCommentID int64
-		Body          string
-	}{preview.Repository, preview.Number, preview.HeadSHA, preview.RootCommentID, preview.Body})
-	sum := sha256.Sum256(payload)
-	preview.Digest = hex.EncodeToString(sum[:])
-	a.mu.Lock()
-	if a.threadReplies == nil {
-		a.threadReplies = map[string]pendingThreadReply{}
-	}
-	a.threadReplies[preview.Token] = pendingThreadReply{preview: preview, ref: session.PullRequest.Ref, sessionID: session.ID}
-	a.mu.Unlock()
-	return preview, nil
-}
-
-func (a *App) ConfirmThreadReply(token, digest string) (domain.PullRequestReviewComment, error) {
-	a.mu.Lock()
-	pending, ok := a.threadReplies[token]
-	delete(a.threadReplies, token)
-	a.mu.Unlock()
-	if !ok || pending.preview.Digest != digest || time.Now().After(pending.preview.ExpiresAt) {
-		return domain.PullRequestReviewComment{}, errors.New("reply confirmation is invalid or expired")
-	}
-	current, err := a.github.GetPullRequest(a.appContext(), pending.ref)
-	if err != nil {
-		return domain.PullRequestReviewComment{}, err
-	}
-	if current.PullRequest.HeadSHA != pending.preview.HeadSHA {
-		return domain.PullRequestReviewComment{}, errors.New("pull request changed; refresh before replying")
-	}
-	found := false
-	for _, comment := range current.PullRequest.ReviewComments {
-		if comment.ID == pending.preview.RootCommentID && comment.ReplyToID == 0 {
-			found = true
-			break
-		}
-	}
-	if !found {
-		return domain.PullRequestReviewComment{}, errors.New("review thread is no longer available")
-	}
-	return a.github.ReplyToReviewComment(a.appContext(), pending.ref, pending.preview.RootCommentID, pending.preview.Body)
-}
-
 func (a *App) prepare(ctx context.Context, session domain.ReviewSession) (gitcache.ManagedRepository, []domain.ChangedFile, error) {
 	spec := domain.RevisionSpec{BaseSHA: session.BaseSHA, HeadSHA: session.HeadSHA, BaseRef: session.PullRequest.BaseRef, HeadRef: session.PullRequest.HeadRef, HeadRepository: session.PullRequest.HeadRepository}
 	prepared, err := a.repos.PreparePR(ctx, session.PullRequest.Ref, spec, nil)
@@ -1415,7 +1210,7 @@ func (a *App) ensurePrepared(sessionID string) (preparedState, error) {
 }
 func (a *App) ensurePreparedContext(ctx context.Context, sessionID string) (preparedState, error) {
 	a.mu.RLock()
-	state, ok := a.prepared[sessionID]
+	state, ok := a.prepared.Get(sessionID)
 	a.mu.RUnlock()
 	if ok {
 		return state, nil
@@ -1446,7 +1241,7 @@ func (a *App) ensurePreparedContext(ctx context.Context, sessionID string) (prep
 			a.mu.Unlock()
 			return preparedState{}, err
 		}
-		a.prepared[sessionID] = state
+		a.prepared.Put(sessionID, state)
 		a.mu.Unlock()
 		return state, nil
 	}
@@ -1509,7 +1304,7 @@ func (a *App) runAnalysis(ctx context.Context, op Operation, session domain.Revi
 		a.failAnalysisOperation(op, contextFailure(err), domain.AnalysisCoverage{})
 		return
 	}
-	defer lease.Close()
+	defer func() { _ = lease.Close() }()
 	bundle, err := analysisbundle.Open(a.paths.Root, lease.Reference.Path, lease.Reference.Digest)
 	if err != nil {
 		a.failAnalysisOperation(op, contextFailure(err), domain.AnalysisCoverage{})
@@ -1547,7 +1342,7 @@ func (a *App) runAnalysis(ctx context.Context, op Operation, session domain.Revi
 			coverage = *event.Coverage
 		}
 		switch event.Kind {
-		case agent.EventStarted, agent.EventProgress:
+		case agent.EventStarted, agent.EventProgress, agent.EventWarning:
 			op.Stage = "analyzingChange"
 		case agent.EventValidating:
 			if strings.Contains(strings.ToLower(event.Message), "structured") {
@@ -1855,36 +1650,6 @@ func validSourceRepositoryName(name string) bool {
 	}
 	return true
 }
-func buildReviewPayload(preview PublishPreview) []byte {
-	type inline struct {
-		Path      string          `json:"path"`
-		StartLine *int            `json:"start_line,omitempty"`
-		StartSide domain.DiffSide `json:"start_side,omitempty"`
-		Line      int             `json:"line"`
-		Side      domain.DiffSide `json:"side"`
-		Body      string          `json:"body"`
-	}
-	body := []string{}
-	comments := []inline{}
-	event := preview.Event
-	if event == "" {
-		event = "COMMENT"
-	}
-	for _, item := range preview.Items {
-		if item.Kind == domain.CommentGeneral {
-			body = append(body, item.Body)
-		} else if item.Line != nil {
-			comments = append(comments, inline{item.Path, item.StartLine, item.StartSide, *item.Line, item.Side, item.Body})
-		}
-	}
-	payload, _ := json.Marshal(struct {
-		CommitID string   `json:"commit_id"`
-		Body     string   `json:"body"`
-		Event    string   `json:"event"`
-		Comments []inline `json:"comments,omitempty"`
-	}{preview.HeadSHA, strings.Join(body, "\n\n"), event, comments})
-	return payload
-}
 func existingDiscussion(pr domain.PullRequest) string {
 	var out strings.Builder
 	for _, review := range pr.Reviews {
@@ -1903,17 +1668,6 @@ func existingDiscussion(pr domain.PullRequest) string {
 	}
 	return out.String()
 }
-func highestRisk(risks []domain.ReviewRisk) domain.RiskLevel {
-	rank := map[domain.RiskLevel]int{domain.RiskUnknown: 0, domain.RiskLow: 1, domain.RiskMedium: 2, domain.RiskHigh: 3, domain.RiskCritical: 4}
-	result := domain.RiskUnknown
-	for _, risk := range risks {
-		if rank[risk.Level] > rank[result] {
-			result = risk.Level
-		}
-	}
-	return result
-}
-
 func analysisStatusAfterCancellation(session domain.ReviewSession) domain.AnalysisStatus {
 	if session.Analysis == nil {
 		return domain.AnalysisNotStarted

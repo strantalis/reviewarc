@@ -79,7 +79,7 @@ func TestReadDiffPagesAndRecordsCoverage(t *testing.T) {
 	limits.PageBytes = 1024
 	patch := strings.Repeat("diff line\n", 300)
 	service, lease := fixtureService(t, limits, patch, &fakeObjectReader{})
-	defer lease.Close()
+	defer func() { _ = lease.Close() }()
 	first, err := service.ReadDiff(context.Background(), ReadDiffInput{FileID: "f000001"})
 	if err != nil || !first.HasMore || first.NextCursor == 0 {
 		t.Fatalf("first page=%+v err=%v", first, err)
@@ -100,7 +100,7 @@ func TestReadDiffPagesAndRecordsCoverage(t *testing.T) {
 func TestListChangesIncludesBoundedDiffPreviewForTriage(t *testing.T) {
 	patch := "diff --git a/src/main.go b/src/main.go\n@@ -1 +1 @@\n-old\n+new\n"
 	service, lease := fixtureService(t, analysisbundle.DefaultLimits(), patch, &fakeObjectReader{})
-	defer lease.Close()
+	defer func() { _ = lease.Close() }()
 	out, err := service.ListChanges(context.Background(), ListChangesInput{})
 	if err != nil || len(out.Changes) != 1 {
 		t.Fatalf("changes=%+v err=%v", out.Changes, err)
@@ -129,7 +129,7 @@ func TestListChangesPagesCompleteLargePullRequestInventory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lease.Close()
+	defer func() { _ = lease.Close() }()
 	bundle, err := analysisbundle.Open(dataRoot, lease.Reference.Path, lease.Reference.Digest)
 	if err != nil {
 		t.Fatal(err)
@@ -157,7 +157,7 @@ func TestReadFileBoundsAndRejectsBinary(t *testing.T) {
 	limits := analysisbundle.DefaultLimits()
 	reader := &fakeObjectReader{files: map[string]string{"head:src/main.go": "one\ntwo\nthree\nfour\n"}, binary: map[string]bool{"base:bin.dat": true}}
 	service, lease := fixtureService(t, limits, "patch", reader)
-	defer lease.Close()
+	defer func() { _ = lease.Close() }()
 	out, err := service.ReadFile(context.Background(), ReadFileInput{Path: "src/main.go", Revision: "head", StartLine: 2, EndLine: 3})
 	if err != nil || out.Content != "two\nthree" || out.EndLine != 3 {
 		t.Fatalf("output=%+v err=%v", out, err)
@@ -173,7 +173,7 @@ func TestReadFileBoundsAndRejectsBinary(t *testing.T) {
 func TestSearchUsesLiteralQueryAndValidatesInput(t *testing.T) {
 	reader := &fakeObjectReader{matches: []SearchMatch{{Path: "src/main.go", Line: 2, Content: "needle"}}}
 	service, lease := fixtureService(t, analysisbundle.DefaultLimits(), "patch", reader)
-	defer lease.Close()
+	defer func() { _ = lease.Close() }()
 	out, err := service.SearchSnapshot(context.Background(), SearchInput{Query: "-n --fixed literal", Revision: "head"})
 	if err != nil || len(out.Matches) != 1 || reader.query != "-n --fixed literal" {
 		t.Fatalf("output=%+v query=%q err=%v", out, reader.query, err)
@@ -185,7 +185,7 @@ func TestSearchUsesLiteralQueryAndValidatesInput(t *testing.T) {
 
 func TestExplainDiffOmissionsAcceptsBoundedReasonsBestEffort(t *testing.T) {
 	service, lease := fixtureService(t, analysisbundle.DefaultLimits(), "patch", &fakeObjectReader{})
-	defer lease.Close()
+	defer func() { _ = lease.Close() }()
 	out, err := service.ExplainDiffOmissions(context.Background(), ExplainDiffOmissionsInput{Decisions: []DiffOmissionInput{
 		{FileID: "f000001", Category: "documentation", Reason: "  README-only guidance; no runtime behavior changed.  "},
 		{FileID: "missing", Category: "not_relevant", Reason: "Unknown file."},
@@ -206,7 +206,7 @@ func TestExplainDiffOmissionsAcceptsBoundedReasonsBestEffort(t *testing.T) {
 
 func TestExplainDiffOmissionsRejectsUnboundedCallsWithoutChargingRepositoryBytes(t *testing.T) {
 	service, lease := fixtureService(t, analysisbundle.DefaultLimits(), "patch", &fakeObjectReader{})
-	defer lease.Close()
+	defer func() { _ = lease.Close() }()
 	for _, decisions := range [][]DiffOmissionInput{
 		nil,
 		make([]DiffOmissionInput, 101),
@@ -234,7 +234,7 @@ func TestContextBudgetsFailClosed(t *testing.T) {
 	limits := analysisbundle.DefaultLimits()
 	limits.MaxCalls = 1
 	service, lease := fixtureService(t, limits, "patch", &fakeObjectReader{})
-	defer lease.Close()
+	defer func(lease *analysisbundle.Lease) { _ = lease.Close() }(lease)
 	if _, err := service.ListChanges(context.Background(), ListChangesInput{}); err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestContextBudgetsFailClosed(t *testing.T) {
 	limits.PageBytes = 1024
 	limits.MaxServedBytes = 1024
 	service, lease = fixtureService(t, limits, strings.Repeat("x", 3000), &fakeObjectReader{})
-	defer lease.Close()
+	defer func(lease *analysisbundle.Lease) { _ = lease.Close() }(lease)
 	if _, err := service.ReadDiff(context.Background(), ReadDiffInput{FileID: "f000001"}); !errors.Is(err, ErrByteBudget) {
 		t.Fatalf("byte budget error=%v", err)
 	}
@@ -254,7 +254,7 @@ func TestContextBudgetsFailClosed(t *testing.T) {
 
 func TestMCPServerExposesOnlyAnnotatedReadTools(t *testing.T) {
 	service, lease := fixtureService(t, analysisbundle.DefaultLimits(), "patch", &fakeObjectReader{})
-	defer lease.Close()
+	defer func() { _ = lease.Close() }()
 	server := Server(service, io.Discard)
 	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil)
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
@@ -262,12 +262,12 @@ func TestMCPServerExposesOnlyAnnotatedReadTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer serverSession.Close()
+	defer func() { _ = serverSession.Close() }()
 	clientSession, err := client.Connect(context.Background(), clientTransport, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer clientSession.Close()
+	defer func() { _ = clientSession.Close() }()
 	result, err := clientSession.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -329,7 +329,7 @@ func assertDiffOmissionSchema(t *testing.T, value any) {
 
 func TestMCPServerAcceptsDiffOmissionProvenance(t *testing.T) {
 	service, lease := fixtureService(t, analysisbundle.DefaultLimits(), "patch", &fakeObjectReader{})
-	defer lease.Close()
+	defer func() { _ = lease.Close() }()
 	server := Server(service, io.Discard)
 	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil)
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
@@ -337,12 +337,12 @@ func TestMCPServerAcceptsDiffOmissionProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer serverSession.Close()
+	defer func() { _ = serverSession.Close() }()
 	clientSession, err := client.Connect(context.Background(), clientTransport, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer clientSession.Close()
+	defer func() { _ = clientSession.Close() }()
 
 	result, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "explain_diff_omissions",
@@ -361,7 +361,7 @@ func TestMCPServerAcceptsDiffOmissionProvenance(t *testing.T) {
 
 func TestServeWritesOnlyProtocolToStdout(t *testing.T) {
 	service, lease := fixtureService(t, analysisbundle.DefaultLimits(), "patch", &fakeObjectReader{})
-	defer lease.Close()
+	defer func() { _ = lease.Close() }()
 	input := "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1\"}}}\n"
 	stdinReader, stdinWriter := io.Pipe()
 	stdoutReader, stdoutWriter := io.Pipe()

@@ -2,6 +2,7 @@
 package git
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -20,9 +21,16 @@ import (
 	processx "reviewarc/internal/process"
 )
 
-const defaultTimeout = 5 * time.Minute
+const (
+	defaultTimeout          = 5 * time.Minute
+	maxInteractiveFileBytes = 256 << 10
+	maxInteractiveFileLines = 10_000
+)
 
-var shaPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+var (
+	shaPattern      = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+	ErrFileTooLarge = errors.New("file is too large to display safely")
+)
 
 type ProgressPhase string
 
@@ -274,20 +282,40 @@ func (m *Manager) ReadFile(ctx context.Context, repo ManagedRepository, revision
 		return domain.FileContent{}, err
 	}
 	raw := strings.TrimSuffix(string(entry.Stdout), "\x00")
-	fields := strings.Fields(strings.SplitN(raw, "\t", 2)[0])
-	if len(fields) != 3 || fields[1] != "blob" {
+	parts := strings.SplitN(raw, "\t", 2)
+	fields := strings.Fields(parts[0])
+	if len(parts) != 2 || parts[1] != name || len(fields) != 3 || fields[1] != "blob" || !shaPattern.MatchString(fields[2]) {
 		return domain.FileContent{}, errors.New("path is not a file at the selected revision")
 	}
-	blob, err := m.git(ctx, "--git-dir="+repo.CachePath, "cat-file", "blob", fields[2])
+	sizeResult, err := m.run(ctx, processx.Command{Tool: processx.Git, Args: []string{"--git-dir=" + repo.CachePath, "cat-file", "-s", fields[2]}, Timeout: m.timeout, MaxOutput: 1024})
 	if err != nil {
-		return domain.FileContent{}, err
+		return domain.FileContent{}, fmt.Errorf("measure repository file: %w", err)
 	}
-	binary := strings.IndexByte(string(blob.Stdout), 0) >= 0 || !utf8.Valid(blob.Stdout)
+	size, parseErr := strconv.ParseInt(strings.TrimSpace(string(sizeResult.Stdout)), 10, 64)
+	if parseErr != nil || size < 0 {
+		return domain.FileContent{}, errors.New("git returned an invalid repository file size")
+	}
+	if size > maxInteractiveFileBytes {
+		return domain.FileContent{}, fileDisplayLimitError(name)
+	}
+	blob, err := m.run(ctx, processx.Command{Tool: processx.Git, Args: []string{"--git-dir=" + repo.CachePath, "cat-file", "blob", fields[2]}, Timeout: m.timeout, MaxOutput: maxInteractiveFileBytes})
+	if err != nil {
+		return domain.FileContent{}, fmt.Errorf("read repository file: %w", err)
+	}
+	lines := lineCount(blob.Stdout)
+	if lines > maxInteractiveFileLines {
+		return domain.FileContent{}, fileDisplayLimitError(name)
+	}
+	binary := bytes.IndexByte(blob.Stdout, 0) >= 0 || !utf8.Valid(blob.Stdout)
 	content := ""
 	if !binary {
 		content = string(blob.Stdout)
 	}
-	return domain.FileContent{Path: name, Revision: revision, SHA: sha, Content: content, IsBinary: binary, LineCount: lineCount(blob.Stdout)}, nil
+	return domain.FileContent{Path: name, Revision: revision, SHA: sha, Content: content, IsBinary: binary, LineCount: lines}, nil
+}
+
+func fileDisplayLimitError(name string) error {
+	return fmt.Errorf("%w: %s exceeds the %d KiB or %d-line display limit", ErrFileTooLarge, name, maxInteractiveFileBytes>>10, maxInteractiveFileLines)
 }
 
 func (m *Manager) ValidateEvidence(ctx context.Context, repo ManagedRepository, evidence domain.EvidenceReference) domain.EvidenceReference {
@@ -298,6 +326,11 @@ func (m *Manager) ValidateEvidence(ctx context.Context, repo ManagedRepository, 
 	}
 	content, err := m.ReadFile(ctx, repo, evidence.Revision, evidence.Path)
 	if err != nil {
+		if errors.Is(err, ErrFileTooLarge) {
+			evidence.ValidationStatus = domain.ValidationUnverified
+			evidence.ValidationMessage = "file is too large for interactive evidence display"
+			return evidence
+		}
 		evidence.ValidationStatus = domain.ValidationInvalid
 		evidence.ValidationMessage = "path does not exist at the selected revision"
 		return evidence

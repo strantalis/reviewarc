@@ -10,7 +10,8 @@ const customModelOption = '__reviewarc_custom_model__'
 
 function validCustomModelID(value: string) {
   const trimmed = value.trim()
-  return trimmed.length > 0 && trimmed.length <= 256 && !trimmed.startsWith('-') && !/[\s\u0000-\u001f\u007f]/u.test(trimmed)
+  const hasControlCharacter = Array.from(trimmed).some((character) => { const code = character.codePointAt(0) ?? 0; return code <= 31 || code === 127 })
+  return trimmed.length > 0 && trimmed.length <= 256 && !trimmed.startsWith('-') && !hasControlCharacter && !/\s/u.test(trimmed)
 }
 
 function fixedModel(harness: HarnessDescriptor | undefined, modelID: string | undefined) {
@@ -101,9 +102,9 @@ export function AnalysisProfilePicker({configuration, value, onChange, disabled 
 
   if (!selectedHarness || !selectedModel || !selectedReasoning) return null
   return <div className="analysis-profile-picker" id={id}>
-    <label><span>Harness</span><SelectControl label="Analysis harness" value={selectedHarness.id} disabled={disabled} onChange={selectHarness} options={eligible.map((harness) => ({value: harness.id, label: harness.label, description: harness.version}))}/></label>
-    <label><span>Model</span><SelectControl label="Analysis model" value={customSelected ? customModelOption : selectedModel.id} disabled={disabled} onChange={selectModel} options={[...selectedHarness.models.map((model) => ({value: model.id, label: model.label})), ...(selectedHarness.customModel ? [{value: customModelOption, label: 'Custom model ID…'}] : [])]}/></label>
-    <label><span>Reasoning</span><SelectControl label="Analysis reasoning level" value={selectedReasoning.id} disabled={disabled} onChange={selectReasoning} options={selectedModel.reasoningLevels.map((level) => ({value: level.id, label: level.label}))}/></label>
+    <div className="analysis-profile-field"><span>Harness</span><SelectControl label="Analysis harness" value={selectedHarness.id} disabled={disabled} onChange={selectHarness} options={eligible.map((harness) => ({value: harness.id, label: harness.label, description: harness.version}))}/></div>
+    <div className="analysis-profile-field"><span>Model</span><SelectControl label="Analysis model" value={customSelected ? customModelOption : selectedModel.id} disabled={disabled} onChange={selectModel} options={[...selectedHarness.models.map((model) => ({value: model.id, label: model.label})), ...(selectedHarness.customModel ? [{value: customModelOption, label: 'Custom model ID…'}] : [])]}/></div>
+    <div className="analysis-profile-field"><span>Reasoning</span><SelectControl label="Analysis reasoning level" value={selectedReasoning.id} disabled={disabled} onChange={selectReasoning} options={selectedModel.reasoningLevels.map((level) => ({value: level.id, label: level.label}))}/></div>
     {customSelected && <label className="analysis-custom-model"><span>Custom model ID</span><input aria-label="Custom model ID" autoCapitalize="none" autoCorrect="off" autoComplete="off" spellCheck={false} disabled={disabled} value={value?.model ?? ''} onChange={(event) => onChange({harness: selectedHarness.id, model: event.target.value, reasoning: selectedReasoning.id})} placeholder="Exact model ID accepted by Claude Code"/><small>Use the provider or managed model ID exactly as Claude Code expects it.</small></label>}
   </div>
 }
@@ -133,7 +134,7 @@ function durationLabel(milliseconds: number) {
 export function AnalysisProgress({events, running, reanalysis = false, onCancel}: {events: OperationEvent[]; running: boolean; reanalysis?: boolean; onCancel: () => void}) {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
-    if (!running) return
+    if (!running) return undefined
     setNow(Date.now())
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(timer)
@@ -154,10 +155,10 @@ export function AnalysisProgress({events, running, reanalysis = false, onCancel}
   const lastActivityTime = lastActivityAt ? Date.parse(lastActivityAt) : Number.NaN
   const elapsed = Number.isFinite(startedTime) ? Math.max(0, now - startedTime) : undefined
   const quietFor = Number.isFinite(lastActivityTime) ? Math.max(0, now - lastActivityTime) : undefined
-  const timing = elapsed == null || quietFor == null ? '' : `Running ${durationLabel(elapsed)} · ${quietFor < 5000 ? 'Activity just now' : `Last activity ${durationLabel(quietFor)} ago`}`
-  const quietMessage = quietFor != null && quietFor >= 120000
+  const timing = elapsed === undefined || quietFor === undefined ? '' : `Running ${durationLabel(elapsed)} · ${quietFor < 5000 ? 'Activity just now' : `Last activity ${durationLabel(quietFor)} ago`}`
+  const quietMessage = quietFor !== undefined && quietFor >= 120000
     ? `No new harness event for ${durationLabel(quietFor)}. The process is still running; cancel and retry if this appears stuck.`
-    : quietFor != null && quietFor >= 30000
+    : quietFor !== undefined && quietFor >= 30000
       ? `No new harness event for ${durationLabel(quietFor)}. It may still be working; some harness phases do not expose intermediate activity.`
       : ''
   return <div className="analysis-events" aria-busy={running}>
@@ -171,13 +172,13 @@ export function AnalysisProgress({events, running, reanalysis = false, onCancel}
       const distinctActivity = activity && activity !== copy.label && activity !== copy.detail
       const primary = status === 'running' && distinctActivity ? activity : copy.label
       const secondary = status === 'running' ? (distinctActivity ? copy.label : copy.detail) : activity || copy.detail
-      return <li className={`event-row ${status}`} key={copy.label}><span className={status}>{status === 'complete' ? <Check size={13}/> : status === 'failed' ? <X size={13}/> : <LoaderCircle className="spin" size={13}/>}</span><div><strong>{primary}</strong>{secondary !== primary && <small>{secondary}</small>}</div>{status === 'running' && event.progress != null && <em role="progressbar" aria-label={copy.label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(event.progress)}>{Math.round(event.progress)}%</em>}</li>
+      return <li className={`event-row ${status}`} key={copy.label}><span className={status}>{status === 'complete' ? <Check size={13}/> : status === 'failed' ? <X size={13}/> : <LoaderCircle className="spin" size={13}/>}</span><div><strong>{primary}</strong>{secondary !== primary && <small>{secondary}</small>}</div>{status === 'running' && event.progress !== undefined && <em role="progressbar" aria-label={copy.label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(event.progress)}>{Math.round(event.progress)}%</em>}</li>
     })}</ol>}
     {running && quietMessage && <p className="event-quiet-note">{quietMessage}</p>}
   </div>
 }
 
-export function AnalysisFailurePanel({failure, onRetry, onRefresh, onChangeProfile, onOpenSettings}: {failure: AnalysisFailure; onRetry?: () => void; onRefresh?: () => void; onChangeProfile?: () => void; onOpenSettings?: () => void}) {
+export function AnalysisFailurePanel({failure, onRetry, onChangeProfile, onOpenSettings}: {failure: AnalysisFailure; onRetry?: () => void; onRefresh?: () => void; onChangeProfile?: () => void; onOpenSettings?: () => void}) {
   const action = failure.action === 'retry' ? {label: 'Try again', run: onRetry}
     : failure.action === 'replan' ? {label: 'Change analysis setup', run: onChangeProfile}
       : failure.action === 'changeProfile' ? {label: 'Change analysis setup', run: onChangeProfile}

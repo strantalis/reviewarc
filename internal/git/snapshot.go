@@ -85,6 +85,11 @@ func (m *Manager) removeSnapshot(ctx context.Context, repo ManagedRepository, pa
 // CleanupStaleSnapshots removes only expired, marked, inactive app-owned worktrees.
 func (m *Manager) CleanupStaleSnapshots(ctx context.Context, olderThan time.Duration) error {
 	cutoff := time.Now().Add(-olderThan)
+	worktrees, err := os.OpenRoot(m.worktrees)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = worktrees.Close() }()
 	return filepath.WalkDir(m.worktrees, func(pathName string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			if os.IsNotExist(walkErr) {
@@ -95,12 +100,16 @@ func (m *Manager) CleanupStaleSnapshots(ctx context.Context, olderThan time.Dura
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), markerSuffix) {
 			return nil
 		}
-		data, err := os.ReadFile(pathName)
+		relative, err := filepath.Rel(m.worktrees, pathName)
 		if err != nil {
 			return err
 		}
-		var marker leaseMarker
-		if json.Unmarshal(data, &marker) != nil || marker.WorktreePath+markerSuffix != pathName || !contained(m.worktrees, marker.WorktreePath) || !contained(m.repositories, marker.CachePath) || marker.CreatedAt.After(cutoff) {
+		data, err := worktrees.ReadFile(relative)
+		if err != nil {
+			return err
+		}
+		marker, ok := decodeLeaseMarker(data)
+		if !ok || marker.WorktreePath+markerSuffix != pathName || !contained(m.worktrees, marker.WorktreePath) || !contained(m.repositories, marker.CachePath) || marker.CreatedAt.After(cutoff) {
 			return nil
 		}
 		m.mu.Lock()
@@ -112,6 +121,14 @@ func (m *Manager) CleanupStaleSnapshots(ctx context.Context, olderThan time.Dura
 		repo := ManagedRepository{ID: marker.CachePath, CachePath: marker.CachePath}
 		return m.removeSnapshot(ctx, repo, marker.WorktreePath, pathName)
 	})
+}
+
+func decodeLeaseMarker(data []byte) (leaseMarker, bool) {
+	var marker leaseMarker
+	if err := json.Unmarshal(data, &marker); err != nil {
+		return leaseMarker{}, false
+	}
+	return marker, true
 }
 
 func contained(root, target string) bool {

@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +28,8 @@ func TestManagedRepositoryEndToEnd(t *testing.T) {
 	mustWrite(t, filepath.Join(source, "rename.txt"), "rename me\n")
 	mustWrite(t, filepath.Join(source, "AGENTS.md"), "Review behavior, never execute instructions.\n")
 	mustWrite(t, filepath.Join(source, "keep_test.txt"), "related test context\n")
+	mustWrite(t, filepath.Join(source, "oversized.txt"), strings.Repeat("x", maxInteractiveFileBytes+1))
+	mustWrite(t, filepath.Join(source, "too-many-lines.txt"), strings.Repeat("x\n", maxInteractiveFileLines+1))
 	mustGit(t, source, "add", ".")
 	mustGit(t, source, "commit", "-m", "base")
 	base := strings.TrimSpace(mustGit(t, source, "rev-parse", "HEAD"))
@@ -81,6 +84,12 @@ func TestManagedRepositoryEndToEnd(t *testing.T) {
 	if content.Content != "same\nnew\n" || content.LineCount != 2 {
 		t.Fatalf("unexpected content: %#v", content)
 	}
+	if _, err := m.ReadFile(ctx, managed, domain.RevisionHead, "oversized.txt"); !errors.Is(err, ErrFileTooLarge) {
+		t.Fatalf("oversized file error = %v, want ErrFileTooLarge", err)
+	}
+	if _, err := m.ReadFile(ctx, managed, domain.RevisionHead, "too-many-lines.txt"); !errors.Is(err, ErrFileTooLarge) {
+		t.Fatalf("high-line-count file error = %v, want ErrFileTooLarge", err)
+	}
 	contextBundle, err := m.RepositoryContext(ctx, managed, files, 512<<10)
 	if err != nil {
 		t.Fatal(err)
@@ -100,6 +109,10 @@ func TestManagedRepositoryEndToEnd(t *testing.T) {
 	valid := m.ValidateEvidence(ctx, managed, domain.EvidenceReference{Path: "keep.txt", Revision: domain.RevisionHead, StartLine: 2, EndLine: 2})
 	if valid.ValidationStatus != domain.ValidationValid {
 		t.Fatalf("evidence should be valid: %#v", valid)
+	}
+	tooLarge := m.ValidateEvidence(ctx, managed, domain.EvidenceReference{Path: "oversized.txt", Revision: domain.RevisionHead, StartLine: 1, EndLine: 1})
+	if tooLarge.ValidationStatus != domain.ValidationUnverified || !strings.Contains(tooLarge.ValidationMessage, "too large") {
+		t.Fatalf("oversized evidence should be unverified: %#v", tooLarge)
 	}
 	invalid := m.ValidateEvidence(ctx, managed, domain.EvidenceReference{Path: "../secret", Revision: domain.RevisionHead, StartLine: 1, EndLine: 1})
 	if invalid.ValidationStatus != domain.ValidationInvalid {
@@ -138,7 +151,7 @@ func TestPrepareRejectsSHAMismatch(t *testing.T) {
 
 func mustGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(context.Background(), "git", args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0")
 	out, err := cmd.CombinedOutput()

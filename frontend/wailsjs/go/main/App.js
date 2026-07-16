@@ -30,6 +30,14 @@ export function DeleteNote(arg1) {
   return window['go']['main']['App']['DeleteNote'](arg1);
 }
 
+export function DiscardPublishPreview(arg1) {
+  return window['go']['main']['App']['DiscardPublishPreview'](arg1);
+}
+
+export function DiscardThreadReplyPreview(arg1) {
+  return window['go']['main']['App']['DiscardThreadReplyPreview'](arg1);
+}
+
 export function GetActiveAnalysisOperation(arg1) {
   return window['go']['main']['App']['GetActiveAnalysisOperation'](arg1);
 }
@@ -72,6 +80,10 @@ export function ListSources() {
 
 export function OpenPullRequest(arg1) {
   return window['go']['main']['App']['OpenPullRequest'](arg1);
+}
+
+export function OpenThirdPartyNotices() {
+  return window['go']['main']['App']['OpenThirdPartyNotices']();
 }
 
 export function PreparePublish(arg1, arg2) {

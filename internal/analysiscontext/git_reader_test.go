@@ -64,7 +64,7 @@ func TestGitObjectReaderUsesPinnedObjectsAndLiteralSearch(t *testing.T) {
 
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	command := exec.Command("git", args...)
+	command := exec.CommandContext(context.Background(), "git", args...)
 	if dir != "" {
 		command.Dir = dir
 	}

@@ -29,7 +29,11 @@ func TestMigrationsAndReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() {
+		if err := s.Close(); err != nil {
+			t.Errorf("close reopened store: %v", err)
+		}
+	}()
 	var account map[string]string
 	if err := s.GetSetting(ctx, "account", &account); err != nil {
 		t.Fatal(err)
@@ -38,10 +42,10 @@ func TestMigrationsAndReopen(t *testing.T) {
 		t.Fatalf("account = %#v", account)
 	}
 	var applied int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&applied); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&applied); err != nil {
 		t.Fatal(err)
 	}
-	if applied != 4 {
+	if applied != 5 {
 		t.Fatalf("applied migrations = %d", applied)
 	}
 }
@@ -123,7 +127,9 @@ func TestListPullRequestSummariesProjectsLatestReviewState(t *testing.T) {
 		Title:          "Keep bootstrap local",
 		AnalysisStatus: domain.AnalysisNotStarted,
 		RiskLevel:      domain.RiskUnknown,
-	}, BaseSHA: "base", HeadSHA: "head"}
+		BaseSHA:        "base",
+		HeadSHA:        "head",
+	}}
 	if err := s.UpsertPullRequest(ctx, pullRequest); err != nil {
 		t.Fatal(err)
 	}
@@ -552,6 +558,91 @@ func TestOnlyDraftCommentsCanBeDeletedAndPublicationStatusIsValidated(t *testing
 	}
 }
 
+func TestReviewPublicationAppliesDraftsAtomicallyAndIsRetrySafe(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	session := testSession()
+	if err := s.SaveSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	draftIDs := []string{"draft-1", "draft-2"}
+	for _, id := range draftIDs {
+		if err := s.SaveComment(ctx, domain.ReviewComment{ID: id, SessionID: session.ID, Kind: domain.CommentGeneral, Body: id, Status: domain.CommentDraft}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const (
+		token     = "publish-token"
+		digest    = "publish-digest"
+		githubID  = "991"
+		githubURL = "https://github.com/openai/codex/pull/123#pullrequestreview-991"
+	)
+	if err := s.StartReviewPublication(ctx, token, digest, session.ID, session.PullRequest.Ref, session.HeadSHA, "COMMENT", draftIDs); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.StartReviewPublication(ctx, "other-token", "other-digest", session.ID, session.PullRequest.Ref, session.HeadSHA, "COMMENT", draftIDs[1:]); !errors.Is(err, ErrPublicationAlreadyInProgress) {
+		t.Fatalf("overlapping publication error = %v, want ErrPublicationAlreadyInProgress", err)
+	}
+	if _, err := s.ApplyReviewPublication(ctx, token, digest); !errors.Is(err, ErrPublicationOutcomeUnknown) {
+		t.Fatalf("ApplyReviewPublication() before receipt error = %v, want ErrPublicationOutcomeUnknown", err)
+	}
+	if err := s.RecordReviewPublicationReceipt(ctx, token, digest, githubID, githubURL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE TRIGGER fail_second_publication BEFORE UPDATE OF status ON comments WHEN OLD.id='draft-2' AND NEW.status='published' BEGIN SELECT RAISE(ABORT, 'fixture failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ApplyReviewPublication(ctx, token, digest); err == nil || !strings.Contains(err.Error(), "fixture failure") {
+		t.Fatalf("ApplyReviewPublication() error = %v, want fixture failure", err)
+	}
+	comments, err := s.ListComments(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(comments) != 2 || comments[0].Status != domain.CommentDraft || comments[1].Status != domain.CommentDraft {
+		t.Fatalf("partial publication escaped rollback: %+v", comments)
+	}
+	var state string
+	if err := s.db.QueryRowContext(ctx, `SELECT state FROM review_publications WHERE token=?`, token).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "published" {
+		t.Fatalf("publication state after rollback = %q, want published", state)
+	}
+	if _, err := s.db.ExecContext(ctx, `DROP TRIGGER fail_second_publication`); err != nil {
+		t.Fatal(err)
+	}
+
+	published, err := s.ApplyReviewPublication(ctx, token, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(published) != 2 {
+		t.Fatalf("published comments = %+v", published)
+	}
+	for index, comment := range published {
+		if comment.ID != draftIDs[index] || comment.Status != domain.CommentPublished || comment.GitHubID != githubID || comment.GitHubURL != githubURL {
+			t.Fatalf("published[%d] = %+v", index, comment)
+		}
+	}
+	if err := s.RecordReviewPublicationReceipt(ctx, token, digest, githubID, githubURL); err != nil {
+		t.Fatalf("record identical receipt after apply: %v", err)
+	}
+	retried, err := s.ApplyReviewPublication(ctx, token, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(retried, published) {
+		t.Fatalf("retried publication = %+v, want %+v", retried, published)
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT state FROM review_publications WHERE token=?`, token).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != "applied" {
+		t.Fatalf("publication state after retry = %q, want applied", state)
+	}
+}
+
 func TestCorruptJSONIsIsolated(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
@@ -562,7 +653,7 @@ func TestCorruptJSONIsIsolated(t *testing.T) {
 	if err := s.SaveAnalysis(ctx, session.ID, domain.ReviewAnalysis{SchemaVersion: 1, BaseSHA: "base", HeadSHA: "head"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec(`UPDATE analyses SET analysis_json='{broken' WHERE session_id=?`, session.ID); err != nil {
+	if _, err := s.db.ExecContext(ctx, `UPDATE analyses SET analysis_json='{broken' WHERE session_id=?`, session.ID); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.GetSession(ctx, session.ID)
@@ -575,7 +666,7 @@ func TestCorruptJSONIsIsolated(t *testing.T) {
 	if err := s.SetSetting(ctx, "broken", map[string]string{"ok": "yes"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec(`UPDATE settings SET value_json='{broken' WHERE key='broken'`); err != nil {
+	if _, err := s.db.ExecContext(ctx, `UPDATE settings SET value_json='{broken' WHERE key='broken'`); err != nil {
 		t.Fatal(err)
 	}
 	var value any
@@ -633,6 +724,6 @@ func openTestStore(t *testing.T) *Store {
 
 func testSession() domain.ReviewSession {
 	ref := domain.RepositoryRef{Host: "github.com", Owner: "OpenAI", Name: "Codex", CloneURL: "https://github.com/openai/codex.git"}
-	pr := domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: ref, Number: 123}, Title: "Make reviews local"}, BaseSHA: "base", HeadSHA: "head", BaseRef: "main", HeadRef: "feature"}
+	pr := domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: ref, Number: 123}, Title: "Make reviews local", BaseSHA: "base", HeadSHA: "head"}, BaseRef: "main", HeadRef: "feature"}
 	return domain.ReviewSession{ID: "session-1", PullRequest: pr, BaseSHA: "base", HeadSHA: "head", Status: domain.SessionReady, AnalysisStatus: domain.AnalysisNotStarted}
 }

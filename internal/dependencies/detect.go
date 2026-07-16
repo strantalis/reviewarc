@@ -42,7 +42,6 @@ func (d *Detector) DetectCurrent(ctx context.Context) []domain.DependencyStatus 
 	result := make([]domain.DependencyStatus, len(checks))
 	var wg sync.WaitGroup
 	for i, check := range checks {
-		i, check := i, check
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

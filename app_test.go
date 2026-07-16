@@ -65,6 +65,14 @@ func (a selectableAppAnalysisAdapter) AnalyzeChange(context.Context, agent.Analy
 	return nil, fmt.Errorf("%s analysis should not start before pull request context is loaded", a.id)
 }
 
+func TestBundledThirdPartyNoticesPath(t *testing.T) {
+	got := bundledThirdPartyNoticesPath("/Applications/ReviewArc.app/Contents/MacOS/ReviewArc")
+	want := "/Applications/ReviewArc.app/Contents/Resources/ThirdPartyNotices.txt"
+	if got != want {
+		t.Fatalf("bundledThirdPartyNoticesPath() = %q, want %q", got, want)
+	}
+}
+
 type pullRequestFixtureRunner struct {
 	mu          sync.Mutex
 	metadata    []byte
@@ -510,7 +518,7 @@ func TestApplicationOptionsKeepNativeWindowShapeWithCustomControls(t *testing.T)
 		servedPath = request.URL.Path
 		response.WriteHeader(http.StatusNoContent)
 	}))
-	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "https://reviewarc.invalid/__frontend/"+frontendRevision+"/", nil))
+	handler.ServeHTTP(recorder, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://reviewarc.invalid/__frontend/"+frontendRevision+"/", nil))
 	if got := recorder.Header().Get("Cache-Control"); got != "no-store, max-age=0" {
 		t.Fatalf("Cache-Control=%q, want no-store", got)
 	}
@@ -809,7 +817,7 @@ func TestPullRequestContextRejectsAStaleRevisionBeforeSaving(t *testing.T) {
 	oldHead := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	newHead := "cccccccccccccccccccccccccccccccccccccccc"
 	ref := domain.PullRequestRef{Repository: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}, Number: 7}
-	session := domain.ReviewSession{ID: "stale-context", PullRequest: domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: ref}, HeadSHA: oldHead}, HeadSHA: oldHead}
+	session := domain.ReviewSession{ID: "stale-context", PullRequest: domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: ref, HeadSHA: oldHead}}, HeadSHA: oldHead}
 	if err := store.SaveSession(ctx, session); err != nil {
 		t.Fatal(err)
 	}
@@ -848,7 +856,7 @@ func TestStartAnalysisLoadsFullContextBeforePreparingSnapshot(t *testing.T) {
 	ctx := context.Background()
 	ref := domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}
 	headSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	pr := domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: ref, Number: 7}}, HeadSHA: headSHA}
+	pr := domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: ref, Number: 7}, HeadSHA: headSHA}}
 	session := domain.ReviewSession{ID: "analysis-context", PullRequest: pr, BaseSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HeadSHA: headSHA, Status: domain.SessionPreparing, AnalysisStatus: domain.AnalysisNotStarted}
 	if err := store.SaveSession(ctx, session); err != nil {
 		t.Fatal(err)
@@ -861,7 +869,7 @@ func TestStartAnalysisLoadsFullContextBeforePreparingSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := &App{github: githubclient.New(runner), store: store, runner: runner, harnesses: registry, prepared: map[string]preparedState{}, active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}}
+	app := &App{github: githubclient.New(runner), store: store, runner: runner, harnesses: registry, prepared: newPreparedReviewCache(0, 0, 0), active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}}
 
 	op, err := app.StartAnalysis(session.ID)
 	if err != nil {
@@ -909,7 +917,7 @@ func TestAnalysisSchedulerRunsTwoJobsAndLeavesAdditionalWorkQueued(t *testing.T)
 	}
 	ref := domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}
 	for index := 1; index <= 3; index++ {
-		session := domain.ReviewSession{ID: fmt.Sprintf("queued-session-%d", index), PullRequest: domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: ref, Number: 7}}, HeadSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, BaseSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HeadSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Status: domain.SessionPreparing, AnalysisStatus: domain.AnalysisNotStarted}
+		session := domain.ReviewSession{ID: fmt.Sprintf("queued-session-%d", index), PullRequest: domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: ref, Number: 7}, HeadSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}, BaseSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HeadSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Status: domain.SessionPreparing, AnalysisStatus: domain.AnalysisNotStarted}
 		if err := store.SaveSession(ctx, session); err != nil {
 			t.Fatal(err)
 		}
@@ -921,7 +929,7 @@ func TestAnalysisSchedulerRunsTwoJobsAndLeavesAdditionalWorkQueued(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := &App{github: githubclient.New(runner), store: store, runner: runner, harnesses: registry, prepared: map[string]preparedState{}, active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}, operationHistory: map[string][]Operation{}, analysisWake: make(chan struct{}, 2)}
+	app := &App{github: githubclient.New(runner), store: store, runner: runner, harnesses: registry, prepared: newPreparedReviewCache(0, 0, 0), active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}, operationHistory: map[string][]Operation{}, analysisWake: make(chan struct{}, 2)}
 	schedulerCtx, stopScheduler := context.WithCancel(ctx)
 	for worker := 0; worker < 2; worker++ {
 		app.schedulerWG.Add(1)
@@ -957,6 +965,8 @@ func TestAnalysisSchedulerRunsTwoJobsAndLeavesAdditionalWorkQueued(t *testing.T)
 			running++
 		case domain.AnalysisQueued:
 			queued++
+		case domain.AnalysisNotStarted, domain.AnalysisReady, domain.AnalysisFailed, domain.AnalysisStale:
+			t.Fatalf("unexpected scheduler status %q", session.AnalysisStatus)
 		}
 	}
 	if running != 2 || queued != 1 {
@@ -1043,7 +1053,7 @@ func TestStartAnalysisWithProfilePersistsTheExplicitHarnessInsteadOfTheSavedDefa
 	t.Cleanup(func() { _ = store.Close() })
 	ctx := context.Background()
 	headSHA := strings.Repeat("b", 40)
-	session := domain.ReviewSession{ID: "explicit-profile", PullRequest: domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}, Number: 7}}, HeadSHA: headSHA}, BaseSHA: strings.Repeat("a", 40), HeadSHA: headSHA, Status: domain.SessionReady, AnalysisStatus: domain.AnalysisNotStarted}
+	session := domain.ReviewSession{ID: "explicit-profile", PullRequest: domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}, Number: 7}, HeadSHA: headSHA}}, BaseSHA: strings.Repeat("a", 40), HeadSHA: headSHA, Status: domain.SessionReady, AnalysisStatus: domain.AnalysisNotStarted}
 	if err := store.SaveSession(ctx, session); err != nil {
 		t.Fatal(err)
 	}
@@ -1055,7 +1065,7 @@ func TestStartAnalysisWithProfilePersistsTheExplicitHarnessInsteadOfTheSavedDefa
 		t.Fatal(err)
 	}
 	runner := &pullRequestFixtureRunner{contextErr: errors.New("discussion unavailable")}
-	app := &App{github: githubclient.New(runner), store: store, runner: runner, harnesses: registry, prepared: map[string]preparedState{}, active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}}
+	app := &App{github: githubclient.New(runner), store: store, runner: runner, harnesses: registry, prepared: newPreparedReviewCache(0, 0, 0), active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}}
 	profile := domain.AnalysisProfile{Harness: domain.HarnessClaude, Model: "fixture", Reasoning: domain.ReasoningMedium}
 
 	if _, err := app.StartAnalysisWithProfile(session.ID, AnalysisRequest{Profile: &profile}); err != nil {
@@ -1175,8 +1185,8 @@ func TestPublishRequiresMatchingConfirmationAndUsesFixtureBackedGitHubFlow(t *te
 	baseSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	headSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	pr := domain.PullRequest{
-		PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: ref, Number: 7}, Title: "Fixture PR"},
-		BaseSHA:            baseSHA, HeadSHA: headSHA, BaseRef: "main", HeadRef: "feature", HeadRepository: ref,
+		PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: ref, Number: 7}, Title: "Fixture PR", BaseSHA: baseSHA, HeadSHA: headSHA},
+		BaseRef:            "main", HeadRef: "feature", HeadRepository: ref,
 	}
 	session := domain.ReviewSession{ID: "session", PullRequest: pr, BaseSHA: baseSHA, HeadSHA: headSHA, Status: domain.SessionReady, AnalysisStatus: domain.AnalysisReady}
 	if err := store.SaveSession(ctx, session); err != nil {
@@ -1248,6 +1258,54 @@ func TestPublishRequiresMatchingConfirmationAndUsesFixtureBackedGitHubFlow(t *te
 	}
 }
 
+func TestConfirmPublishResumesDurableReceiptWithoutRepublishing(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	ref := domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api", CloneURL: "https://github.com/acme/api.git"}
+	pr := domain.PullRequest{
+		PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: ref, Number: 7}, Title: "Fixture PR", BaseSHA: "base", HeadSHA: "head"},
+		BaseRef:            "main", HeadRef: "feature", HeadRepository: ref,
+	}
+	session := domain.ReviewSession{ID: "session", PullRequest: pr, BaseSHA: pr.BaseSHA, HeadSHA: pr.HeadSHA, Status: domain.SessionReady, AnalysisStatus: domain.AnalysisReady}
+	if err := store.SaveSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	draft := domain.ReviewComment{ID: "draft", SessionID: session.ID, Kind: domain.CommentGeneral, Body: "Keep retries local.", Status: domain.CommentDraft}
+	if err := store.SaveComment(ctx, draft); err != nil {
+		t.Fatal(err)
+	}
+	runner := &appFixtureRunner{}
+	app := &App{ctx: ctx, github: githubclient.New(runner), store: store, publish: map[string]pendingPublish{}}
+	preview, err := app.PreparePublish(session.ID, []string{draft.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StartReviewPublication(ctx, preview.Token, preview.Digest, session.ID, session.PullRequest.Ref, session.HeadSHA, preview.Event, []string{draft.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordReviewPublicationReceipt(ctx, preview.Token, preview.Digest, "991", "https://github.com/acme/api/pull/7#pullrequestreview-991"); err != nil {
+		t.Fatal(err)
+	}
+	app.DiscardPublishPreview(preview.Token)
+
+	for attempt := 0; attempt < 2; attempt++ {
+		published, err := app.ConfirmPublish(preview.Token, preview.Digest)
+		if err != nil {
+			t.Fatalf("attempt %d: %v", attempt+1, err)
+		}
+		if len(published) != 1 || published[0].ID != draft.ID || published[0].Status != domain.CommentPublished || published[0].GitHubID != "991" {
+			t.Fatalf("attempt %d published = %+v", attempt+1, published)
+		}
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("durable retry called GitHub: %+v", runner.commands)
+	}
+}
+
 func TestExpiredPublishPreviewIsRejectedWithoutGitHubCall(t *testing.T) {
 	runner := &appFixtureRunner{}
 	app := &App{ctx: context.Background(), github: githubclient.New(runner), publish: map[string]pendingPublish{
@@ -1258,6 +1316,64 @@ func TestExpiredPublishPreviewIsRejectedWithoutGitHubCall(t *testing.T) {
 	}
 	if len(runner.commands) != 0 {
 		t.Fatalf("GitHub called for expired confirmation: %+v", runner.commands)
+	}
+}
+
+func TestDiscardPublicationPreviewsRemovesRetainedBodies(t *testing.T) {
+	app := &App{
+		publish: map[string]pendingPublish{
+			"publish": {preview: PublishPreview{Token: "publish", Items: []PublishItem{{Body: "private draft"}}}},
+		},
+		threadReplies: map[string]pendingThreadReply{
+			"reply": {preview: ThreadReplyPreview{Token: "reply", Body: "private reply"}},
+		},
+	}
+
+	app.DiscardPublishPreview("publish")
+	app.DiscardThreadReplyPreview("reply")
+
+	if len(app.publish) != 0 || len(app.threadReplies) != 0 {
+		t.Fatalf("discard retained publication bodies: publish=%+v replies=%+v", app.publish, app.threadReplies)
+	}
+}
+
+func TestRememberPublicationPreviewsSweepsExpiredAndCapsLiveEntries(t *testing.T) {
+	now := time.Now().UTC()
+	app := &App{
+		publish: map[string]pendingPublish{
+			"expired-publish": {preview: PublishPreview{Token: "expired-publish", ExpiresAt: now.Add(-time.Minute)}},
+		},
+		threadReplies: map[string]pendingThreadReply{
+			"expired-reply": {preview: ThreadReplyPreview{Token: "expired-reply", ExpiresAt: now.Add(-time.Minute)}},
+		},
+	}
+	for index := 0; index < maxPendingPublicationPreviews; index++ {
+		token := fmt.Sprintf("publish-%d", index)
+		app.publish[token] = pendingPublish{preview: PublishPreview{Token: token, ExpiresAt: now.Add(time.Duration(index+1) * time.Minute)}}
+		token = fmt.Sprintf("reply-%d", index)
+		app.threadReplies[token] = pendingThreadReply{preview: ThreadReplyPreview{Token: token, ExpiresAt: now.Add(time.Duration(index+1) * time.Minute)}}
+	}
+
+	app.rememberPublishLocked(pendingPublish{preview: PublishPreview{Token: "new-publish", ExpiresAt: now.Add(time.Hour)}}, now)
+	app.rememberThreadReplyLocked(pendingThreadReply{preview: ThreadReplyPreview{Token: "new-reply", ExpiresAt: now.Add(time.Hour)}}, now)
+
+	if len(app.publish) != maxPendingPublicationPreviews || app.publish["new-publish"].preview.Token == "" {
+		t.Fatalf("publish previews were not capped with the new token retained: %+v", app.publish)
+	}
+	if _, ok := app.publish["expired-publish"]; ok {
+		t.Fatal("expired publish preview was retained")
+	}
+	if _, ok := app.publish["publish-0"]; ok {
+		t.Fatal("earliest-expiring publish preview was not evicted")
+	}
+	if len(app.threadReplies) != maxPendingPublicationPreviews || app.threadReplies["new-reply"].preview.Token == "" {
+		t.Fatalf("thread reply previews were not capped with the new token retained: %+v", app.threadReplies)
+	}
+	if _, ok := app.threadReplies["expired-reply"]; ok {
+		t.Fatal("expired thread reply preview was retained")
+	}
+	if _, ok := app.threadReplies["reply-0"]; ok {
+		t.Fatal("earliest-expiring thread reply preview was not evicted")
 	}
 }
 
@@ -1274,7 +1390,7 @@ func TestThreadReplyRequiresConfirmationNormalizesRootAndPublishes(t *testing.T)
 	line := 16
 	root := domain.PullRequestReviewComment{ID: 101, Author: domain.GitHubUser{Login: "alice"}, Body: "Root", Path: "quota/limiter.go", Line: &line, Side: domain.DiffSideRight}
 	existingReply := domain.PullRequestReviewComment{ID: 102, ReplyToID: 101, Author: domain.GitHubUser{Login: "bob"}, Body: "Existing reply", Path: root.Path, Line: root.Line, Side: root.Side}
-	pr := domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: ref, Number: 7}, Title: "Fixture PR"}, BaseSHA: baseSHA, HeadSHA: headSHA, BaseRef: "main", HeadRef: "feature", HeadRepository: ref, ReviewComments: []domain.PullRequestReviewComment{root, existingReply}}
+	pr := domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: ref, Number: 7}, Title: "Fixture PR", BaseSHA: baseSHA, HeadSHA: headSHA}, BaseRef: "main", HeadRef: "feature", HeadRepository: ref, ReviewComments: []domain.PullRequestReviewComment{root, existingReply}}
 	session := domain.ReviewSession{ID: "session-reply", PullRequest: pr, BaseSHA: baseSHA, HeadSHA: headSHA, Status: domain.SessionReady, AnalysisStatus: domain.AnalysisReady}
 	if err := store.SaveSession(ctx, session); err != nil {
 		t.Fatal(err)

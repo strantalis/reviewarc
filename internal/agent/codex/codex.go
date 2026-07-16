@@ -69,7 +69,7 @@ func (p *Provider) Capabilities(ctx context.Context) (domain.HarnessCapabilities
 	if _, err := p.runner.Run(ctx, processpkg.Command{Tool: processpkg.Codex, Args: []string{"login", "status"}, Timeout: 5 * time.Second, MaxOutput: 64 << 10}); err != nil {
 		capabilities.State = domain.HarnessBroken
 		capabilities.Message = "Sign in to Codex before using it for analysis"
-		return capabilities, errors.New("Codex authentication is required")
+		return capabilities, errors.New("authentication is required for Codex")
 	}
 	catalog, err := p.loadModelCatalog(ctx)
 	if err != nil {
@@ -97,7 +97,7 @@ func (p *Provider) Capabilities(ctx context.Context) (domain.HarnessCapabilities
 	}
 	if len(capabilities.Models) == 0 {
 		capabilities.State = domain.HarnessUnsupported
-		return capabilities, errors.New("Codex returned no selectable models")
+		return capabilities, errors.New("no selectable models were returned by Codex")
 	}
 	return capabilities, nil
 }
@@ -121,7 +121,7 @@ func (p *Provider) loadModelCatalog(ctx context.Context) (modelCatalog, error) {
 	}
 	var catalog modelCatalog
 	if json.Unmarshal(result.Stdout, &catalog) != nil || len(catalog.Models) == 0 {
-		return modelCatalog{}, errors.New("Codex returned an invalid model catalog")
+		return modelCatalog{}, errors.New("invalid model catalog returned by Codex")
 	}
 	return catalog, nil
 }
@@ -183,13 +183,13 @@ func (p *Provider) analyze(parent context.Context, input agent.AnalyzeInput, bun
 		emit(failureEvent(domain.FailureConfigurationRequired, "Analysis could not start", "ReviewArc could not prepare the structured-output contract.", domain.RetrySamePlan, err))
 		return
 	}
-	defer os.Remove(schemaPath)
+	defer func() { _ = os.Remove(schemaPath) }()
 	catalogPath, err := p.writeToollessModelCatalog(ctx)
 	if err != nil {
 		emit(providerFailure(err, nil))
 		return
 	}
-	defer os.Remove(catalogPath)
+	defer func() { _ = os.Remove(catalogPath) }()
 	prompt := analysisbundle.LaunchPrompt(input.Bundle)
 	if len(prompt) > maxLaunchPromptBytes {
 		emit(failureEvent(domain.FailureRetryRequiresReplan, "Analysis plan is too large", "ReviewArc must create a smaller analysis plan before retrying.", domain.RetryChangeProfile, errors.New("bounded launch prompt exceeded its invariant")))
@@ -298,7 +298,7 @@ func (p *Provider) writeToollessModelCatalog(ctx context.Context) (string, error
 		Models []map[string]any `json:"models"`
 	}
 	if json.Unmarshal(result.Stdout, &catalog) != nil || len(catalog.Models) == 0 {
-		return "", errors.New("Codex returned an invalid model catalog")
+		return "", errors.New("invalid model catalog returned by Codex")
 	}
 	for _, model := range catalog.Models {
 		model["shell_type"] = "disabled"
@@ -397,7 +397,7 @@ func parseJSONL(data []byte, tracker *agent.AccessTracker) (sharedanalysis.Docum
 		}
 		var event envelope
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			return sharedanalysis.Document{}, warnings, fmt.Errorf("Codex JSONL line %d is invalid: %w", lineNo, err)
+			return sharedanalysis.Document{}, warnings, fmt.Errorf("invalid Codex JSONL line %d: %w", lineNo, err)
 		}
 		switch event.Item.Type {
 		case "command_execution", "file_change", "web_search":
@@ -430,11 +430,11 @@ func parseJSONL(data []byte, tracker *agent.AccessTracker) (sharedanalysis.Docum
 		return sharedanalysis.Document{}, warnings, err
 	}
 	if final == "" {
-		return sharedanalysis.Document{}, warnings, errors.New("Codex completed without a structured analysis")
+		return sharedanalysis.Document{}, warnings, errors.New("structured analysis was not returned by Codex")
 	}
 	document, err := sharedanalysis.Decode([]byte(final))
 	if err != nil {
-		return sharedanalysis.Document{}, warnings, fmt.Errorf("Codex structured output: %w", err)
+		return sharedanalysis.Document{}, warnings, fmt.Errorf("decode Codex structured output: %w", err)
 	}
 	return document, warnings, nil
 }

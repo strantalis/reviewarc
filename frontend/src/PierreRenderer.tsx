@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { getFiletypeFromFileName, getSharedHighlighter, type ThemedToken } from '@pierre/diffs'
 import { PatchDiff } from '@pierre/diffs/react'
 import type { DiffBasePropsReact, DiffLineAnnotation, SelectedLineRange } from '@pierre/diffs/react'
-import { ExternalLink, LoaderCircle, MessageSquare, Reply } from 'lucide-react'
+import { AlertTriangle, ExternalLink, LoaderCircle, MessageSquare, Reply } from 'lucide-react'
 import { backend } from './bridge'
 import { useTheme } from './theme'
 import type { CommentRange, DiffFile, EvidenceReference, FileContent, PullRequestReviewComment } from './types'
@@ -11,6 +11,8 @@ interface ReviewThread { root: PullRequestReviewComment; replies: PullRequestRev
 interface ReplyDraft { open: boolean; body: string }
 interface ReplyReset { rootId: number; version: number }
 type ReplyHandler = (root: PullRequestReviewComment, body: string) => Promise<boolean>
+
+export const MAX_RENDERABLE_PATCH_CHARACTERS = 512 * 1024
 
 export function PierreCodeExcerpt({file, firstLine, lastLine, focusStart, focusEnd}: {file: FileContent; firstLine: number; lastLine: number; focusStart: number; focusEnd: number}) {
   const {resolvedTheme} = useTheme()
@@ -29,9 +31,9 @@ export function PierreCodeExcerpt({file, firstLine, lastLine, focusStart, focusE
     }).catch(() => { if (active) setFailed(true) })
     return () => { active = false }
   }, [code, file.path, pierreTheme])
-  if (!tokens && !failed) return <div className="inline-evidence-highlight-loading"><LoaderCircle className="spin" size={14}/>Highlighting code…</div>
+  const highlighting = !tokens && !failed
   const lines = tokens ?? code.split('\n').map((line) => [{content: line} as ThemedToken])
-  return <pre aria-label={`Code excerpt from ${file.path}`}>{lines.map((line, index) => { const number = firstLine + index; return <span className={number >= focusStart && number <= focusEnd ? 'focus' : ''} key={number}><i>{number}</i><code>{line.length ? line.map((token, tokenIndex) => <span key={`${number}-${tokenIndex}`} style={token.color ? {color: token.color} : undefined}>{token.content}</span>) : ' '}</code></span> })}</pre>
+  return <>{highlighting && <div className="inline-evidence-highlight-loading"><LoaderCircle className="spin" size={14}/>Highlighting code…</div>}<pre aria-busy={highlighting} aria-label={`Code excerpt from ${file.path}`}>{lines.map((line, index) => { const number = firstLine + index; return <span className={number >= focusStart && number <= focusEnd ? 'focus' : ''} key={number}><i>{number}</i><code>{line.length ? line.map((token, tokenIndex) => <span key={`${number}-${tokenIndex}`} style={token.color ? {color: token.color} : undefined}>{token.content}</span>) : ' '}</code></span> })}</pre></>
 }
 
 export function PierreFileRenderer({file, focus, comments, onCommentRange, onReply, replyReset}: {file: FileContent; focus: EvidenceReference; comments: PullRequestReviewComment[]; onCommentRange: (range: CommentRange) => void; onReply?: ReplyHandler; replyReset?: ReplyReset}) {
@@ -128,7 +130,16 @@ export function PierreFileRenderer({file, focus, comments, onCommentRange, onRep
   </div>
 }
 
-export function PierreDiffRenderer({diff, focus, comments, layout, onCommentRange, onReply, replyReset}: {diff: DiffFile; focus?: EvidenceReference; comments: PullRequestReviewComment[]; layout: 'unified' | 'split'; onCommentRange: (range: CommentRange) => void; onReply?: ReplyHandler; replyReset?: ReplyReset}) {
+type PierreDiffRendererProps = {diff: DiffFile; focus?: EvidenceReference; comments: PullRequestReviewComment[]; layout: 'unified' | 'split'; onCommentRange: (range: CommentRange) => void; onReply?: ReplyHandler; replyReset?: ReplyReset}
+
+export function PierreDiffRenderer(props: PierreDiffRendererProps) {
+  if (props.diff.patch.length > MAX_RENDERABLE_PATCH_CHARACTERS) {
+    return <div className="error-banner diff-size-limit" role="alert"><AlertTriangle size={18}/><div><strong>Diff too large to display</strong><p>This patch exceeds ReviewArc&apos;s 512K-character interactive rendering limit. Review it with local Git tooling instead.</p></div></div>
+  }
+  return <RenderablePierreDiffRenderer {...props}/>
+}
+
+function RenderablePierreDiffRenderer({diff, focus, comments, layout, onCommentRange, onReply, replyReset}: PierreDiffRendererProps) {
   const {resolvedTheme} = useTheme()
   const pierreTheme = resolvedTheme === 'dark' ? 'pierre-dark' : 'pierre-light'
   const focusedLines = useMemo<SelectedLineRange | null>(() => focus?.path === diff.file.path ? ({start: focus.startLine, end: focus.endLine, side: focus.revision === 'base' ? 'deletions' : 'additions'}) : null, [diff.file.path, focus])
@@ -145,7 +156,10 @@ export function PierreDiffRenderer({diff, focus, comments, layout, onCommentRang
     onLineSelectionEnd: (range) => { setSelectedLines(range); if (range) onCommentRange(toCommentRange(range)) },
     onPostRender: (node) => { if (focus?.path === diff.file.path) scrollLineIntoView(node, focus.startLine, focus.revision === 'base' ? 'deletions' : 'additions') },
   }), [diff.file.path, focus, layout, onCommentRange, pierreTheme, resolvedTheme])
-  return <PatchDiff patch={diff.patch} options={options} selectedLines={selectedLines} lineAnnotations={annotations} renderAnnotation={(annotation) => annotation.metadata ? <ReviewThreadAnnotation thread={annotation.metadata} onReply={onReply} draft={replyDrafts[annotation.metadata.root.id] ?? {open: false, body: ''}} onDraft={(draft) => setReplyDrafts((current) => ({...current, [annotation.metadata!.root.id]: draft}))}/> : null} disableWorkerPool/>
+  return <PatchDiff patch={diff.patch} options={options} selectedLines={selectedLines} lineAnnotations={annotations} renderAnnotation={(annotation) => {
+    const thread = annotation.metadata
+    return thread ? <ReviewThreadAnnotation thread={thread} onReply={onReply} draft={replyDrafts[thread.root.id] ?? {open: false, body: ''}} onDraft={(draft) => setReplyDrafts((current) => ({...current, [thread.root.id]: draft}))}/> : null
+  }} disableWorkerPool/>
 }
 
 function reviewThreads(comments: PullRequestReviewComment[], path: string): ReviewThread[] {
@@ -170,7 +184,7 @@ function ReviewThreadAnnotation({thread, onReply, draft, onDraft}: {thread: Revi
     await onReply(thread.root, draft.body.trim())
     setPreparing(false)
   }
-  return <article className="review-thread"><header><span><MessageSquare size={13}/>{comments.length === 1 ? 'Review comment' : `${comments.length} messages`}<small>{threadLocation(thread.root)}</small></span><div className="thread-actions">{onReply && <button onClick={() => onDraft({...draft, open: !draft.open})}><Reply size={12}/>Reply</button>}<button onClick={() => backend.openGitHubURL(thread.root.url)}><ExternalLink size={12}/>Open thread</button></div></header><div>{comments.map((comment, index) => <section key={comment.id} className={index ? 'thread-reply' : ''}><div><strong>@{comment.author.login}</strong><time>{new Date(comment.createdAt).toLocaleString()}</time></div><p>{comment.body}</p>{index > 0 && <Reply size={12}/>}</section>)}</div>{draft.open && <div className="thread-reply-composer"><label><span className="sr-only">Reply to @{thread.root.author.login}</span><textarea autoFocus autoCapitalize="none" autoCorrect="off" spellCheck={false} maxLength={65536} value={draft.body} onChange={(event) => onDraft({...draft, body: event.target.value})} placeholder={`Reply to @${thread.root.author.login}…`}/></label><footer><button disabled={preparing} onClick={() => onDraft({open: false, body: ''})}>Cancel</button><button className="primary" disabled={preparing || !draft.body.trim()} onClick={() => void prepare()}>{preparing ? 'Preparing…' : 'Review reply'}</button></footer></div>}</article>
+  return <article className="review-thread"><header><span><MessageSquare size={13}/>{comments.length === 1 ? 'Review comment' : `${comments.length} messages`}<small>{threadLocation(thread.root)}</small></span><div className="thread-actions">{onReply && <button onClick={() => onDraft({...draft, open: !draft.open})}><Reply size={12}/>Reply</button>}<button onClick={() => backend.openGitHubURL(thread.root.url)}><ExternalLink size={12}/>Open thread</button></div></header><div>{comments.map((comment, index) => <section key={comment.id} className={index ? 'thread-reply' : ''}><div><strong>@{comment.author.login}</strong><time>{new Date(comment.createdAt).toLocaleString()}</time></div><p>{comment.body}</p>{index > 0 && <Reply size={12}/>}</section>)}</div>{draft.open && <div className="thread-reply-composer"><label><span className="sr-only">Reply to @{thread.root.author.login}</span><textarea autoCapitalize="none" autoCorrect="off" spellCheck={false} maxLength={65536} value={draft.body} onChange={(event) => onDraft({...draft, body: event.target.value})} placeholder={`Reply to @${thread.root.author.login}…`}/></label><footer><button disabled={preparing} onClick={() => onDraft({open: false, body: ''})}>Cancel</button><button className="primary" disabled={preparing || !draft.body.trim()} onClick={() => void prepare()}>{preparing ? 'Preparing…' : 'Review reply'}</button></footer></div>}</article>
 }
 
 function threadLocation(comment: PullRequestReviewComment) {

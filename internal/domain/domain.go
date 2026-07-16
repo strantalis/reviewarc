@@ -227,8 +227,6 @@ type PullRequest struct {
 	Body               string                     `json:"body"`
 	BaseRef            string                     `json:"baseRef"`
 	HeadRef            string                     `json:"headRef"`
-	BaseSHA            string                     `json:"baseSha"`
-	HeadSHA            string                     `json:"headSha"`
 	HeadRepository     RepositoryRef              `json:"headRepository"`
 	Commits            []Commit                   `json:"commits"`
 	RequestedReviewers []GitHubUser               `json:"requestedReviewers"`

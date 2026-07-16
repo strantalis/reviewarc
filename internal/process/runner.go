@@ -152,9 +152,12 @@ func (r *ExecRunner) Run(ctx context.Context, c Command) (Result, error) {
 	if limit <= 0 {
 		limit = defaultMaxOutput
 	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	var stdout, stderr limitedBuffer
 	stdout.limit, stderr.limit = limit, limit
-	cmd := exec.CommandContext(ctx, path, c.Args...)
+	stdout.onLimit, stderr.onLimit = cancel, cancel
+	cmd := exec.CommandContext(runCtx, path, c.Args...)
 	configureCancellation(cmd)
 	cmd.Dir, cmd.Env, cmd.Stdin = c.Dir, env, bytes.NewReader(c.Stdin)
 	cmd.Stdout, cmd.Stderr = newLineWriter(&stdout, c.OnStdoutLine), newLineWriter(&stderr, c.OnStderrLine)
@@ -194,21 +197,33 @@ type limitedBuffer struct {
 	bytes.Buffer
 	limit     int
 	truncated bool
+	onLimit   func()
 }
 
 func (b *limitedBuffer) Write(p []byte) (int, error) {
+	n, _ := b.write(p)
+	return n, nil
+}
+
+func (b *limitedBuffer) write(p []byte) (int, int) {
 	n := len(p)
 	remaining := b.limit - b.Len()
 	if len(p) > remaining {
-		b.truncated = true
+		if !b.truncated {
+			b.truncated = true
+			if b.onLimit != nil {
+				b.onLimit()
+			}
+		}
 	}
+	retained := 0
 	if remaining > 0 {
 		if remaining < len(p) {
 			p = p[:remaining]
 		}
-		_, _ = b.Buffer.Write(p)
+		retained, _ = b.Buffer.Write(p)
 	}
-	return n, nil
+	return n, retained
 }
 
 type lineWriter struct {
@@ -222,11 +237,11 @@ func newLineWriter(destination *limitedBuffer, callback func([]byte)) *lineWrite
 }
 
 func (w *lineWriter) Write(p []byte) (int, error) {
-	n, err := w.destination.Write(p)
+	n, retained := w.destination.write(p)
 	if w.callback == nil {
-		return n, err
+		return n, nil
 	}
-	w.pending = append(w.pending, p...)
+	w.pending = append(w.pending, p[:retained]...)
 	for {
 		index := bytes.IndexByte(w.pending, '\n')
 		if index < 0 {
@@ -236,7 +251,7 @@ func (w *lineWriter) Write(p []byte) (int, error) {
 		w.pending = w.pending[index+1:]
 		w.callback(line)
 	}
-	return n, err
+	return n, nil
 }
 
 func minimalEnvironment(source []string, tool Tool, pathValue string) []string {

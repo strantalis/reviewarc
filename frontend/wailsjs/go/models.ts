@@ -1075,8 +1075,6 @@ export namespace domain {
 	    body: string;
 	    baseRef: string;
 	    headRef: string;
-	    baseSha: string;
-	    headSha: string;
 	    headRepository: RepositoryRef;
 	    commits: Commit[];
 	    requestedReviewers: GitHubUser[];
@@ -1113,8 +1111,6 @@ export namespace domain {
 	        this.body = source["body"];
 	        this.baseRef = source["baseRef"];
 	        this.headRef = source["headRef"];
-	        this.baseSha = source["baseSha"];
-	        this.headSha = source["headSha"];
 	        this.headRepository = this.convertValues(source["headRepository"], RepositoryRef);
 	        this.commits = this.convertValues(source["commits"], Commit);
 	        this.requestedReviewers = this.convertValues(source["requestedReviewers"], GitHubUser);

@@ -84,11 +84,11 @@ func (r *GitObjectReader) Search(ctx context.Context, revision domain.Revision, 
 	for len(result.Stdout) > 0 {
 		pathEnd := bytes.IndexByte(result.Stdout, 0)
 		if pathEnd < 0 {
-			return nil, errors.New("Git returned malformed search output")
+			return nil, errors.New("pinned Git search returned malformed output")
 		}
 		lineEnd := bytes.IndexByte(result.Stdout[pathEnd+1:], 0)
 		if lineEnd < 0 {
-			return nil, errors.New("Git returned malformed search output")
+			return nil, errors.New("pinned Git search returned malformed output")
 		}
 		lineEnd += pathEnd + 1
 		contentEnd := bytes.IndexByte(result.Stdout[lineEnd+1:], '\n')
@@ -99,7 +99,7 @@ func (r *GitObjectReader) Search(ctx context.Context, revision domain.Revision, 
 		objectPath := string(result.Stdout[:pathEnd])
 		prefix := sha + ":"
 		if !strings.HasPrefix(objectPath, prefix) {
-			return nil, errors.New("Git search result did not match pinned revision")
+			return nil, errors.New("pinned Git search result did not match revision")
 		}
 		path := strings.TrimPrefix(objectPath, prefix)
 		line, parseErr := strconv.Atoi(string(result.Stdout[pathEnd+1 : lineEnd]))
@@ -137,7 +137,8 @@ func validSHA(value string) bool {
 		return false
 	}
 	for _, r := range value {
-		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+		hexDigit := r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F'
+		if !hexDigit {
 			return false
 		}
 	}

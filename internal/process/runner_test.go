@@ -3,6 +3,7 @@ package process
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -106,6 +107,47 @@ func TestRunnerReportsTruncatedOutput(t *testing.T) {
 	}
 }
 
+func TestRunnerStopsOnNewlineFreeStreamingOutputLimit(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "codex")
+	marker := filepath.Join(dir, "completed")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf 'output-larger-than-limit'\nsleep 2\nprintf completed > \"$1\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := NewExecRunner()
+	if err := r.SetPath(Codex, path); err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	result, err := r.Run(context.Background(), Command{
+		Tool: Codex, Args: []string{marker}, MaxOutput: 8, Timeout: 5 * time.Second,
+		OnStdoutLine: func(line []byte) { lines = append(lines, string(line)) },
+	})
+	if !errors.Is(err, ErrOutputLimitExceeded) {
+		t.Fatalf("Run error=%v, want ErrOutputLimitExceeded", err)
+	}
+	if got := string(result.Stdout); got != "output-l" {
+		t.Fatalf("stdout=%q, want truncated prefix", got)
+	}
+	if len(lines) != 0 {
+		t.Fatalf("streamed incomplete lines=%q", lines)
+	}
+	if _, statErr := os.Stat(marker); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("process continued after output limit: marker error=%v", statErr)
+	}
+}
+
+func TestLineWriterCapsPendingAtOutputLimit(t *testing.T) {
+	destination := &limitedBuffer{limit: 3}
+	writer := newLineWriter(destination, func([]byte) {})
+	if n, err := writer.Write([]byte("abcdef")); err != nil || n != 6 {
+		t.Fatalf("Write=(%d, %v), want (6, nil)", n, err)
+	}
+	if got := string(writer.pending); got != "abc" {
+		t.Fatalf("pending=%q, want retained prefix", got)
+	}
+}
+
 func TestMinimalEnvironmentSeparatesCredentialsByTool(t *testing.T) {
 	source := []string{"PATH=/bin", "GH_HOST=github.example.com", "GH_CONFIG_DIR=/tmp/gh", "GH_TOKEN=stale", "GITHUB_TOKEN=also-stale", "OPENAI_API_KEY=openai", "ANTHROPIC_API_KEY=anthropic", "CLAUDE_CONFIG_DIR=/tmp/claude", "UNRELATED=nope"}
 	if got := minimalEnvironment(source, Git, "/safe/bin"); len(got) != 1 || got[0] != "PATH=/safe/bin" {
@@ -123,13 +165,15 @@ func TestMinimalEnvironmentSeparatesCredentialsByTool(t *testing.T) {
 }
 
 func TestMinimalEnvironmentPreservesValidatedSSHAgentOnlyForGit(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "reviewarc-agent-")
-	if err != nil {
+	// Unix-domain socket paths are short on macOS; t.TempDir's full path can
+	// exceed sockaddr_un.sun_path before the socket filename is appended.
+	dir := filepath.Join("/tmp", fmt.Sprintf("reviewarc-agent-%d-%d", os.Getpid(), time.Now().UnixNano()))
+	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	socket := filepath.Join(dir, "agent.sock")
-	listener, err := net.Listen("unix", socket)
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "unix", socket)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +270,8 @@ func TestExecutableSearchDirsPrefersFNMDefaultThenNewestSemanticVersion(t *testi
 			v9Index = index
 		}
 	}
-	if defaultIndex < 0 || v24Index < 0 || v9Index < 0 || !(defaultIndex < v24Index && v24Index < v9Index) {
+	ordered := defaultIndex < v24Index && v24Index < v9Index
+	if defaultIndex < 0 || v24Index < 0 || v9Index < 0 || !ordered {
 		t.Fatalf("fnm search order=%v", dirs)
 	}
 }

@@ -52,7 +52,7 @@ func Open(path string) (*Store, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := s.initialize(ctx); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 	return s, nil
@@ -68,7 +68,7 @@ func (s *Store) RecoverInterruptedAnalyses(ctx context.Context) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if _, err = tx.ExecContext(ctx, `UPDATE analysis_runs SET status=?,failure_code=?,failure_title=?,failure_message=?,failure_action=?,failure_retryable=1,completed_at=?,updated_at=? WHERE status IN (?,?)`, domain.AnalysisRunFailed, domain.FailureInterrupted, "Analysis interrupted", "ReviewArc closed before this analysis completed.", domain.RetrySamePlan, now, now, domain.AnalysisRunPreparing, domain.AnalysisRunRunning); err != nil {
 		return 0, wrap("recover interrupted analysis runs", err)
 	}
@@ -123,7 +123,7 @@ func (s *Store) initialize(ctx context.Context) error {
 			_, err = tx.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at) VALUES(?, ?)`, entry.Name(), encodeTime(time.Now()))
 		}
 		if err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 			return fmt.Errorf("apply migration %s: %w", entry.Name(), err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -176,7 +176,7 @@ func (s *Store) ReplaceSelections(ctx context.Context, selections []domain.Sourc
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if _, err = tx.ExecContext(ctx, `DELETE FROM selections`); err != nil {
 		return err
 	}
@@ -194,7 +194,7 @@ func (s *Store) ListSelections(ctx context.Context) ([]domain.SourceSelection, e
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []domain.SourceSelection
 	for rows.Next() {
 		var v domain.SourceSelection
@@ -214,7 +214,7 @@ func (s *Store) RemoveRepositorySelections(ctx context.Context, keys []string) e
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	for _, key := range keys {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM selections WHERE kind=? AND lower(selection_key)=lower(?)`, domain.SelectionRepository, key); err != nil {
 			return wrap("remove archived repository selection", err)
@@ -259,7 +259,7 @@ func (s *Store) ListRepositories(ctx context.Context) ([]domain.Repository, erro
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []domain.Repository
 	for rows.Next() {
 		var b []byte
@@ -286,7 +286,7 @@ func (s *Store) ListSelectedRepositories(ctx context.Context) ([]domain.Reposito
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []domain.Repository
 	for rows.Next() {
 		var b []byte
@@ -310,7 +310,7 @@ func (s *Store) ListRepositoriesByOwner(ctx context.Context, owner string, limit
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := make([]domain.Repository, 0, limit)
 	for rows.Next() && len(out) < limit {
 		var b []byte
@@ -339,7 +339,7 @@ func (s *Store) ListPullRequests(ctx context.Context) ([]domain.PullRequest, err
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []domain.PullRequest
 	for rows.Next() {
 		var b []byte
@@ -386,7 +386,7 @@ func (s *Store) ListPullRequestSummaries(ctx context.Context) ([]domain.PullRequ
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := make([]domain.PullRequestSummary, 0)
 	for rows.Next() {
 		var pullRequestJSON []byte
@@ -462,7 +462,7 @@ func (s *Store) SaveAnalysis(ctx context.Context, sessionID string, analysis dom
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if _, err = tx.ExecContext(ctx, `INSERT INTO analyses(session_id,schema_version,base_sha,head_sha,analysis_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET schema_version=excluded.schema_version,base_sha=excluded.base_sha,head_sha=excluded.head_sha,analysis_json=excluded.analysis_json,created_at=excluded.created_at,updated_at=excluded.updated_at`, sessionID, analysis.SchemaVersion, analysis.BaseSHA, analysis.HeadSHA, b, encodeTime(created), encodeTime(now)); err != nil {
 		return err
 	}
@@ -480,7 +480,7 @@ func (s *Store) SaveCompletedAnalysis(ctx context.Context, sessionID string, ana
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if err := saveCompletedAnalysisTx(ctx, tx, sessionID, analysis, time.Now()); err != nil {
 		return err
 	}
@@ -503,15 +503,18 @@ func saveCompletedAnalysisTx(ctx context.Context, tx *sql.Tx, sessionID string, 
 	if err != nil {
 		return err
 	}
+	defer func() { _ = rows.Close() }()
 	existing := map[string]domain.ChapterStatus{}
 	for rows.Next() {
 		var id string
 		var status domain.ChapterStatus
 		if err := rows.Scan(&id, &status); err != nil {
-			rows.Close()
 			return err
 		}
 		existing[id] = status
+	}
+	if err := rows.Err(); err != nil {
+		return err
 	}
 	if err := rows.Close(); err != nil {
 		return err
@@ -564,7 +567,7 @@ func (s *Store) StartAnalysisRun(ctx context.Context, run domain.AnalysisRun) er
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if _, err = tx.ExecContext(ctx, `INSERT INTO analysis_runs(id,session_id,harness_id,harness_version,context_transport,model,reasoning_level,schema_version,input_fingerprint,coverage_json,status,started_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, run.ID, run.SessionID, run.Profile.Harness, run.HarnessVersion, run.ContextTransport, run.Profile.Model, run.Profile.Reasoning, run.SchemaVersion, run.InputFingerprint, coverage, run.Status, encodeTime(started), encodeTime(now)); err != nil {
 		return wrap("start analysis run", err)
 	}
@@ -590,7 +593,7 @@ func (s *Store) ClaimNextQueuedAnalysisRun(ctx context.Context) (*domain.Analysi
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	row := tx.QueryRowContext(ctx, `SELECT id,session_id,harness_id,harness_version,context_transport,model,reasoning_level,schema_version,input_fingerprint,coverage_json,status,failure_code,failure_title,failure_message,failure_action,failure_retryable,failure_technical_details,started_at,completed_at,updated_at FROM analysis_runs WHERE status=? ORDER BY started_at,id LIMIT 1`, domain.AnalysisRunQueued)
 	run, err := scanAnalysisRun(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -641,7 +644,7 @@ func (s *Store) CompleteAnalysisRun(ctx context.Context, runID string, analysis 
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var sessionID string
 	var schemaVersion int
 	if err := tx.QueryRowContext(ctx, `SELECT session_id,schema_version FROM analysis_runs WHERE id=? AND status IN (?,?)`, runID, domain.AnalysisRunPreparing, domain.AnalysisRunRunning).Scan(&sessionID, &schemaVersion); err != nil {
@@ -690,7 +693,7 @@ func (s *Store) finishAnalysisRun(ctx context.Context, runID string, status doma
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var sessionID string
 	if err := tx.QueryRowContext(ctx, `SELECT session_id FROM analysis_runs WHERE id=? AND status IN (?,?,?)`, runID, domain.AnalysisRunQueued, domain.AnalysisRunPreparing, domain.AnalysisRunRunning).Scan(&sessionID); err != nil {
 		return queryErr("finish analysis run", err)
@@ -718,7 +721,7 @@ func (s *Store) ListAnalysisRuns(ctx context.Context, sessionID string) ([]domai
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []domain.AnalysisRun
 	for rows.Next() {
 		run, err := scanAnalysisRun(rows)
@@ -846,17 +849,19 @@ func (s *Store) ListSessions(ctx context.Context) ([]domain.ReviewSession, error
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = rows.Close() }()
 	var ids []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			rows.Close()
 			return nil, err
 		}
 		ids = append(ids, id)
 	}
 	err = rows.Err()
-	rows.Close()
+	if closeErr := rows.Close(); err == nil {
+		err = closeErr
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -894,20 +899,23 @@ func (s *Store) ReconcileChapterProgress(ctx context.Context, sessionID string, 
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	rows, err := tx.QueryContext(ctx, `SELECT chapter_id,status FROM chapter_progress WHERE session_id=?`, sessionID)
 	if err != nil {
 		return err
 	}
+	defer func() { _ = rows.Close() }()
 	existing := map[string]domain.ChapterStatus{}
 	for rows.Next() {
 		var id string
 		var status domain.ChapterStatus
 		if err := rows.Scan(&id, &status); err != nil {
-			rows.Close()
 			return err
 		}
 		existing[id] = status
+	}
+	if err := rows.Err(); err != nil {
+		return err
 	}
 	if err := rows.Close(); err != nil {
 		return err
@@ -933,7 +941,7 @@ func (s *Store) listChapters(ctx context.Context, id string) ([]domain.ChapterPr
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []domain.ChapterProgress
 	for rows.Next() {
 		var v domain.ChapterProgress
@@ -968,7 +976,7 @@ func (s *Store) ListNotes(ctx context.Context, id string) ([]domain.ReviewNote, 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []domain.ReviewNote
 	for rows.Next() {
 		var v domain.ReviewNote
@@ -1004,7 +1012,7 @@ func (s *Store) ListComments(ctx context.Context, id string) ([]domain.ReviewCom
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []domain.ReviewComment
 	for rows.Next() {
 		var v domain.ReviewComment
@@ -1018,12 +1026,15 @@ func (s *Store) ListComments(ctx context.Context, id string) ([]domain.ReviewCom
 	}
 	return out, rows.Err()
 }
-func (s *Store) SetCommentPublication(ctx context.Context, id string, status domain.CommentStatus, githubID, githubURL string) error {
-	if status != domain.CommentPublished && status != domain.CommentFailed {
-		return fmt.Errorf("update comment: invalid publication status %q", status)
+func scanReviewComment(row rowScanner) (domain.ReviewComment, error) {
+	var comment domain.ReviewComment
+	var created, updated string
+	if err := row.Scan(&comment.ID, &comment.SessionID, &comment.ChapterID, &comment.Kind, &comment.Body, &comment.Path, &comment.StartLine, &comment.StartSide, &comment.Line, &comment.Side, &comment.Status, &comment.GitHubID, &comment.GitHubURL, &created, &updated); err != nil {
+		return comment, err
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE comments SET status=?,github_id=?,github_url=?,updated_at=? WHERE id=?`, status, githubID, githubURL, encodeTime(time.Now()), id)
-	return wrap("update comment", err)
+	comment.CreatedAt, _ = decodeTime(created)
+	comment.UpdatedAt, _ = decodeTime(updated)
+	return comment, nil
 }
 
 // MarkStaleIfChanged marks every prior session for a PR stale without deleting
@@ -1059,7 +1070,7 @@ func (s *Store) ListOperations(ctx context.Context, limit int) ([]Operation, err
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []Operation
 	for rows.Next() {
 		var v Operation
@@ -1078,6 +1089,8 @@ func calculateProgress(items []domain.ChapterProgress) domain.ReviewProgress {
 	p := domain.ReviewProgress{Total: len(items)}
 	for _, v := range items {
 		switch v.Status {
+		case domain.ChapterNotReviewed, domain.ChapterInProgress:
+			continue
 		case domain.ChapterReviewed:
 			p.Reviewed++
 		case domain.ChapterBlocked:

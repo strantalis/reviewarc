@@ -1,3 +1,5 @@
+import type { domain } from '../wailsjs/go/models'
+
 export type DependencyName = 'git' | 'gh' | 'codex' | 'claude'
 export type DependencyState = 'available' | 'missing' | 'broken'
 export type Relationship = 'reviewRequested' | 'assigned' | 'authored' | 'selectedRepo'
@@ -10,13 +12,13 @@ export type HarnessAvailability = 'available' | 'missing' | 'broken' | 'unsuppor
 export type ContextTransport = 'reviewarcTools' | 'artifactFiles' | 'inline'
 export type AnalysisRetryAction = 'retry' | 'replan' | 'configure' | 'authenticate' | 'changeProfile' | 'none'
 
-export interface RepositoryRef { host: string; owner: string; name: string; cloneUrl: string; databaseId: string }
+export type RepositoryRef = domain.RepositoryRef
 export interface PullRequestRef { repository: RepositoryRef; number: number }
-export interface GitHubUser { login: string; name: string; avatarUrl: string }
-export interface Organization { login: string; name: string; avatarUrl: string; accessStatus?: 'available' | 'ssoRequired' | 'denied' | 'unknown'; ssoUrl?: string }
+export type GitHubUser = domain.GitHubUser
+export type Organization = Omit<domain.Organization, 'accessStatus'> & { accessStatus?: 'available' | 'ssoRequired' | 'denied' | 'unknown' }
 export interface Repository { ref: RepositoryRef; description: string; isPrivate: boolean; isArchived: boolean; updatedAt: string }
-export interface SourceSelection { kind: 'organization' | 'repository'; key: string; enabled: boolean }
-export interface ReviewProgress { total: number; reviewed: number; blocked: number; clarify: number; percent: number }
+export type SourceSelection = Omit<domain.SourceSelection, 'kind'> & { kind: 'organization' | 'repository' }
+export type ReviewProgress = domain.ReviewProgress
 export interface PullRequestSummary {
   ref: PullRequestRef; title: string; url: string; author: GitHubUser; updatedAt: string; isDraft: boolean
   additions: number; deletions: number; changedFiles: number; relationships: Relationship[]; labels: string[]
@@ -30,14 +32,14 @@ export interface PullRequest extends PullRequestSummary {
   body: string; baseRef: string; headRef: string; baseSha: string; headSha: string; headRepository: RepositoryRef
   commits: Commit[]; requestedReviewers: GitHubUser[]; assignees: GitHubUser[]; reviews: PullRequestReview[]; reviewComments: PullRequestReviewComment[]; checkRuns: CheckRun[]; reviewState: string
 }
-export interface ChangedFile { path: string; previousPath: string; status: string; additions: number; deletions: number; isBinary: boolean }
+export type ChangedFile = domain.ChangedFile
 export interface DiffLine { kind: 'context' | 'add' | 'delete' | 'noNewline'; content: string; oldLine?: number; newLine?: number }
 export interface DiffHunk { header: string; oldStart: number; oldLines: number; newStart: number; newLines: number; lines: DiffLine[] }
 export interface DiffFile { file: ChangedFile; hunks: DiffHunk[]; patch: string }
-export interface FileContent { path: string; revision: 'base' | 'head'; sha: string; content: string; isBinary: boolean; lineCount: number }
-export interface EvidenceReference {
-  id: string; path: string; revision: 'base' | 'head'; startLine: number; endLine: number; symbol?: string
-  validationStatus: ValidationStatus; validationMessage?: string
+export type FileContent = Omit<domain.FileContent, 'revision'> & { revision: 'base' | 'head' }
+export type EvidenceReference = Omit<domain.EvidenceReference, 'revision' | 'validationStatus'> & {
+  revision: 'base' | 'head'
+  validationStatus: ValidationStatus
 }
 export interface Claim { id: string; kind: ClaimKind; text: string; evidence: EvidenceReference[]; validationStatus: ValidationStatus; validationMessage?: string }
 export interface BehavioralChange { id: string; summary: string; before: string; after: string; evidence: EvidenceReference[] }
@@ -105,7 +107,7 @@ export interface ReviewSession {
   createdAt: string; updatedAt: string
 }
 export interface DependencyStatus { name: DependencyName; state: DependencyState; path?: string; version?: string; message?: string }
-export interface AppPaths { root: string; repositories: string; worktrees: string; database: string; logs: string; cache: string }
+export type AppPaths = domain.AppPaths
 export interface EnvironmentState { dependencies: DependencyStatus[]; account?: GitHubUser; gitProtocol: 'ssh' | 'https'; refreshedAt: string }
 export type UpdateChannel = 'stable' | 'beta'
 export type UpdateState = 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'installing' | 'failed' | 'unsupported'

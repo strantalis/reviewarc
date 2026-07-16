@@ -171,8 +171,7 @@ func (v *validator) evidence(values []rawEvidence) []domain.EvidenceReference {
 	for index, raw := range values {
 		revision := strings.ToLower(strings.TrimSpace(raw.Revision))
 		evidence := domain.EvidenceReference{ID: normalizedID(raw.ID, "evidence", index, seen), Path: filepath.ToSlash(raw.Path), Revision: domain.Revision(revision), StartLine: raw.StartLine, EndLine: raw.EndLine, Symbol: raw.Symbol, ValidationStatus: domain.ValidationInvalid}
-		reason := ""
-		reason = validatePath(raw.Path)
+		reason := validatePath(raw.Path)
 		if revision != string(domain.RevisionBase) && revision != string(domain.RevisionHead) && reason == "" {
 			reason = "revision must be base or head"
 		}

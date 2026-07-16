@@ -17,6 +17,10 @@ export function DeleteDraftComment(arg1:string):Promise<void>;
 
 export function DeleteNote(arg1:string):Promise<void>;
 
+export function DiscardPublishPreview(arg1:string):Promise<void>;
+
+export function DiscardThreadReplyPreview(arg1:string):Promise<void>;
+
 export function GetActiveAnalysisOperation(arg1:string):Promise<main.OperationSnapshot>;
 
 export function GetAnalysisConfiguration():Promise<main.AnalysisConfiguration>;
@@ -38,6 +42,8 @@ export function ListCachedOwnerRepositories(arg1:string):Promise<main.Repository
 export function ListSources():Promise<main.SourceState>;
 
 export function OpenPullRequest(arg1:domain.PullRequestRef):Promise<domain.ReviewSession>;
+
+export function OpenThirdPartyNotices():Promise<void>;
 
 export function PreparePublish(arg1:string,arg2:Array<string>):Promise<main.PublishPreview>;
 

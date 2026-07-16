@@ -158,12 +158,12 @@ func TestAnalysisFlowEndToEndAcrossHarnesses(t *testing.T) {
 				profile.Model = "sonnet"
 			}
 			ref := domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}
-			pr := domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: ref, Number: 7}, Title: "Greeting change"}, BaseSHA: baseSHA, HeadSHA: headSHA, BaseRef: "main", HeadRef: "feature", HeadRepository: ref}
+			pr := domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: ref, Number: 7}, Title: "Greeting change", BaseSHA: baseSHA, HeadSHA: headSHA}, BaseRef: "main", HeadRef: "feature", HeadRepository: ref}
 			session := domain.ReviewSession{ID: "analysis-" + string(harness), PullRequest: pr, BaseSHA: baseSHA, HeadSHA: headSHA, Status: domain.SessionReady, AnalysisStatus: domain.AnalysisNotStarted}
 			if err := store.SaveSession(context.Background(), session); err != nil {
 				t.Fatal(err)
 			}
-			app := &App{paths: paths, github: githubclient.New(runner), store: store, repos: manager, runner: runner, harnesses: registry, prepared: map[string]preparedState{}, active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}}
+			app := &App{paths: paths, github: githubclient.New(runner), store: store, repos: manager, runner: runner, harnesses: registry, prepared: newPreparedReviewCache(0, 0, 0), active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}}
 			if _, err := app.StartAnalysisWithProfile(session.ID, AnalysisRequest{Profile: &profile}); err != nil {
 				t.Fatal(err)
 			}
@@ -278,7 +278,7 @@ func analysisRemoteFixture(t *testing.T) (string, string, string) {
 
 func runAnalysisGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	command := exec.Command("git", args...)
+	command := exec.CommandContext(context.Background(), "git", args...)
 	command.Dir = dir
 	output, err := command.CombinedOutput()
 	if err != nil {

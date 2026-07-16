@@ -17,7 +17,7 @@ var outputSchema []byte
 
 var (
 	resolvedOutputSchema *jsonschema.Resolved
-	resolveSchemaErr     error
+	errResolveSchema     error
 	resolveSchemaOnce    sync.Once
 )
 
@@ -57,12 +57,12 @@ func validateAgainstSchema(data []byte) error {
 	}
 	resolveSchemaOnce.Do(func() {
 		var schema jsonschema.Schema
-		if resolveSchemaErr = json.Unmarshal(outputSchema, &schema); resolveSchemaErr == nil {
-			resolvedOutputSchema, resolveSchemaErr = schema.Resolve(nil)
+		if errResolveSchema = json.Unmarshal(outputSchema, &schema); errResolveSchema == nil {
+			resolvedOutputSchema, errResolveSchema = schema.Resolve(nil)
 		}
 	})
-	if resolveSchemaErr != nil {
-		return fmt.Errorf("resolve structured-output schema: %w", resolveSchemaErr)
+	if errResolveSchema != nil {
+		return fmt.Errorf("resolve structured-output schema: %w", errResolveSchema)
 	}
 	if err := resolvedOutputSchema.Validate(value); err != nil {
 		return fmt.Errorf("structured output does not match ReviewArc's schema: %w", err)

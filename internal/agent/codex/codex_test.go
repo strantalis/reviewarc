@@ -154,7 +154,8 @@ func TestAnalyzeEmitsObservedActivityBeforeCodexExits(t *testing.T) {
 		case event := <-events:
 			if event.Kind == agent.EventProgress && event.Message == "Reading diff for src/greet.go" {
 				close(release)
-				for range events {
+				for remaining := range events {
+					_ = remaining
 				}
 				return
 			}
@@ -242,8 +243,8 @@ func TestAnalyzeUsesBoundedPromptAndValidatesEvidence(t *testing.T) {
 			t.Fatalf("analysis failed: %+v", event.Failure)
 		}
 		if event.Kind == agent.EventCompleted {
-			copy := event
-			completed = &copy
+			completedEvent := event
+			completed = &completedEvent
 		}
 	}
 	if completed == nil || completed.Analysis == nil || completed.Coverage == nil {

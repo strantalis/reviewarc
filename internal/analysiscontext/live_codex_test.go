@@ -80,7 +80,7 @@ func TestLiveCodexUsesOnlyRequiredReviewArcMCP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lease.Close()
+	defer func() { _ = lease.Close() }()
 
 	runner := processpkg.NewExecRunner()
 	catalogResult, err := runner.Run(ctx, processpkg.Command{Tool: processpkg.Codex, Args: []string{"debug", "models", "--bundled"}, Timeout: 20 * time.Second, MaxOutput: 16 << 20})

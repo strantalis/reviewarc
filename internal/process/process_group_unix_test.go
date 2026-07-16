@@ -58,11 +58,11 @@ func TestRunnerCancellationKillsDescendantProcess(t *testing.T) {
 	t.Fatalf("descendant process %d survived cancellation", childPID)
 }
 
-func TestProcessGroupHelper(t *testing.T) {
+func TestProcessGroupHelper(_ *testing.T) {
 	if len(os.Args) < 2 || os.Args[len(os.Args)-2] != "--" {
 		return
 	}
-	child := exec.Command("sleep", "30")
+	child := exec.CommandContext(context.Background(), "sleep", "30")
 	if err := child.Start(); err != nil {
 		os.Exit(2)
 	}

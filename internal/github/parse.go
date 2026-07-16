@@ -2,6 +2,7 @@ package github
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -262,12 +263,12 @@ func parsePullRequestDetail(metadata, commitsData []byte) (PullRequestDetail, er
 		return PullRequestDetail{}, fmt.Errorf("parse pull request metadata: %w", err)
 	}
 	if raw.Base.Repo == nil || raw.Head.Repo == nil {
-		return PullRequestDetail{}, fmt.Errorf("pull request repository is unavailable")
+		return PullRequestDetail{}, errors.New("pull request repository is unavailable")
 	}
 	repo := domain.RepositoryRef{Host: "github.com", Owner: raw.Base.Repo.Owner.Login, Name: raw.Base.Repo.Name, CloneURL: raw.Base.Repo.CloneURL}
 	headRepo := domain.RepositoryRef{Host: "github.com", Owner: raw.Head.Repo.Owner.Login, Name: raw.Head.Repo.Name, CloneURL: raw.Head.Repo.CloneURL}
 	updated, _ := time.Parse(time.RFC3339, raw.UpdatedAt)
-	pr := domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: repo, Number: raw.Number}, Title: raw.Title, URL: raw.HTMLURL, Author: raw.User.domain(), UpdatedAt: updated, IsDraft: raw.Draft, Additions: raw.Additions, Deletions: raw.Deletions, ChangedFiles: raw.ChangedFiles, AnalysisStatus: domain.AnalysisNotStarted, RiskLevel: domain.RiskUnknown}, Body: raw.Body, BaseRef: raw.Base.Ref, HeadRef: raw.Head.Ref, BaseSHA: raw.Base.SHA, HeadSHA: raw.Head.SHA, HeadRepository: headRepo}
+	pr := domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: repo, Number: raw.Number}, Title: raw.Title, URL: raw.HTMLURL, Author: raw.User.domain(), UpdatedAt: updated, IsDraft: raw.Draft, Additions: raw.Additions, Deletions: raw.Deletions, ChangedFiles: raw.ChangedFiles, AnalysisStatus: domain.AnalysisNotStarted, RiskLevel: domain.RiskUnknown, BaseSHA: raw.Base.SHA, HeadSHA: raw.Head.SHA}, Body: raw.Body, BaseRef: raw.Base.Ref, HeadRef: raw.Head.Ref, HeadRepository: headRepo}
 	pr.Relationships = []domain.Relationship{}
 	pr.Labels = make([]string, 0, len(raw.Labels))
 	for _, label := range raw.Labels {

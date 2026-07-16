@@ -44,7 +44,7 @@ export function ThemeProvider({children}: {children: ReactNode}) {
 
   useLayoutEffect(() => applyTheme(resolvedTheme), [resolvedTheme])
   useEffect(() => {
-    if (typeof window.matchMedia !== 'function') return
+    if (typeof window.matchMedia !== 'function') return undefined
     const media = window.matchMedia(systemThemeQuery)
     const onChange = () => setSystemTheme(media.matches ? 'dark' : 'light')
     onChange()

@@ -67,7 +67,7 @@ func TestOversizedProviderPromptBecomesPagedLocalArtifact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lease.Close()
+	defer func() { _ = lease.Close() }()
 	bundle, err := Open(dataRoot, lease.Reference.Path, lease.Reference.Digest)
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +102,7 @@ func TestOpenRejectsDigestAndArtifactTampering(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lease.Close()
+	defer func() { _ = lease.Close() }()
 	if _, err := Open(dataRoot, lease.Reference.Path, strings.Repeat("0", 64)); err == nil || !strings.Contains(err.Error(), "digest") {
 		t.Fatalf("digest error=%v", err)
 	}
@@ -136,7 +136,7 @@ func TestOpenRejectsUnexpectedBundleEntries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lease.Close()
+	defer func() { _ = lease.Close() }()
 	if err := os.Chmod(lease.Reference.Path, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestLargeMultiFileBundleKeepsLaunchPromptSmall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lease.Close()
+	defer func() { _ = lease.Close() }()
 	bundle, err := Open(dataRoot, lease.Reference.Path, lease.Reference.Digest)
 	if err != nil {
 		t.Fatal(err)

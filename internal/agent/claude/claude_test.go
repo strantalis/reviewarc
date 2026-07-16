@@ -184,7 +184,8 @@ func TestAnalyzeEmitsObservedActivityBeforeClaudeExits(t *testing.T) {
 		case event := <-events:
 			if event.Kind == agent.EventProgress && event.Message == "Reading diff for src/greet.go" {
 				close(release)
-				for range events {
+				for remaining := range events {
+					_ = remaining
 				}
 				return
 			}
@@ -264,8 +265,8 @@ func TestAnalyzeUsesOnlyControlledToolsAndStructuredOutput(t *testing.T) {
 			t.Fatalf("analysis failed: %+v", event.Failure)
 		}
 		if event.Kind == agent.EventCompleted {
-			copy := event
-			completed = &copy
+			completedEvent := event
+			completed = &completedEvent
 		}
 	}
 	if completed == nil || completed.Analysis == nil || completed.Coverage == nil || completed.Coverage.DiffFilesFullyRead != 1 {
@@ -360,7 +361,7 @@ func TestParseStreamRejectsMalformedUnknownToolsAndMissingStructuredOutput(t *te
 	if _, err := parseStream([]byte(`{"type":"result","is_error":false}`), tracker); err == nil {
 		t.Fatal("missing structured output accepted")
 	}
-	if _, err := parseStream([]byte(`{"type":"result","subtype":"error_max_structured_output_retries","is_error":true}`), tracker); err == nil || !strings.Contains(err.Error(), "matching ReviewArc's schema") {
+	if _, err := parseStream([]byte(`{"type":"result","subtype":"error_max_structured_output_retries","is_error":true}`), tracker); err == nil || !strings.Contains(err.Error(), "ReviewArc's schema") {
 		t.Fatalf("structured output retry error=%v", err)
 	}
 }

@@ -92,7 +92,7 @@ export function Markdown({children, className = ''}: {children: string; classNam
   const flushList = () => { if (list.length) blocks.push(<ul key={`ul-${blocks.length}`}>{list.map((item, index) => <li key={index}>{inlineMarkdown(item)}</li>)}</ul>); list = [] }
   const flushCode = () => { if (code) blocks.push(<pre key={`pre-${blocks.length}`}><code>{code.join('\n')}</code></pre>); code = undefined }
   for (const line of lines) {
-    if (line.trimStart().startsWith('```')) { flushParagraph(); flushList(); code ? flushCode() : code = []; continue }
+    if (line.trimStart().startsWith('```')) { flushParagraph(); flushList(); if (code) flushCode(); else code = []; continue }
     if (code) { code.push(line); continue }
     const heading = line.match(/^(#{1,3})\s+(.+)$/)
     if (heading) { flushParagraph(); flushList(); const level = heading[1].length; blocks.push(level === 1 ? <h2 key={`h-${blocks.length}`}>{inlineMarkdown(heading[2])}</h2> : <h3 key={`h-${blocks.length}`}>{inlineMarkdown(heading[2])}</h3>); continue }

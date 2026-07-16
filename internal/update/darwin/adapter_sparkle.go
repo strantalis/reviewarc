@@ -56,16 +56,16 @@ func (a *Adapter) Initialize(ctx context.Context, channel update.Channel, report
 		return fmt.Errorf("invalid update channel %q", channel)
 	}
 	if a.feedURL == "" {
-		return errors.New("Sparkle feed URL is required")
+		return errors.New("feed URL is required for Sparkle")
 	}
 	if report == nil {
-		return errors.New("Sparkle status reporter is required")
+		return errors.New("status reporter is required for Sparkle")
 	}
 
 	a.mu.Lock()
 	if a.initialized {
 		a.mu.Unlock()
-		return errors.New("Sparkle adapter is already initialized")
+		return errors.New("update adapter for Sparkle is already initialized")
 	}
 	a.mu.Unlock()
 
@@ -93,7 +93,7 @@ func (a *Adapter) SetChannel(ctx context.Context, channel update.Channel) error 
 		return fmt.Errorf("invalid update channel %q", channel)
 	}
 	if !a.isInitialized() {
-		return errors.New("Sparkle adapter is not initialized")
+		return errors.New("update adapter for Sparkle is not initialized")
 	}
 	return nativeCall(func(errorOut **C.char) C.int {
 		return C.ra_sparkle_set_allows_beta(boolInt(channel == update.ChannelBeta), errorOut)
@@ -105,7 +105,7 @@ func (a *Adapter) Check(ctx context.Context, mode update.CheckMode) error {
 		return err
 	}
 	if !a.isInitialized() {
-		return errors.New("Sparkle adapter is not initialized")
+		return errors.New("update adapter for Sparkle is not initialized")
 	}
 	if mode != update.CheckManual && mode != update.CheckScheduled {
 		return fmt.Errorf("invalid update check mode %q", mode)
@@ -120,7 +120,7 @@ func (a *Adapter) InstallAndRestart(ctx context.Context) error {
 		return err
 	}
 	if !a.isInitialized() {
-		return errors.New("Sparkle adapter is not initialized")
+		return errors.New("update adapter for Sparkle is not initialized")
 	}
 	return nativeCall(func(errorOut **C.char) C.int {
 		return C.ra_sparkle_install_and_restart(errorOut)
@@ -187,7 +187,7 @@ func (s nativeStatus) event() update.AdapterEvent {
 func readNativeStatus() (nativeStatus, error) {
 	value := C.ra_sparkle_status_json()
 	if value == nil {
-		return nativeStatus{}, errors.New("Sparkle returned an empty status")
+		return nativeStatus{}, errors.New("empty status returned by Sparkle")
 	}
 	defer C.ra_sparkle_free_string(value)
 
@@ -204,7 +204,7 @@ func nativeCall(call func(**C.char) C.int) error {
 		return nil
 	}
 	if nativeError == nil {
-		return errors.New("Sparkle operation failed")
+		return errors.New("update operation failed in Sparkle")
 	}
 	defer C.ra_sparkle_free_string(nativeError)
 	return errors.New(C.GoString(nativeError))
