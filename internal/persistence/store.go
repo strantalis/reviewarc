@@ -360,6 +360,7 @@ func (s *Store) ListPullRequests(ctx context.Context) ([]domain.PullRequest, err
 func (s *Store) ListPullRequestSummaries(ctx context.Context) ([]domain.PullRequestSummary, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT p.pull_request_json,
+		       COALESCE(s.id, ''),
 		       COALESCE(s.analysis_status, ''),
 		       CASE
 		         WHEN a.analysis_json IS NULL THEN -1
@@ -389,9 +390,10 @@ func (s *Store) ListPullRequestSummaries(ctx context.Context) ([]domain.PullRequ
 	out := make([]domain.PullRequestSummary, 0)
 	for rows.Next() {
 		var pullRequestJSON []byte
+		var sessionID string
 		var analysisStatus domain.AnalysisStatus
 		var riskRank, total, reviewed, blocked, clarify int
-		if err := rows.Scan(&pullRequestJSON, &analysisStatus, &riskRank, &total, &reviewed, &blocked, &clarify); err != nil {
+		if err := rows.Scan(&pullRequestJSON, &sessionID, &analysisStatus, &riskRank, &total, &reviewed, &blocked, &clarify); err != nil {
 			return nil, err
 		}
 		var pullRequest domain.PullRequest
@@ -402,6 +404,7 @@ func (s *Store) ListPullRequestSummaries(ctx context.Context) ([]domain.PullRequ
 		if analysisStatus != "" {
 			item.AnalysisStatus = analysisStatus
 		}
+		item.SessionID = sessionID
 		item.Progress = domain.ReviewProgress{Total: total, Reviewed: reviewed, Blocked: blocked, Clarify: clarify}
 		if total > 0 {
 			item.Progress.Percent = reviewed * 100 / total
@@ -542,7 +545,7 @@ func (s *Store) StartAnalysisRun(ctx context.Context, run domain.AnalysisRun) er
 	if run.Status == "" {
 		run.Status = domain.AnalysisRunPreparing
 	}
-	if run.Status != domain.AnalysisRunPreparing && run.Status != domain.AnalysisRunRunning {
+	if run.Status != domain.AnalysisRunQueued && run.Status != domain.AnalysisRunPreparing && run.Status != domain.AnalysisRunRunning {
 		return fmt.Errorf("start analysis run: invalid status %q", run.Status)
 	}
 	now := run.UpdatedAt
@@ -565,7 +568,11 @@ func (s *Store) StartAnalysisRun(ctx context.Context, run domain.AnalysisRun) er
 	if _, err = tx.ExecContext(ctx, `INSERT INTO analysis_runs(id,session_id,harness_id,harness_version,context_transport,model,reasoning_level,schema_version,input_fingerprint,coverage_json,status,started_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, run.ID, run.SessionID, run.Profile.Harness, run.HarnessVersion, run.ContextTransport, run.Profile.Model, run.Profile.Reasoning, run.SchemaVersion, run.InputFingerprint, coverage, run.Status, encodeTime(started), encodeTime(now)); err != nil {
 		return wrap("start analysis run", err)
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE review_sessions SET analysis_status=?,updated_at=? WHERE id=?`, domain.AnalysisRunning, encodeTime(now), run.SessionID)
+	sessionStatus := domain.AnalysisRunning
+	if run.Status == domain.AnalysisRunQueued {
+		sessionStatus = domain.AnalysisQueued
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE review_sessions SET analysis_status=?,updated_at=? WHERE id=?`, sessionStatus, encodeTime(now), run.SessionID)
 	if err != nil {
 		return err
 	}
@@ -573,6 +580,42 @@ func (s *Store) StartAnalysisRun(ctx context.Context, run domain.AnalysisRun) er
 		return fmt.Errorf("start analysis run: session %q not found", run.SessionID)
 	}
 	return tx.Commit()
+}
+
+// ClaimNextQueuedAnalysisRun atomically advances the oldest queued run to
+// preparing. SQLite serializes the transaction, so multiple local workers can
+// safely compete without starting the same run twice.
+func (s *Store) ClaimNextQueuedAnalysisRun(ctx context.Context) (*domain.AnalysisRun, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	row := tx.QueryRowContext(ctx, `SELECT id,session_id,harness_id,harness_version,context_transport,model,reasoning_level,schema_version,input_fingerprint,coverage_json,status,failure_code,failure_title,failure_message,failure_action,failure_retryable,failure_technical_details,started_at,completed_at,updated_at FROM analysis_runs WHERE status=? ORDER BY started_at,id LIMIT 1`, domain.AnalysisRunQueued)
+	run, err := scanAnalysisRun(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	result, err := tx.ExecContext(ctx, `UPDATE analysis_runs SET status=?,updated_at=? WHERE id=? AND status=?`, domain.AnalysisRunPreparing, encodeTime(now), run.ID, domain.AnalysisRunQueued)
+	if err != nil {
+		return nil, err
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return nil, nil
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE review_sessions SET analysis_status=?,updated_at=? WHERE id=?`, domain.AnalysisRunning, encodeTime(now), run.SessionID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	run.Status = domain.AnalysisRunPreparing
+	run.UpdatedAt = now
+	return &run, nil
 }
 
 func (s *Store) MarkAnalysisRunRunning(ctx context.Context, runID string) error {
@@ -649,7 +692,7 @@ func (s *Store) finishAnalysisRun(ctx context.Context, runID string, status doma
 	}
 	defer tx.Rollback()
 	var sessionID string
-	if err := tx.QueryRowContext(ctx, `SELECT session_id FROM analysis_runs WHERE id=? AND status IN (?,?)`, runID, domain.AnalysisRunPreparing, domain.AnalysisRunRunning).Scan(&sessionID); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT session_id FROM analysis_runs WHERE id=? AND status IN (?,?,?)`, runID, domain.AnalysisRunQueued, domain.AnalysisRunPreparing, domain.AnalysisRunRunning).Scan(&sessionID); err != nil {
 		return queryErr("finish analysis run", err)
 	}
 	now := time.Now()
@@ -721,6 +764,22 @@ func (s *Store) latestAnalysisRun(ctx context.Context, sessionID string) (*domai
 	run, err := scanAnalysisRun(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &run, nil
+}
+
+func (s *Store) LatestAnalysisRun(ctx context.Context, sessionID string) (*domain.AnalysisRun, error) {
+	return s.latestAnalysisRun(ctx, sessionID)
+}
+
+func (s *Store) GetAnalysisRun(ctx context.Context, runID string) (*domain.AnalysisRun, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id,session_id,harness_id,harness_version,context_transport,model,reasoning_level,schema_version,input_fingerprint,coverage_json,status,failure_code,failure_title,failure_message,failure_action,failure_retryable,failure_technical_details,started_at,completed_at,updated_at FROM analysis_runs WHERE id=?`, runID)
+	run, err := scanAnalysisRun(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err

@@ -84,6 +84,10 @@ type OperationSnapshot struct {
 	Operation Operation   `json:"operation"`
 	Events    []Operation `json:"events"`
 }
+type InboxAnalysis struct {
+	Session   domain.ReviewSession `json:"session"`
+	Operation Operation            `json:"operation"`
+}
 type AnalysisRequest struct {
 	Profile       *domain.AnalysisProfile `json:"profile,omitempty"`
 	SaveAsDefault bool                    `json:"saveAsDefault"`
@@ -213,6 +217,9 @@ type App struct {
 	active            map[string]context.CancelFunc
 	analysisBySession map[string]string
 	operationHistory  map[string][]Operation
+	analysisWake      chan struct{}
+	schedulerCancel   context.CancelFunc
+	schedulerWG       sync.WaitGroup
 	publish           map[string]pendingPublish
 	threadReplies     map[string]pendingThreadReply
 	gitProtocol       func() string
@@ -241,7 +248,7 @@ func NewApp() (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	app := &App{paths: paths, detector: dependencies.New(runner), github: githubclient.New(runner), store: store, repos: gitcache.NewManager(paths.Repositories, paths.Worktrees, runner, gitcache.Options{RemoteURL: remoteURL}), runner: runner, harnesses: registry, prepared: map[string]preparedState{}, active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}, operationHistory: map[string][]Operation{}, publish: map[string]pendingPublish{}, threadReplies: map[string]pendingThreadReply{}, gitProtocol: gitProtocol}
+	app := &App{paths: paths, detector: dependencies.New(runner), github: githubclient.New(runner), store: store, repos: gitcache.NewManager(paths.Repositories, paths.Worktrees, runner, gitcache.Options{RemoteURL: remoteURL}), runner: runner, harnesses: registry, prepared: map[string]preparedState{}, active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}, operationHistory: map[string][]Operation{}, analysisWake: make(chan struct{}, 2), publish: map[string]pendingPublish{}, threadReplies: map[string]pendingThreadReply{}, gitProtocol: gitProtocol}
 	app.configureUpdater()
 	return app, nil
 }
@@ -267,7 +274,20 @@ func preferredGitHubRemote(runner proc.Runner) func(domain.RepositoryRef) string
 		return githubRemote(githubGitProtocol(runner))(r)
 	}
 }
-func (a *App) startup(ctx context.Context) { a.mu.Lock(); a.ctx = ctx; a.mu.Unlock() }
+func (a *App) startup(ctx context.Context) {
+	a.mu.Lock()
+	a.ctx = ctx
+	if a.schedulerCancel == nil && a.analysisWake != nil {
+		var schedulerCtx context.Context
+		schedulerCtx, a.schedulerCancel = context.WithCancel(ctx)
+		for range 2 {
+			a.schedulerWG.Add(1)
+			go a.analysisWorker(schedulerCtx)
+		}
+	}
+	a.mu.Unlock()
+	a.wakeAnalysisWorkers()
+}
 func (a *App) domReady(ctx context.Context) {
 	configureNativeWindowChrome(ctx)
 	configureNativeApplicationMenu(ctx)
@@ -297,10 +317,23 @@ func (a *App) shutdown(context.Context) {
 	a.mu.Lock()
 	cancel := a.updateCancel
 	a.updateCancel = nil
+	schedulerCancel := a.schedulerCancel
+	a.schedulerCancel = nil
+	active := make([]context.CancelFunc, 0, len(a.active))
+	for _, stop := range a.active {
+		active = append(active, stop)
+	}
 	a.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
+	if schedulerCancel != nil {
+		schedulerCancel()
+	}
+	for _, stop := range active {
+		stop()
+	}
+	a.schedulerWG.Wait()
 	_ = a.store.Close()
 }
 func (a *App) appContext() context.Context {
@@ -539,6 +572,7 @@ func (a *App) RefreshInbox() (InboxState, error) {
 			}
 		}
 		if s, e := a.store.LatestSessionForPullRequest(ctx, item.Ref); e == nil {
+			item.SessionID = s.ID
 			item.AnalysisStatus, item.Progress = s.AnalysisStatus, s.Progress
 			if s.Analysis != nil {
 				item.RiskLevel = highestRisk(s.Analysis.Risks)
@@ -924,6 +958,22 @@ func (a *App) StartAnalysisWithProfile(sessionID string, request AnalysisRequest
 	return a.startAnalysis(sessionID, request)
 }
 
+// QueueInboxAnalysis opens or refreshes the pull request session before
+// enqueueing analysis with the saved default profile. It intentionally leaves
+// navigation to the caller so inbox triage can continue in the foreground.
+func (a *App) QueueInboxAnalysis(ref domain.PullRequestRef) (InboxAnalysis, error) {
+	session, err := a.OpenPullRequest(ref)
+	if err != nil {
+		return InboxAnalysis{}, err
+	}
+	op, err := a.StartAnalysis(session.ID)
+	if err != nil {
+		return InboxAnalysis{}, err
+	}
+	session.AnalysisStatus = domain.AnalysisQueued
+	return InboxAnalysis{Session: session, Operation: op}, nil
+}
+
 func (a *App) startAnalysis(sessionID string, request AnalysisRequest) (Operation, error) {
 	session, err := a.store.GetSession(a.appContext(), sessionID)
 	if err != nil {
@@ -950,7 +1000,12 @@ func (a *App) startAnalysis(sessionID string, request AnalysisRequest) (Operatio
 		}
 	}
 	runID := newID()
-	op := Operation{ID: newID(), SessionID: sessionID, RunID: runID, Kind: "analysis", Stage: "loadingPullRequestContext", State: "running", Message: "Loading GitHub discussion and checks", UpdatedAt: time.Now().UTC()}
+	queued := a.analysisWake != nil
+	opID := newID()
+	if queued {
+		opID = runID
+	}
+	op := Operation{ID: opID, SessionID: sessionID, RunID: runID, Kind: "analysis", Stage: "loadingPullRequestContext", State: "running", Message: "Loading GitHub discussion and checks", UpdatedAt: time.Now().UTC()}
 	ctx, cancel := context.WithCancel(a.appContext())
 	a.mu.Lock()
 	if _, exists := a.analysisBySession[sessionID]; exists {
@@ -958,12 +1013,26 @@ func (a *App) startAnalysis(sessionID string, request AnalysisRequest) (Operatio
 		cancel()
 		return Operation{}, errors.New("analysis is already running for this session")
 	}
-	a.active[op.ID] = cancel
 	a.analysisBySession[sessionID] = op.ID
+	if !queued {
+		a.active[op.ID] = cancel
+	}
 	a.mu.Unlock()
-	run := domain.AnalysisRun{ID: runID, SessionID: sessionID, Profile: profile, HarnessVersion: capabilities.Version, ContextTransport: transport, SchemaVersion: sharedanalysis.SchemaVersion, InputFingerprint: fingerprint, Coverage: domain.AnalysisCoverage{OmittedPaths: []string{}, Accesses: []domain.ContextAccess{}}, Status: domain.AnalysisRunPreparing}
-	if err := a.store.StartAnalysisRun(a.appContext(), run); err != nil {
+	if queued {
 		cancel()
+		op.Stage = "queued"
+		op.State = "queued"
+		op.Message = "Waiting for an analysis worker"
+	}
+	runStatus := domain.AnalysisRunPreparing
+	if queued {
+		runStatus = domain.AnalysisRunQueued
+	}
+	run := domain.AnalysisRun{ID: runID, SessionID: sessionID, Profile: profile, HarnessVersion: capabilities.Version, ContextTransport: transport, SchemaVersion: sharedanalysis.SchemaVersion, InputFingerprint: fingerprint, Coverage: domain.AnalysisCoverage{OmittedPaths: []string{}, Accesses: []domain.ContextAccess{}}, Status: runStatus}
+	if err := a.store.StartAnalysisRun(a.appContext(), run); err != nil {
+		if !queued {
+			cancel()
+		}
 		a.mu.Lock()
 		delete(a.active, op.ID)
 		delete(a.analysisBySession, sessionID)
@@ -971,8 +1040,76 @@ func (a *App) startAnalysis(sessionID string, request AnalysisRequest) (Operatio
 		return Operation{}, err
 	}
 	a.emitOperation(op)
+	if queued {
+		a.wakeAnalysisWorkers()
+		return op, nil
+	}
 	go a.prepareAndRunAnalysis(ctx, op, session, analysisPlan{adapter: adapter, profile: profile, transport: transport, runID: runID})
 	return op, nil
+}
+
+func (a *App) wakeAnalysisWorkers() {
+	for range 2 {
+		select {
+		case a.analysisWake <- struct{}{}:
+		default:
+			return
+		}
+	}
+}
+
+func (a *App) analysisWorker(ctx context.Context) {
+	defer a.schedulerWG.Done()
+	for {
+		run, err := a.store.ClaimNextQueuedAnalysisRun(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(250 * time.Millisecond):
+			}
+			continue
+		}
+		if run == nil {
+			select {
+			case <-ctx.Done():
+				return
+			case <-a.analysisWake:
+			}
+			continue
+		}
+		a.runQueuedAnalysis(ctx, *run)
+	}
+}
+
+func (a *App) runQueuedAnalysis(workerCtx context.Context, run domain.AnalysisRun) {
+	op := Operation{ID: run.ID, SessionID: run.SessionID, RunID: run.ID, Kind: "analysis", Stage: "loadingPullRequestContext", State: "running", Message: "Loading GitHub discussion and checks"}
+	session, err := a.store.GetSession(workerCtx, run.SessionID)
+	if err != nil {
+		a.failAnalysisOperation(op, contextFailure(err), domain.AnalysisCoverage{})
+		a.mu.Lock()
+		delete(a.analysisBySession, run.SessionID)
+		a.mu.Unlock()
+		return
+	}
+	adapter, profile, capabilities, err := a.harnesses.Resolve(workerCtx, run.Profile)
+	if err != nil {
+		a.failAnalysisOperation(op, providerStartFailure(err), domain.AnalysisCoverage{})
+		a.mu.Lock()
+		delete(a.analysisBySession, run.SessionID)
+		a.mu.Unlock()
+		return
+	}
+	ctx, cancel := context.WithCancel(workerCtx)
+	a.mu.Lock()
+	a.active[op.ID] = cancel
+	a.analysisBySession[run.SessionID] = op.ID
+	a.mu.Unlock()
+	a.emitOperation(op)
+	a.prepareAndRunAnalysis(ctx, op, session, analysisPlan{adapter: adapter, profile: profile, transport: controlledTransport(capabilities.ContextTransports), runID: run.ID})
 }
 
 func analysisFingerprint(session domain.ReviewSession, profile domain.AnalysisProfile, harnessVersion string, transport domain.ContextTransport) string {
@@ -997,12 +1134,22 @@ func unchangedOversizedRetryBlocked(prior *domain.AnalysisRun, fingerprint strin
 func (a *App) CancelOperation(id string) error {
 	a.mu.Lock()
 	cancel := a.active[id]
-	delete(a.active, id)
 	a.mu.Unlock()
-	if cancel == nil {
+	if cancel != nil {
+		cancel()
+		return nil
+	}
+	run, err := a.store.GetAnalysisRun(a.appContext(), id)
+	if err != nil || run.Status != domain.AnalysisRunQueued {
 		return errors.New("operation is not active")
 	}
-	cancel()
+	if err := a.store.CancelAnalysisRun(a.appContext(), run.ID, domain.AnalysisCoverage{}); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	delete(a.analysisBySession, run.SessionID)
+	a.mu.Unlock()
+	a.emitOperation(Operation{ID: run.ID, SessionID: run.SessionID, RunID: run.ID, Kind: "analysis", Stage: "cancelled", State: "cancelled", Message: "Queued analysis cancelled"})
 	return nil
 }
 func (a *App) GetActiveAnalysisOperation(sessionID string) (*OperationSnapshot, error) {
@@ -1014,7 +1161,16 @@ func (a *App) GetActiveAnalysisOperation(sessionID string) (*OperationSnapshot, 
 	history := append([]Operation(nil), a.operationHistory[operationID]...)
 	a.mu.RUnlock()
 	if operationID == "" || len(history) == 0 {
-		return nil, nil
+		run, err := a.store.LatestAnalysisRun(a.appContext(), sessionID)
+		if err != nil || run == nil || (run.Status != domain.AnalysisRunQueued && run.Status != domain.AnalysisRunPreparing && run.Status != domain.AnalysisRunRunning) {
+			return nil, err
+		}
+		state, stage, message := "running", "loadingPullRequestContext", "Loading GitHub discussion and checks"
+		if run.Status == domain.AnalysisRunQueued {
+			state, stage, message = "queued", "queued", "Waiting for an analysis worker"
+		}
+		op := Operation{ID: run.ID, SessionID: sessionID, RunID: run.ID, Kind: "analysis", Stage: stage, State: state, Message: message, UpdatedAt: run.UpdatedAt}
+		return &OperationSnapshot{Operation: op, Events: []Operation{op}}, nil
 	}
 	return &OperationSnapshot{Operation: history[len(history)-1], Events: history}, nil
 }

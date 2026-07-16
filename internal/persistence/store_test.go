@@ -41,7 +41,7 @@ func TestMigrationsAndReopen(t *testing.T) {
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&applied); err != nil {
 		t.Fatal(err)
 	}
-	if applied != 3 {
+	if applied != 4 {
 		t.Fatalf("applied migrations = %d", applied)
 	}
 }
@@ -301,6 +301,67 @@ func TestRecoverInterruptedAnalysesMakesRestartRetryable(t *testing.T) {
 	}
 	if got.LatestAnalysisRun == nil || got.LatestAnalysisRun.Status != domain.AnalysisRunFailed || got.LatestAnalysisRun.Failure == nil || got.LatestAnalysisRun.Failure.Code != domain.FailureInterrupted {
 		t.Fatalf("recovered run=%+v", got.LatestAnalysisRun)
+	}
+}
+
+func TestQueuedAnalysisRunsAreDurableClaimedFIFOAndCancellable(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	profile := domain.AnalysisProfile{Harness: domain.HarnessCodex, Model: "model", Reasoning: domain.ReasoningMedium}
+	makeSession := func(id string, number int) domain.ReviewSession {
+		ref := domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}
+		return domain.ReviewSession{ID: id, PullRequest: domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: ref, Number: number}}}, BaseSHA: "base", HeadSHA: "head", Status: domain.SessionReady, AnalysisStatus: domain.AnalysisNotStarted}
+	}
+	firstSession, secondSession := makeSession("queued-first", 1), makeSession("queued-second", 2)
+	for _, session := range []domain.ReviewSession{firstSession, secondSession} {
+		if err := s.SaveSession(ctx, session); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := domain.AnalysisRun{ID: "queued-run-1", SessionID: firstSession.ID, Profile: profile, ContextTransport: domain.ContextInline, SchemaVersion: 1, InputFingerprint: "first", Status: domain.AnalysisRunQueued, StartedAt: time.Now().Add(-time.Minute)}
+	second := domain.AnalysisRun{ID: "queued-run-2", SessionID: secondSession.ID, Profile: profile, ContextTransport: domain.ContextInline, SchemaVersion: 1, InputFingerprint: "second", Status: domain.AnalysisRunQueued, StartedAt: time.Now()}
+	if err := s.StartAnalysisRun(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.StartAnalysisRun(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	if duplicate := s.StartAnalysisRun(ctx, domain.AnalysisRun{ID: "duplicate", SessionID: firstSession.ID, Profile: profile, ContextTransport: domain.ContextInline, SchemaVersion: 1, InputFingerprint: "duplicate", Status: domain.AnalysisRunQueued}); duplicate == nil {
+		t.Fatal("second active run for one session was accepted")
+	}
+	if got, _ := s.GetSession(ctx, firstSession.ID); got.AnalysisStatus != domain.AnalysisQueued {
+		t.Fatalf("queued session status=%q", got.AnalysisStatus)
+	}
+	claimed, err := s.ClaimNextQueuedAnalysisRun(ctx)
+	if err != nil || claimed == nil || claimed.ID != first.ID || claimed.Status != domain.AnalysisRunPreparing {
+		t.Fatalf("claimed=%+v err=%v", claimed, err)
+	}
+	if err := s.CancelAnalysisRun(ctx, second.ID, domain.AnalysisCoverage{}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetSession(ctx, secondSession.ID); got.AnalysisStatus != domain.AnalysisNotStarted || got.LatestAnalysisRun == nil || got.LatestAnalysisRun.Status != domain.AnalysisRunCancelled {
+		t.Fatalf("cancelled queued session=%+v", got)
+	}
+}
+
+func TestRecoveryPreservesQueuedAnalysisRuns(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	session := testSession()
+	if err := s.SaveSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	run := domain.AnalysisRun{ID: "queued-restart", SessionID: session.ID, Profile: domain.AnalysisProfile{Harness: domain.HarnessCodex, Model: "model", Reasoning: domain.ReasoningMedium}, ContextTransport: domain.ContextInline, SchemaVersion: 1, InputFingerprint: "queued", Status: domain.AnalysisRunQueued}
+	if err := s.StartAnalysisRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	count, err := s.RecoverInterruptedAnalyses(ctx)
+	if err != nil || count != 0 {
+		t.Fatalf("recovery count=%d err=%v", count, err)
+	}
+	got, err := s.GetSession(ctx, session.ID)
+	if err != nil || got.AnalysisStatus != domain.AnalysisQueued || got.LatestAnalysisRun == nil || got.LatestAnalysisRun.Status != domain.AnalysisRunQueued {
+		t.Fatalf("queued run after recovery=%+v err=%v", got.LatestAnalysisRun, err)
 	}
 }
 

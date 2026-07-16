@@ -31,6 +31,7 @@ const (
 	RelationshipSelectedRepo    Relationship = "selectedRepo"
 
 	AnalysisNotStarted AnalysisStatus = "notStarted"
+	AnalysisQueued     AnalysisStatus = "queued"
 	AnalysisRunning    AnalysisStatus = "running"
 	AnalysisReady      AnalysisStatus = "ready"
 	AnalysisFailed     AnalysisStatus = "failed"
@@ -166,6 +167,7 @@ type PullRequestSummary struct {
 	ReviewDecision string         `json:"reviewDecision,omitempty"`
 	BaseSHA        string         `json:"baseSha,omitempty"`
 	HeadSHA        string         `json:"headSha,omitempty"`
+	SessionID      string         `json:"sessionId,omitempty"`
 }
 
 type Commit struct {

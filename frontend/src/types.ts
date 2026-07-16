@@ -1,7 +1,7 @@
 export type DependencyName = 'git' | 'gh' | 'codex' | 'claude'
 export type DependencyState = 'available' | 'missing' | 'broken'
 export type Relationship = 'reviewRequested' | 'assigned' | 'authored' | 'selectedRepo'
-export type AnalysisStatus = 'notStarted' | 'running' | 'ready' | 'failed' | 'stale'
+export type AnalysisStatus = 'notStarted' | 'queued' | 'running' | 'ready' | 'failed' | 'stale'
 export type RiskLevel = 'unknown' | 'low' | 'medium' | 'high' | 'critical'
 export type ChapterStatus = 'notReviewed' | 'inProgress' | 'reviewed' | 'needsClarification' | 'blocked'
 export type ValidationStatus = 'valid' | 'invalid' | 'unverified'
@@ -20,7 +20,7 @@ export interface ReviewProgress { total: number; reviewed: number; blocked: numb
 export interface PullRequestSummary {
   ref: PullRequestRef; title: string; url: string; author: GitHubUser; updatedAt: string; isDraft: boolean
   additions: number; deletions: number; changedFiles: number; relationships: Relationship[]; labels: string[]
-  analysisStatus: AnalysisStatus; progress: ReviewProgress; riskLevel: RiskLevel; reviewDecision?: string
+  analysisStatus: AnalysisStatus; progress: ReviewProgress; riskLevel: RiskLevel; reviewDecision?: string; sessionId?: string
 }
 export interface Commit { sha: string; message: string; author: GitHubUser; authoredAt: string }
 export interface PullRequestReview { id: number; author: GitHubUser; state: string; body: string; commitSha: string; submittedAt: string; url: string }
@@ -125,6 +125,7 @@ export interface SelectedRepositoryRefresh { repositories: Repository[]; archive
 export interface InboxResult { items: PullRequestSummary[]; errors?: Record<string, string>; partial?: boolean }
 export interface Operation { id: string; sessionId?: string; kind: string; stage: string; message: string; state: string; progress?: number; runId?: string; failure?: AnalysisFailure; updatedAt?: string }
 export interface OperationSnapshot { operation: Operation; events: Operation[] }
+export interface InboxAnalysis { session: ReviewSession; operation: Operation }
 export interface PublishItem { draftId: string; kind: 'general' | 'inline'; body: string; path?: string; startLine?: number; startSide?: 'LEFT' | 'RIGHT'; line?: number; side?: 'LEFT' | 'RIGHT' }
 export type ReviewEvent = 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES'
 export interface PublishPreview { token: string; digest: string; repository: string; number: number; headSha: string; items: PublishItem[]; event: ReviewEvent; expiresAt: string }

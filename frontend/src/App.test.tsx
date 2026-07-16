@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { App, appendOperationEvent, DiffView, FileContextView, OverviewScreen, ReviewWorkspace, SettingsScreen, SourceSelector, SplitDiffView } from './App'
 import { AnalysisBadge, Markdown, WindowControls } from './components'
-import type { AnalysisConfiguration, BootstrapState, EnvironmentState, OperationEvent, RepositoryPage, ReviewSession, SoftwareUpdateStatus } from './types'
+import type { AnalysisConfiguration, BootstrapState, EnvironmentState, InboxAnalysis, OperationEvent, PullRequestRef, RepositoryPage, ReviewSession, SoftwareUpdateStatus } from './types'
 
 const paths = {root: '/tmp/reviewarc', repositories: '/tmp/reviewarc/repos', worktrees: '/tmp/reviewarc/worktrees', database: '/tmp/reviewarc/db.sqlite', logs: '/tmp/reviewarc/logs', cache: '/tmp/reviewarc/cache'}
 const idleUpdate: SoftwareUpdateStatus = {currentVersion: '0.1.0', currentBuild: '7', state: 'idle', channel: 'stable'}
@@ -162,6 +162,112 @@ describe('App startup', () => {
     expect(resultCount).toHaveTextContent('Showing 1 open pull request')
     expect(resultCount.closest('button')).toBeNull()
     expect(resultCount.querySelector('svg')).toBeNull()
+  })
+
+  it('keeps a compact, explained action available for analyzed pull requests', async () => {
+    const pullRequest = reviewSession().pullRequest
+    installBackend({dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: [pullRequest]})
+    render(<App/>)
+
+    const action = await screen.findByRole('button', {name: 'Open review for acme/api pull request #1'})
+    expect(action).not.toHaveTextContent('Open review')
+    fireEvent.focus(action)
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Open review')
+    fireEvent.blur(action)
+    await waitFor(() => expect(screen.queryByRole('tooltip')).not.toBeInTheDocument())
+  })
+
+  it('opens an inbox pull request on GitHub without opening the ReviewArc overview', async () => {
+    const pullRequest = reviewSession().pullRequest
+    const openURL = vi.fn()
+    const openPullRequest = vi.fn()
+    installBackend({dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: [pullRequest]})
+    window.go!.main!.App!.OpenPullRequest = openPullRequest
+    window.runtime = {BrowserOpenURL: openURL}
+    render(<App/>)
+
+    fireEvent.click(await screen.findByRole('button', {name: 'Open acme/api pull request #1 on GitHub'}))
+
+    expect(openURL).toHaveBeenCalledWith('https://github.com/acme/api/pull/1')
+    expect(openPullRequest).not.toHaveBeenCalled()
+    expect(screen.getByRole('heading', {name: 'Pull request inbox'})).toBeInTheDocument()
+  })
+
+  it('queues analysis from the inbox and keeps the user in the review queue', async () => {
+    const session = reviewSession()
+    const pullRequest = {...session.pullRequest, analysisStatus: 'notStarted' as const, sessionId: undefined}
+    const queuedSession: ReviewSession = {...session, analysisStatus: 'queued', pullRequest: {...session.pullRequest, analysisStatus: 'queued'}}
+    installBackend({dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: [pullRequest]})
+    const queue = vi.fn().mockResolvedValue({session: queuedSession, operation: {id: 'queued-run', sessionId: session.id, runId: 'queued-run', kind: 'analysis', stage: 'queued', state: 'queued', message: 'Waiting for an analysis worker'}})
+    window.go!.main!.App!.QueueInboxAnalysis = queue
+    window.runtime = {EventsOn: vi.fn(() => () => {})}
+    render(<App/>)
+
+    fireEvent.click(await screen.findByRole('button', {name: 'Analyze acme/api pull request #1'}))
+    await waitFor(() => expect(queue).toHaveBeenCalledWith(pullRequest.ref))
+    expect(screen.getByRole('heading', {name: 'Pull request inbox'})).toBeInTheDocument()
+    expect(screen.getByText('1 queued')).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: 'Cancel acme/api pull request #1'})).toBeInTheDocument()
+  })
+
+  it('preserves both queued states when inbox analysis requests resolve out of order', async () => {
+    const base = reviewSession()
+    const first = {...base, id: 'session-1', analysisStatus: 'notStarted' as const, pullRequest: {...base.pullRequest, analysisStatus: 'notStarted' as const, sessionId: undefined}}
+    const second = {...base, id: 'session-2', analysisStatus: 'notStarted' as const, pullRequest: {...base.pullRequest, ref: {...base.pullRequest.ref, number: 2}, analysisStatus: 'notStarted' as const, sessionId: undefined}}
+    installBackend({dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: [first.pullRequest, second.pullRequest]})
+    let resolveFirst!: (result: InboxAnalysis) => void
+    let resolveSecond!: (result: InboxAnalysis) => void
+    const queue = vi.fn((input: unknown) => new Promise<InboxAnalysis>((resolve) => {
+      const ref = input as PullRequestRef
+      if (ref.number === 1) resolveFirst = resolve
+      else resolveSecond = resolve
+    }))
+    window.go!.main!.App!.QueueInboxAnalysis = queue
+    window.runtime = {EventsOn: vi.fn(() => () => {})}
+    render(<App/>)
+
+    fireEvent.click(await screen.findByRole('button', {name: 'Analyze acme/api pull request #1'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Analyze acme/api pull request #2'}))
+    resolveSecond({session: {...second, analysisStatus: 'queued', pullRequest: {...second.pullRequest, analysisStatus: 'queued'}}, operation: {id: 'run-2', sessionId: second.id, kind: 'analysis', stage: 'queued', state: 'queued', message: 'Waiting'}})
+    expect(await screen.findByRole('button', {name: 'Cancel acme/api pull request #2'})).toBeInTheDocument()
+    resolveFirst({session: {...first, analysisStatus: 'queued', pullRequest: {...first.pullRequest, analysisStatus: 'queued'}}, operation: {id: 'run-1', sessionId: first.id, kind: 'analysis', stage: 'queued', state: 'queued', message: 'Waiting'}})
+
+    expect(await screen.findByRole('button', {name: 'Cancel acme/api pull request #1'})).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: 'Cancel acme/api pull request #2'})).toBeInTheDocument()
+    expect(screen.getByText('2 queued')).toBeInTheDocument()
+  })
+
+  it('cancels queued analysis from the inbox', async () => {
+    const session = reviewSession()
+    const pullRequest = {...session.pullRequest, analysisStatus: 'queued' as const, sessionId: session.id}
+    installBackend({dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: [pullRequest]})
+    const cancel = vi.fn().mockResolvedValue(undefined)
+    window.go!.main!.App!.GetActiveAnalysisOperation = vi.fn().mockResolvedValue({operation: {id: 'queued-run', sessionId: session.id, kind: 'analysis', stage: 'queued', state: 'queued', message: 'Waiting'}, events: []})
+    window.go!.main!.App!.CancelOperation = cancel
+    window.runtime = {EventsOn: vi.fn(() => () => {})}
+    render(<App/>)
+
+    fireEvent.click(await screen.findByRole('button', {name: 'Cancel acme/api pull request #1'}))
+    await waitFor(() => expect(cancel).toHaveBeenCalledWith('queued-run'))
+  })
+
+  it('updates inbox queue counts from analysis operation events', async () => {
+	const session = reviewSession()
+	const queued = {...session.pullRequest, analysisStatus: 'queued' as const, sessionId: session.id}
+	const ready = {...session, analysisStatus: 'ready' as const, pullRequest: {...session.pullRequest, analysisStatus: 'ready' as const}}
+	installBackend({dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: [queued]})
+	window.go!.main!.App!.GetSession = vi.fn().mockResolvedValue(ready)
+	const handlers: Record<string, (value: unknown) => void> = {}
+	window.runtime = {EventsOn: vi.fn((name: string, handler: (value: unknown) => void) => { handlers[name] = handler; return () => {} })}
+	render(<App/>)
+
+	expect(await screen.findByText('1 queued')).toBeInTheDocument()
+	handlers['reviewarc:operation:v1']({id: 'queued-run', sessionId: session.id, kind: 'analysis', stage: 'analyzingChange', state: 'running', message: 'Analyzing'})
+	expect(await screen.findByText('1 analyzing')).toBeInTheDocument()
+	expect(screen.queryByText('1 queued')).not.toBeInTheDocument()
+	handlers['reviewarc:operation:v1']({id: 'queued-run', sessionId: session.id, kind: 'analysis', stage: 'complete', state: 'completed', message: 'Analysis ready'})
+	await waitFor(() => expect(window.go!.main!.App!.GetSession).toHaveBeenCalledWith(session.id))
+	await waitFor(() => expect(screen.queryByText('1 analyzing')).not.toBeInTheDocument())
   })
 
   it('asks before installing and explains possible macOS authorization', async () => {
@@ -707,12 +813,18 @@ describe('Reanalysis state', () => {
     window.runtime = {EventsOn: vi.fn(() => () => {})}
     render(<OverviewScreen session={session} onBack={vi.fn()} onSession={vi.fn()} onReview={onReview}/>)
 
-    expect(screen.getByText('Analysis covers an older revision')).toBeInTheDocument()
+    const banner = screen.getByText('Analysis covers an older revision').closest('.stale-banner')!
+    const masthead = screen.getByRole('heading', {name: '#1 Record quota decisions'}).closest('.overview-masthead')!
+    expect(masthead.compareDocumentPosition(banner) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(screen.getByText(/old-head.*new-head/)).toBeInTheDocument()
     expect(screen.queryByRole('button', {name: 'Run again'})).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', {name: 'Continue stale review'}))
+    const continueReview = screen.getByRole('button', {name: 'Continue stale review'})
+    const reanalyze = screen.getByRole('button', {name: 'Reanalyze current revision'})
+    expect(banner).toContainElement(continueReview)
+    expect(banner).toContainElement(reanalyze)
+    fireEvent.click(continueReview)
     expect(onReview).toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', {name: 'Reanalyze current revision'}))
+    fireEvent.click(reanalyze)
     await waitFor(() => expect(start).toHaveBeenCalledWith(session.id))
   })
 
@@ -811,12 +923,44 @@ describe('Review brief and chapter reader', () => {
     expect(areaDetails).toHaveTextContent('Changes the decision path.')
     expect(brief).toHaveTextContent('Callback runs while locked')
     expect(brief).toHaveTextContent('Whether reentrant recorders are supported is unspecified')
+    const reviewContext = screen.getByRole('complementary', {name: 'Review context'})
+    const supportingContext = screen.getByRole('region', {name: 'Supporting context'})
     const disclosure = screen.getByText('Author context').closest('details')!
+    expect(reviewContext).not.toContainElement(disclosure)
+    expect(reviewContext.parentElement).toContainElement(supportingContext)
+    expect(reviewContext.compareDocumentPosition(supportingContext) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(disclosure).not.toHaveAttribute('open')
     expect(brief.compareDocumentPosition(disclosure) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     fireEvent.click(screen.getByText('Author context'))
     expect(disclosure).toHaveAttribute('open')
     expect(screen.getByText('A long implementation appendix that belongs in author context.')).toBeInTheDocument()
+  })
+
+  it('renders the generated overview summary as safe Markdown', () => {
+    const base = reviewSession()
+    const session: ReviewSession = {...base, analysis: {...base.analysis!, summary: '**Quota recorder**\n\n- Emits allowed decisions\n- Emits rejected decisions'}}
+    window.runtime = {EventsOn: vi.fn(() => () => {})}
+    render(<OverviewScreen session={session} onBack={vi.fn()} onSession={vi.fn()} onReview={vi.fn()}/>)
+
+    expect(screen.getByText('Quota recorder', {selector: 'strong'})).toBeInTheDocument()
+    expect(screen.getByText('Emits allowed decisions').closest('li')).toBeInTheDocument()
+    expect(screen.getByText('Emits rejected decisions').closest('li')).toBeInTheDocument()
+  })
+
+  it('opens overview discussion entries on GitHub when a permalink is available', () => {
+    const session = reviewSession()
+    const openURL = vi.fn()
+    session.pullRequest.reviews = [{id: 11, author: {login: 'alice', name: 'Alice', avatarUrl: ''}, state: 'COMMENTED', body: 'Please cover the retry path.', commitSha: 'head', submittedAt: '2026-07-12T01:00:00Z', url: 'https://github.com/acme/api/pull/1#pullrequestreview-11'}]
+    session.pullRequest.reviewComments = [{id: 101, reviewId: 11, author: {login: 'bob', name: 'Bob', avatarUrl: ''}, body: 'Can this race?', path: 'quota/limiter.go', line: 13, side: 'RIGHT', commitSha: 'head', createdAt: '2026-07-12T01:01:00Z', updatedAt: '2026-07-12T01:01:00Z', url: 'https://github.com/acme/api/pull/1#discussion_r101'}]
+    window.runtime = {EventsOn: vi.fn(() => () => {}), BrowserOpenURL: openURL}
+    render(<OverviewScreen session={session} onBack={vi.fn()} onSession={vi.fn()} onReview={vi.fn()}/>)
+
+    fireEvent.click(screen.getByText('Existing discussion'))
+    fireEvent.click(screen.getByRole('button', {name: 'Open review by @alice on GitHub'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Open comment by @bob on GitHub'}))
+
+    expect(openURL).toHaveBeenNthCalledWith(1, 'https://github.com/acme/api/pull/1#pullrequestreview-11')
+    expect(openURL).toHaveBeenNthCalledWith(2, 'https://github.com/acme/api/pull/1#discussion_r101')
   })
 
   it('turns the highest risk into a concrete starting chapter inside the unified brief', () => {
@@ -873,7 +1017,13 @@ describe('Review brief and chapter reader', () => {
     expect(screen.getByText('1 unique reference in this chapter')).toBeInTheDocument()
     expect(screen.queryByRole('region', {name: /diff for/i})).not.toBeInTheDocument()
     expect(getDiff).not.toHaveBeenCalled()
-    expect(screen.getByRole('combobox', {name: 'Chapter progress'})).toHaveTextContent('In progress')
+    const chapterProgress = screen.getByRole('combobox', {name: 'Chapter progress'})
+    expect(chapterProgress).toHaveTextContent('In progress')
+    fireEvent.click(chapterProgress)
+    expect(await screen.findByRole('option', {name: 'Not reviewed'})).toBeInTheDocument()
+    expect(screen.getByRole('option', {name: 'Needs clarification'})).toBeInTheDocument()
+    expect(screen.queryByText('You have not started this chapter.')).not.toBeInTheDocument()
+    fireEvent.keyDown(chapterProgress, {key: 'Escape'})
 
     const fullDiff = screen.getByRole('button', {name: 'Open full diff'})
     expect(fullDiff.closest('.review-header')).toBeInTheDocument()
@@ -891,6 +1041,28 @@ describe('Review brief and chapter reader', () => {
     fireEvent.click(screen.getByRole('button', {name: 'Back to chapter'}))
     expect(screen.getByRole('region', {name: 'Chapter 1: Decision recording'})).toBeInTheDocument()
     expect(screen.getByRole('combobox', {name: 'Chapter progress'})).toHaveTextContent('In progress')
+  })
+
+  it('explains stale decision blockers and starts reanalysis from the review summary', async () => {
+    const base = reviewSession()
+    const session: ReviewSession = {...base, isStale: true, staleReason: 'Pull request revisions changed.', analysisStatus: 'stale'}
+    const startAnalysis = vi.fn().mockResolvedValue({id: 'operation-1', sessionId: session.id, kind: 'analysis', stage: 'preparingContext', message: 'Preparing context', state: 'running'})
+    const onSession = vi.fn()
+    const onBack = vi.fn()
+    window.go = {main: {App: {
+      GetChangedFiles: vi.fn().mockResolvedValue([]),
+      StartAnalysis: startAnalysis,
+    }}}
+    render(<ReviewWorkspace session={session} onSession={onSession} onBack={onBack}/>)
+
+    fireEvent.click(screen.getByRole('button', {name: 'Review summary'}))
+    expect(screen.getByText('This PR changed since it was analyzed.')).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: 'Approve'})).toHaveAttribute('title', 'Reanalyze the latest revision and review 1 remaining chapter before approving.')
+
+    fireEvent.click(screen.getByRole('button', {name: 'Reanalyze latest revision'}))
+    await waitFor(() => expect(startAnalysis).toHaveBeenCalledWith(session.id))
+    expect(onSession).toHaveBeenCalledWith({...session, analysisStatus: 'queued'})
+    expect(onBack).toHaveBeenCalledOnce()
   })
 
   it('expands validated code evidence inline before offering deeper context', async () => {

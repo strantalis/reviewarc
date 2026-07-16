@@ -52,7 +52,7 @@ export function StatusDot({status}: {status: ChapterStatus}) {
 
 export function RiskBadge({level}: {level: RiskLevel}) { return <span className={`badge risk-${level}`}><ShieldAlert size={12}/>{riskLabel(level)}</span> }
 export function AnalysisBadge({status}: {status: AnalysisStatus}) {
-  const Icon = status === 'running' ? Clock3 : status === 'ready' ? Sparkles : status === 'failed' || status === 'stale' ? AlertTriangle : Circle
+  const Icon = status === 'queued' || status === 'running' ? Clock3 : status === 'ready' ? Sparkles : status === 'failed' || status === 'stale' ? AlertTriangle : Circle
   return <span className={`badge analysis-${status}`}><Icon size={12}/>{analysisLabel(status)}</span>
 }
 

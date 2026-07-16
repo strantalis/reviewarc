@@ -30,6 +30,10 @@ export function DeleteNote(arg1) {
   return window['go']['main']['App']['DeleteNote'](arg1);
 }
 
+export function GetActiveAnalysisOperation(arg1) {
+  return window['go']['main']['App']['GetActiveAnalysisOperation'](arg1);
+}
+
 export function GetAnalysisConfiguration() {
   return window['go']['main']['App']['GetAnalysisConfiguration']();
 }
@@ -80,6 +84,10 @@ export function PrepareReview(arg1, arg2, arg3) {
 
 export function PrepareThreadReply(arg1, arg2, arg3) {
   return window['go']['main']['App']['PrepareThreadReply'](arg1, arg2, arg3);
+}
+
+export function QueueInboxAnalysis(arg1) {
+  return window['go']['main']['App']['QueueInboxAnalysis'](arg1);
 }
 
 export function RefreshAccount() {

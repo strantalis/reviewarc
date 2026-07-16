@@ -1,4 +1,4 @@
-import type { AccountState, AnalysisConfiguration, AnalysisProfile, AnalysisRequest, BootstrapState, ChapterStatus, ChangedFile, DiffFile, EnvironmentState, FileContent, InboxResult, Operation, OperationSnapshot, PublishPreview, PullRequestRef, PullRequestReviewComment, RepositoryPage, ReviewComment, ReviewNote, ReviewSession, SelectedRepositoryRefresh, SoftwareUpdateStatus, SourceSelection, SourceState, ThreadReplyPreview, UpdateChannel, Organization } from './types'
+import type { AccountState, AnalysisConfiguration, AnalysisProfile, AnalysisRequest, BootstrapState, ChapterStatus, ChangedFile, DiffFile, EnvironmentState, FileContent, InboxAnalysis, InboxResult, Operation, OperationSnapshot, PublishPreview, PullRequestRef, PullRequestReviewComment, RepositoryPage, ReviewComment, ReviewNote, ReviewSession, SelectedRepositoryRefresh, SoftwareUpdateStatus, SourceSelection, SourceState, ThreadReplyPreview, UpdateChannel, Organization } from './types'
 
 type WailsMethod = (...args: unknown[]) => Promise<unknown>
 type AppBinding = Record<string, WailsMethod>
@@ -44,6 +44,7 @@ export const backend = {
   saveSelections: (selections: SourceSelection[]) => call<void>(['SaveSelections'], selections),
   refreshInbox: () => call<InboxResult>(['RefreshInbox']),
   openPullRequest: (ref: PullRequestRef) => call<ReviewSession>(['OpenPullRequest'], ref),
+  queueInboxAnalysis: (ref: PullRequestRef) => call<InboxAnalysis>(['QueueInboxAnalysis'], ref),
   refreshPullRequestContext: (sessionId: string) => call<ReviewSession>(['RefreshPullRequestContext'], sessionId),
   getAnalysisConfiguration: () => call<AnalysisConfiguration>(['GetAnalysisConfiguration']),
   refreshAnalysisHarnesses: () => call<AnalysisConfiguration>(['RefreshAnalysisHarnesses']),

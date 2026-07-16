@@ -107,15 +107,36 @@ export namespace domain {
 		    return a;
 		}
 	}
+	export class DiffOmissionDecision {
+	    path: string;
+	    category: string;
+	    reason: string;
+
+	    static createFrom(source: any = {}) {
+	        return new DiffOmissionDecision(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.category = source["category"];
+	        this.reason = source["reason"];
+	    }
+	}
 	export class AnalysisCoverage {
 	    changedFilesTotal: number;
 	    diffFilesFullyRead: number;
 	    diffFilesPartiallyRead: number;
+	    diffFilesPreviewed: number;
+	    diffFilesUnseen: number;
 	    diffFilesUnread: number;
 	    diffBytesTotal: number;
 	    diffBytesRead: number;
 	    segments: number;
 	    omittedPaths: string[];
+	    previewedPaths: string[];
+	    unseenPaths: string[];
+	    previewDecisions?: DiffOmissionDecision[];
 	    accesses: ContextAccess[];
 
 	    static createFrom(source: any = {}) {
@@ -127,11 +148,16 @@ export namespace domain {
 	        this.changedFilesTotal = source["changedFilesTotal"];
 	        this.diffFilesFullyRead = source["diffFilesFullyRead"];
 	        this.diffFilesPartiallyRead = source["diffFilesPartiallyRead"];
+	        this.diffFilesPreviewed = source["diffFilesPreviewed"];
+	        this.diffFilesUnseen = source["diffFilesUnseen"];
 	        this.diffFilesUnread = source["diffFilesUnread"];
 	        this.diffBytesTotal = source["diffBytesTotal"];
 	        this.diffBytesRead = source["diffBytesRead"];
 	        this.segments = source["segments"];
 	        this.omittedPaths = source["omittedPaths"];
+	        this.previewedPaths = source["previewedPaths"];
+	        this.unseenPaths = source["unseenPaths"];
+	        this.previewDecisions = this.convertValues(source["previewDecisions"], DiffOmissionDecision);
 	        this.accesses = this.convertValues(source["accesses"], ContextAccess);
 	    }
 
@@ -403,6 +429,7 @@ export namespace domain {
 	    reviewDecision?: string;
 	    baseSha?: string;
 	    headSha?: string;
+	    sessionId?: string;
 
 	    static createFrom(source: any = {}) {
 	        return new PullRequestSummary(source);
@@ -427,6 +454,7 @@ export namespace domain {
 	        this.reviewDecision = source["reviewDecision"];
 	        this.baseSha = source["baseSha"];
 	        this.headSha = source["headSha"];
+	        this.sessionId = source["sessionId"];
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -819,6 +847,7 @@ export namespace domain {
 	}
 
 
+
 	export class EnvironmentState {
 	    dependencies: DependencyStatus[];
 	    account?: GitHubUser;
@@ -1042,6 +1071,7 @@ export namespace domain {
 	    reviewDecision?: string;
 	    baseSha?: string;
 	    headSha?: string;
+	    sessionId?: string;
 	    body: string;
 	    baseRef: string;
 	    headRef: string;
@@ -1079,6 +1109,7 @@ export namespace domain {
 	        this.reviewDecision = source["reviewDecision"];
 	        this.baseSha = source["baseSha"];
 	        this.headSha = source["headSha"];
+	        this.sessionId = source["sessionId"];
 	        this.body = source["body"];
 	        this.baseRef = source["baseRef"];
 	        this.headRef = source["headRef"];
@@ -1733,6 +1764,7 @@ export namespace main {
 	    eligible: boolean;
 	    capabilities: HarnessCapabilitySummary;
 	    models: HarnessModelDescriptor[];
+	    customModel?: HarnessModelDescriptor;
 
 	    static createFrom(source: any = {}) {
 	        return new HarnessDescriptor(source);
@@ -1749,6 +1781,7 @@ export namespace main {
 	        this.eligible = source["eligible"];
 	        this.capabilities = this.convertValues(source["capabilities"], HarnessCapabilitySummary);
 	        this.models = this.convertValues(source["models"], HarnessModelDescriptor);
+	        this.customModel = this.convertValues(source["customModel"], HarnessModelDescriptor);
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1869,6 +1902,87 @@ export namespace main {
 
 
 
+	export class Operation {
+	    id: string;
+	    sessionId?: string;
+	    kind: string;
+	    stage: string;
+	    state: string;
+	    message: string;
+	    progress?: number;
+	    runId?: string;
+	    failure?: domain.AnalysisFailure;
+	    // Go type: time
+	    updatedAt: any;
+
+	    static createFrom(source: any = {}) {
+	        return new Operation(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.sessionId = source["sessionId"];
+	        this.kind = source["kind"];
+	        this.stage = source["stage"];
+	        this.state = source["state"];
+	        this.message = source["message"];
+	        this.progress = source["progress"];
+	        this.runId = source["runId"];
+	        this.failure = this.convertValues(source["failure"], domain.AnalysisFailure);
+	        this.updatedAt = this.convertValues(source["updatedAt"], null);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class InboxAnalysis {
+	    session: domain.ReviewSession;
+	    operation: Operation;
+
+	    static createFrom(source: any = {}) {
+	        return new InboxAnalysis(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.session = this.convertValues(source["session"], domain.ReviewSession);
+	        this.operation = this.convertValues(source["operation"], Operation);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class InboxState {
 	    items: domain.PullRequestSummary[];
 	    errors: Record<string, string>;
@@ -1921,32 +2035,19 @@ export namespace main {
 	        this.body = source["body"];
 	    }
 	}
-	export class Operation {
-	    id: string;
-	    sessionId?: string;
-	    kind: string;
-	    stage: string;
-	    state: string;
-	    message: string;
-	    progress?: number;
-	    runId?: string;
-	    failure?: domain.AnalysisFailure;
+
+	export class OperationSnapshot {
+	    operation: Operation;
+	    events: Operation[];
 
 	    static createFrom(source: any = {}) {
-	        return new Operation(source);
+	        return new OperationSnapshot(source);
 	    }
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.sessionId = source["sessionId"];
-	        this.kind = source["kind"];
-	        this.stage = source["stage"];
-	        this.state = source["state"];
-	        this.message = source["message"];
-	        this.progress = source["progress"];
-	        this.runId = source["runId"];
-	        this.failure = this.convertValues(source["failure"], domain.AnalysisFailure);
+	        this.operation = this.convertValues(source["operation"], Operation);
+	        this.events = this.convertValues(source["events"], Operation);
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

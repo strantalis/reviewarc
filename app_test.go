@@ -731,6 +731,44 @@ func TestOpenPullRequestReturnsCoreBeforeRefreshingFullContext(t *testing.T) {
 	}
 }
 
+func TestQueueInboxAnalysisOpensThePullRequestAndUsesTheSavedProfile(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	baseSHA := strings.Repeat("a", 40)
+	headSHA := strings.Repeat("b", 40)
+	metadata := `{"number":7,"title":"Fixture PR","base":{"ref":"main","sha":"` + baseSHA + `","repo":{"name":"api","owner":{"login":"acme"}}},"head":{"ref":"feature","sha":"` + headSHA + `","repo":{"name":"api","owner":{"login":"acme"}}}}`
+	runner := &pullRequestFixtureRunner{metadata: []byte(metadata)}
+	registry, err := agent.NewRegistry(appAnalysisAdapter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := domain.AnalysisProfile{Harness: domain.HarnessCodex, Model: "fixture", Reasoning: domain.ReasoningMedium}
+	if err := store.SaveAnalysisProfile(ctx, profile); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{github: githubclient.New(runner), store: store, harnesses: registry, active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}, operationHistory: map[string][]Operation{}, analysisWake: make(chan struct{}, 2)}
+	ref := domain.PullRequestRef{Repository: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}, Number: 7}
+
+	queued, err := app.QueueInboxAnalysis(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued.Session.ID == "" || queued.Session.AnalysisStatus != domain.AnalysisQueued || queued.Operation.State != "queued" || queued.Operation.SessionID != queued.Session.ID {
+		t.Fatalf("queued analysis=%+v", queued)
+	}
+	if len(runner.commands) != 2 {
+		t.Fatalf("queue commands=%d, want pull request metadata and commits before enqueue", len(runner.commands))
+	}
+	runs, err := store.ListAnalysisRuns(ctx, queued.Session.ID)
+	if err != nil || len(runs) != 1 || runs[0].Status != domain.AnalysisRunQueued || runs[0].Profile != profile {
+		t.Fatalf("queued runs=%+v err=%v", runs, err)
+	}
+}
+
 func TestPullRequestContextOverflowLeavesCoreSessionUsable(t *testing.T) {
 	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
 	if err != nil {
@@ -857,6 +895,75 @@ func TestStartAnalysisLoadsFullContextBeforePreparingSnapshot(t *testing.T) {
 	}
 }
 
+func TestAnalysisSchedulerRunsTwoJobsAndLeavesAdditionalWorkQueued(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	profile := domain.AnalysisProfile{Harness: domain.HarnessCodex, Model: "fixture", Reasoning: domain.ReasoningMedium}
+	if err := store.SaveAnalysisProfile(ctx, profile); err != nil {
+		t.Fatal(err)
+	}
+	ref := domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}
+	for index := 1; index <= 3; index++ {
+		session := domain.ReviewSession{ID: fmt.Sprintf("queued-session-%d", index), PullRequest: domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: ref, Number: 7}}, HeadSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, BaseSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HeadSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Status: domain.SessionPreparing, AnalysisStatus: domain.AnalysisNotStarted}
+		if err := store.SaveSession(ctx, session); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entered := make(chan struct{}, 3)
+	release := make(chan struct{})
+	runner := &pullRequestFixtureRunner{contextHook: func() { entered <- struct{}{}; <-release }}
+	registry, err := agent.NewRegistry(appAnalysisAdapter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := &App{github: githubclient.New(runner), store: store, runner: runner, harnesses: registry, prepared: map[string]preparedState{}, active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}, operationHistory: map[string][]Operation{}, analysisWake: make(chan struct{}, 2)}
+	schedulerCtx, stopScheduler := context.WithCancel(ctx)
+	for worker := 0; worker < 2; worker++ {
+		app.schedulerWG.Add(1)
+		go app.analysisWorker(schedulerCtx)
+	}
+	app.wakeAnalysisWorkers()
+	defer func() { stopScheduler(); close(release); app.schedulerWG.Wait() }()
+	for index := 1; index <= 3; index++ {
+		if _, err := app.StartAnalysis(fmt.Sprintf("queued-session-%d", index)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for index := 0; index < 2; index++ {
+		select {
+		case <-entered:
+		case <-time.After(2 * time.Second):
+			t.Fatal("two analysis workers did not start concurrently")
+		}
+	}
+	select {
+	case <-entered:
+		t.Fatal("third analysis started before a worker was available")
+	case <-time.After(50 * time.Millisecond):
+	}
+	running, queued := 0, 0
+	for index := 1; index <= 3; index++ {
+		session, err := store.GetSession(ctx, fmt.Sprintf("queued-session-%d", index))
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch session.AnalysisStatus {
+		case domain.AnalysisRunning:
+			running++
+		case domain.AnalysisQueued:
+			queued++
+		}
+	}
+	if running != 2 || queued != 1 {
+		t.Fatalf("scheduler state: running=%d queued=%d", running, queued)
+	}
+}
+
 func TestActiveAnalysisOperationRestoresHistoryAndCancelIdentity(t *testing.T) {
 	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
 	if err != nil {
@@ -891,6 +998,40 @@ func TestActiveAnalysisOperationRestoresHistoryAndCancelIdentity(t *testing.T) {
 	app.emitOperation(second)
 	if snapshot, err := app.GetActiveAnalysisOperation("session-1"); err != nil || snapshot != nil {
 		t.Fatalf("terminal snapshot=%+v err=%v", snapshot, err)
+	}
+}
+
+func TestQueuedAnalysisOperationCanBeRestoredAndCancelledAfterRestart(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	session := domain.ReviewSession{ID: "queued-session", PullRequest: domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}, Number: 7}}}, Status: domain.SessionPreparing, AnalysisStatus: domain.AnalysisNotStarted}
+	if err := store.SaveSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	run := domain.AnalysisRun{ID: "queued-run", SessionID: session.ID, Profile: domain.AnalysisProfile{Harness: domain.HarnessCodex, Model: "fixture", Reasoning: domain.ReasoningMedium}, ContextTransport: domain.ContextReviewArcTools, SchemaVersion: 1, InputFingerprint: "fingerprint", Coverage: domain.AnalysisCoverage{}, Status: domain.AnalysisRunQueued}
+	if err := store.StartAnalysisRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{store: store, active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}, operationHistory: map[string][]Operation{}}
+
+	snapshot, err := app.GetActiveAnalysisOperation(session.ID)
+	if err != nil || snapshot == nil || snapshot.Operation.ID != run.ID || snapshot.Operation.State != "queued" {
+		t.Fatalf("queued snapshot=%+v err=%v", snapshot, err)
+	}
+	if err := app.CancelOperation(snapshot.Operation.ID); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.GetAnalysisRun(ctx, run.ID)
+	if err != nil || stored.Status != domain.AnalysisRunCancelled {
+		t.Fatalf("cancelled run=%+v err=%v", stored, err)
+	}
+	updated, err := store.GetSession(ctx, session.ID)
+	if err != nil || updated.AnalysisStatus != domain.AnalysisNotStarted {
+		t.Fatalf("cancelled session=%+v err=%v", updated, err)
 	}
 }
 

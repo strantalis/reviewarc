@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import {
   AlertTriangle, ArrowLeft, ArrowRight, BookOpen, Check, ChevronRight, CircleHelp, Code2, Download,
   Columns2, Command, ExternalLink, FileCode2, FileDiff, Filter, GitPullRequest, Inbox, ListFilter, LoaderCircle,
@@ -84,6 +84,7 @@ export function App() {
   const [analysisConfiguration, setAnalysisConfiguration] = useState<AnalysisConfiguration>()
   const [analysisConfigurationBusy, setAnalysisConfigurationBusy] = useState(false)
   const [analysisConfigurationError, setAnalysisConfigurationError] = useState('')
+  const updateInbox = useCallback((update: (items: PullRequestSummary[]) => PullRequestSummary[]) => setBootstrap((current) => current ? {...current, inbox: update(current.inbox)} : current), [])
   const openRequest = useRef(0)
   const environmentRequest = useRef(0)
 
@@ -214,7 +215,7 @@ export function App() {
     {screen === 'settings' && (
       <SettingsScreen state={bootstrap} theme={theme.preference} onThemeChange={theme.setPreference} update={softwareUpdate} updateBusy={updateBusy} onCheckUpdate={checkForUpdates} onSetUpdateChannel={setUpdateChannel} onInstallUpdate={() => setInstallUpdateOpen(true)} onSources={() => setScreen('sources')} analysisConfiguration={effectiveAnalysisConfiguration} analysisConfigurationLoading={configurableAnalysisBackend && !analysisConfiguration && !analysisConfigurationError} analysisConfigurationBusy={analysisConfigurationBusy} analysisConfigurationError={analysisConfigurationError} onRefreshAnalysis={refreshAnalysisHarnesses} onSaveAnalysisDefaults={saveAnalysisDefaults}/>
     )}
-    {screen === 'inbox' && <InboxScreen state={bootstrap} onUpdate={(inbox) => setBootstrap({...bootstrap, inbox})} onOpen={openPR}/>}
+    {screen === 'inbox' && <InboxScreen state={bootstrap} onUpdate={updateInbox} onOpen={openPR}/>}
     {openingPR && screen === 'overview' && <OpeningPullRequest pr={openingPR} onBack={() => { openRequest.current++; setOpeningPR(undefined); setScreen('inbox') }}/>}
     {session && screen === 'overview' && !effectiveAnalysisConfiguration && (
       <AnalysisConfigurationGate session={session} error={analysisConfigurationError} busy={analysisConfigurationBusy} onRetry={refreshAnalysisHarnesses} onBack={() => { openRequest.current++; setSession(undefined); setReviewChapterId(''); setScreen('inbox') }}/>
@@ -498,13 +499,16 @@ export function SourceSelector({state, onDone}: {state: BootstrapState; onDone: 
   </main>
 }
 
-function InboxScreen({state, onUpdate, onOpen}: {state: BootstrapState; onUpdate: (items: PullRequestSummary[]) => void; onOpen: (pr: PullRequestSummary) => void}) {
+function InboxScreen({state, onUpdate, onOpen}: {state: BootstrapState; onUpdate: (update: (items: PullRequestSummary[]) => PullRequestSummary[]) => void; onOpen: (pr: PullRequestSummary) => void}) {
   const saved = useMemo(savedInboxFilters, [])
   const [query, setQuery] = useState(''); const [relationship, setRelationship] = useState<Relationship | 'all'>(saved.relationship ?? 'all'); const [organization, setOrganization] = useState('all'); const [repository, setRepository] = useState('all'); const [label, setLabel] = useState(saved.label ?? 'all'); const [analysis, setAnalysis] = useState<AnalysisStatus | 'all'>(saved.analysis ?? 'all'); const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [partial, setPartial] = useState<string[]>([])
   const [visibility, setVisibility] = useState({source: state.inbox, limit: inboxPageSize})
+  const [analysisBusy, setAnalysisBusy] = useState<Set<string>>(new Set())
+  const analysisBusyRef = useRef(new Set<string>())
+  const [analysisErrors, setAnalysisErrors] = useState<Record<string, string>>({})
   const visibleLimit = visibility.source === state.inbox ? visibility.limit : inboxPageSize
   const resetVisibleLimit = () => setVisibility({source: state.inbox, limit: inboxPageSize})
-  const refresh = async () => { setBusy(true); setError(''); try { const result = await backend.refreshInbox(); onUpdate(result.items ?? []); setPartial(Object.values(result.errors ?? {})) } catch (err) { setError(errorText(err)) } finally { setBusy(false) } }
+  const refresh = async () => { setBusy(true); setError(''); try { const result = await backend.refreshInbox(); onUpdate(() => result.items ?? []); setPartial(Object.values(result.errors ?? {})) } catch (err) { setError(errorText(err)) } finally { setBusy(false) } }
   useEffect(() => { if (!state.inbox.length) void refresh() }, [])
   useEffect(() => { try { window.localStorage?.setItem?.('reviewarc:inbox-view', JSON.stringify({relationship, label, analysis})) } catch { /* The inbox remains usable when WebView storage is unavailable. */ } }, [relationship, label, analysis])
   const repositories = useMemo(() => [...new Set(state.inbox.map(repoName))].sort(), [state.inbox])
@@ -524,11 +528,47 @@ function InboxScreen({state, onUpdate, onOpen}: {state: BootstrapState; onUpdate
   const remainingItems = items.length - visibleItems.length
   const allOpen = !query.trim() && relationship === 'all' && organization === 'all' && repository === 'all' && label === 'all' && analysis === 'all'
   const resetFilters = () => { resetVisibleLimit(); setQuery(''); setRelationship('all'); setOrganization('all'); setRepository('all'); setLabel('all'); setAnalysis('all') }
-  return <main className="page inbox-page"><div className="page-heading"><div><h1>Pull request inbox</h1><p>Open work across {repositories.length || 'your selected'} repositories, ordered by recent activity.</p></div><button className="button secondary" disabled={busy} onClick={refresh}>{busy ? <LoaderCircle className="spin" size={16}/> : <RefreshCw size={16}/>}Refresh</button></div>
+  const analysisKey = (pr: PullRequestSummary) => `${repoName(pr)}#${pr.ref.number}`
+  const patchSession = useCallback((session: ReviewSession) => onUpdate((current) => current.map((item) => item.sessionId === session.id || (repoName(item) === repoName(session.pullRequest) && item.ref.number === session.pullRequest.ref.number) ? {...item, sessionId: session.id, analysisStatus: session.analysisStatus, progress: session.progress, riskLevel: session.pullRequest.riskLevel} : item)), [onUpdate])
+  useEffect(() => backend.on('reviewarc:operation:v1', (raw) => {
+    const operation = raw as Operation
+    if (!operation.sessionId) return
+    if (operation.state === 'queued' || operation.state === 'running') {
+      const status = operation.state as 'queued' | 'running'
+      onUpdate((current) => current.map((candidate) => candidate.sessionId === operation.sessionId ? {...candidate, analysisStatus: status} : candidate))
+      return
+    }
+    if (['completed', 'complete', 'failed', 'cancelled'].includes(operation.state)) void backend.getSession(operation.sessionId).then(patchSession).catch(() => {})
+  }), [onUpdate, patchSession])
+  const startInboxAnalysis = async (pr: PullRequestSummary) => {
+    const key = analysisKey(pr)
+    if (analysisBusyRef.current.has(key)) return
+    analysisBusyRef.current.add(key)
+    setAnalysisBusy((current) => new Set(current).add(key)); setAnalysisErrors((current) => ({...current, [key]: ''}))
+    try { patchSession((await backend.queueInboxAnalysis(pr.ref)).session) }
+    catch (err) { setAnalysisErrors((current) => ({...current, [key]: errorText(err)})) }
+    finally { analysisBusyRef.current.delete(key); setAnalysisBusy((current) => { const next = new Set(current); next.delete(key); return next }) }
+  }
+  const cancelInboxAnalysis = async (pr: PullRequestSummary) => {
+    if (!pr.sessionId) return
+    const key = analysisKey(pr)
+    if (analysisBusyRef.current.has(key)) return
+    analysisBusyRef.current.add(key)
+    setAnalysisBusy((current) => new Set(current).add(key)); setAnalysisErrors((current) => ({...current, [key]: ''}))
+    try {
+      const snapshot = await backend.getActiveAnalysisOperation(pr.sessionId)
+      if (!snapshot) throw new Error('The analysis operation is no longer active.')
+      await backend.cancelOperation(snapshot.operation.id)
+    } catch (err) { setAnalysisErrors((current) => ({...current, [key]: errorText(err)})) }
+    finally { analysisBusyRef.current.delete(key); setAnalysisBusy((current) => { const next = new Set(current); next.delete(key); return next }) }
+  }
+  const queuedCount = state.inbox.filter((item) => item.analysisStatus === 'queued').length
+  const runningCount = state.inbox.filter((item) => item.analysisStatus === 'running').length
+  return <main className="page inbox-page"><div className="page-heading"><div><h1>Pull request inbox</h1><p>Open work across {repositories.length || 'your selected'} repositories, ordered by recent activity.</p></div><div className="inbox-heading-actions">{(runningCount > 0 || queuedCount > 0) && <span className="inbox-analysis-activity" role="status">{runningCount > 0 && <strong>{runningCount} analyzing</strong>}{runningCount > 0 && queuedCount > 0 && <i>·</i>}{queuedCount > 0 && <span>{queuedCount} queued</span>}</span>}<button className="button secondary" disabled={busy} onClick={refresh}>{busy ? <LoaderCircle className="spin" size={16}/> : <RefreshCw size={16}/>}Refresh</button></div></div>
     {error && <ErrorBanner message={error} onRetry={refresh}/>} {partial.length > 0 && <div className="warning-banner"><AlertTriangle size={16}/><span>Some repositories could not be refreshed. Showing the available results.</span></div>}
-    <div className="inbox-controls"><label className="search-field inbox-search"><Search size={17}/><input autoCapitalize="none" autoCorrect="off" spellCheck={false} value={query} onChange={(e) => {resetVisibleLimit(); setQuery(e.target.value)}} placeholder="Search title, repository, author, PR number, or label"/></label><Select label="Relationship" value={relationship} onChange={(value) => {resetVisibleLimit(); setRelationship(value as typeof relationship)}} options={[['all','All relationships'],['reviewRequested','Needs your review'],['assigned','Assigned'],['authored','Authored by you'],['selectedRepo','All selected']]}/><Select label="Organization" value={organization} onChange={(value) => {resetVisibleLimit(); setOrganization(value)}} options={[['all','All organizations'], ...organizations.map((org) => [org,org])]}/><Select label="Repository" value={repository} onChange={(value) => {resetVisibleLimit(); setRepository(value)}} options={[['all','All repositories'], ...repositories.map((r) => [r,r])]}/><Select label="Label" value={label} onChange={(value) => {resetVisibleLimit(); setLabel(value)}} options={[['all','All labels'], ...labels.map((item) => [item,item])]}/><Select label="Analysis" value={analysis} onChange={(value) => {resetVisibleLimit(); setAnalysis(value as typeof analysis)}} options={[['all','All analysis states'],['ready','Guided review ready'],['notStarted','Not analyzed'],['running','Analyzing'],['stale','Stale'],['failed','Failed']]}/></div>
+    <div className="inbox-controls"><label className="search-field inbox-search"><Search size={17}/><input autoCapitalize="none" autoCorrect="off" spellCheck={false} value={query} onChange={(e) => {resetVisibleLimit(); setQuery(e.target.value)}} placeholder="Search title, repository, author, PR number, or label"/></label><Select label="Relationship" value={relationship} onChange={(value) => {resetVisibleLimit(); setRelationship(value as typeof relationship)}} options={[['all','All relationships'],['reviewRequested','Needs your review'],['assigned','Assigned'],['authored','Authored by you'],['selectedRepo','All selected']]}/><Select label="Organization" value={organization} onChange={(value) => {resetVisibleLimit(); setOrganization(value)}} options={[['all','All organizations'], ...organizations.map((org) => [org,org])]}/><Select label="Repository" value={repository} onChange={(value) => {resetVisibleLimit(); setRepository(value)}} options={[['all','All repositories'], ...repositories.map((r) => [r,r])]}/><Select label="Label" value={label} onChange={(value) => {resetVisibleLimit(); setLabel(value)}} options={[['all','All labels'], ...labels.map((item) => [item,item])]}/><Select label="Analysis" value={analysis} onChange={(value) => {resetVisibleLimit(); setAnalysis(value as typeof analysis)}} options={[['all','All analysis states'],['ready','Guided review ready'],['notStarted','Not analyzed'],['queued','Queued'],['running','Analyzing'],['stale','Stale'],['failed','Failed']]}/></div>
     <div className="saved-views" aria-label="Saved inbox views"><span>Views</span><button className={relationship === 'reviewRequested' ? 'active' : ''} aria-pressed={relationship === 'reviewRequested'} onClick={() => {resetVisibleLimit(); setRelationship('reviewRequested')}}>Needs my review</button><button className={relationship === 'authored' ? 'active' : ''} aria-pressed={relationship === 'authored'} onClick={() => {resetVisibleLimit(); setRelationship('authored')}}>Authored by me</button><button className={analysis === 'ready' ? 'active' : ''} aria-pressed={analysis === 'ready'} onClick={() => {resetVisibleLimit(); setAnalysis('ready')}}>Guided review ready</button><button className={allOpen ? 'active' : ''} aria-pressed={allOpen} onClick={resetFilters}>All open</button></div><div className="inbox-summary"><div className="result-count" role="status" aria-label="Inbox result count">Showing <strong>{items.length}</strong>{items.length === state.inbox.length ? '' : ` of ${state.inbox.length}`} open pull request{state.inbox.length === 1 ? '' : 's'}</div><span>Sorted by last updated</span></div>
-    {busy && !state.inbox.length ? <Skeleton rows={7}/> : !items.length ? <EmptyState icon={<GitPullRequest/>} title={state.inbox.length ? 'No pull requests match these filters' : 'Your review queue is clear'}><p>{state.inbox.length ? 'Broaden the search or reset one of the filters.' : 'ReviewArc found no open pull requests in the selected sources. Refresh after new work is opened.'}</p>{state.inbox.length > 0 && <button className="button secondary" onClick={resetFilters}>Reset filters</button>}</EmptyState> : <div className="pr-list" id="pull-request-results" aria-label="Pull request results">{visibleItems.map((pr) => <PRRow key={`${repoName(pr)}#${pr.ref.number}`} pr={pr} onOpen={() => onOpen(pr)}/>)}{remainingItems > 0 && <div className="inbox-pagination"><span aria-live="polite">Showing {visibleItems.length} of {items.length}</span><button className="button secondary small" aria-controls="pull-request-results" aria-label={`Show ${Math.min(inboxPageSize, remainingItems)} more pull requests`} onClick={() => setVisibility({source: state.inbox, limit: visibleLimit + inboxPageSize})}>Show more</button></div>}</div>}
+    {busy && !state.inbox.length ? <Skeleton rows={7}/> : !items.length ? <EmptyState icon={<GitPullRequest/>} title={state.inbox.length ? 'No pull requests match these filters' : 'Your review queue is clear'}><p>{state.inbox.length ? 'Broaden the search or reset one of the filters.' : 'ReviewArc found no open pull requests in the selected sources. Refresh after new work is opened.'}</p>{state.inbox.length > 0 && <button className="button secondary" onClick={resetFilters}>Reset filters</button>}</EmptyState> : <div className="pr-list" id="pull-request-results" aria-label="Pull request results">{visibleItems.map((pr) => <PRRow key={`${repoName(pr)}#${pr.ref.number}`} pr={pr} busy={analysisBusy.has(analysisKey(pr))} error={analysisErrors[analysisKey(pr)]} onAnalyze={() => void startInboxAnalysis(pr)} onCancel={() => void cancelInboxAnalysis(pr)} onOpen={() => onOpen(pr)}/>)}{remainingItems > 0 && <div className="inbox-pagination"><span aria-live="polite">Showing {visibleItems.length} of {items.length}</span><button className="button secondary small" aria-controls="pull-request-results" aria-label={`Show ${Math.min(inboxPageSize, remainingItems)} more pull requests`} onClick={() => setVisibility({source: state.inbox, limit: visibleLimit + inboxPageSize})}>Show more</button></div>}</div>}
   </main>
 }
 
@@ -544,10 +584,30 @@ function trapPanelFocus(event: ReactKeyboardEvent<HTMLElement>) {
   else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
 }
 
-function PRRow({pr, onOpen}: {pr: PullRequestSummary; onOpen: () => void}) {
+function PRRow({pr, busy, error, onAnalyze, onCancel, onOpen}: {pr: PullRequestSummary; busy: boolean; error?: string; onAnalyze: () => void; onCancel: () => void; onOpen: () => void}) {
   const progress = normalizeProgress(pr.progress)
   const relationship = primaryRelationship(pr.relationships ?? [])
-  return <button className="pr-row" onClick={onOpen}><div className="pr-relation"><span className={`relation-mark ${relationship}`}/><div><span>{relationshipLabel(relationship)}</span><strong>{repoName(pr)}</strong></div></div><div className="pr-main"><div className="pr-title"><span>#{pr.ref.number}</span><strong>{pr.title}</strong>{pr.isDraft && <span className="badge neutral">Draft</span>}</div><div className="pr-meta"><span>by @{pr.author.login}</span><span>updated {relativeTime(pr.updatedAt)}</span><span>{pr.changedFiles} files</span><span className="additions">+{pr.additions}</span><span className="deletions">−{pr.deletions}</span>{pr.labels.slice(0, 2).map((item) => <span className="pr-label" key={item}>{item}</span>)}{pr.labels.length > 2 && <span className="pr-label-more">+{pr.labels.length - 2}</span>}</div></div><div className="pr-state"><div><AnalysisBadge status={pr.analysisStatus}/>{pr.analysisStatus === 'ready' && <RiskBadge level={pr.riskLevel}/>}</div>{progress.total > 0 ? <div className="progress-inline"><span><i style={{width: `${progress.percent}%`}}/></span><small>{progress.reviewed}/{progress.total} reviewed</small></div> : <small>{analysisLabel(pr.analysisStatus)}</small>}</div><ChevronRight size={18}/></button>
+  const action = pr.analysisStatus === 'notStarted'
+    ? {label: 'Analyze', help: 'Analyze pull request', icon: Sparkles, onClick: onAnalyze, kind: 'analyze'}
+    : pr.analysisStatus === 'stale'
+      ? {label: 'Reanalyze', help: 'Reanalyze latest revision', icon: RefreshCw, onClick: onAnalyze, kind: 'analyze'}
+      : pr.analysisStatus === 'failed'
+        ? {label: 'Retry', help: 'Retry analysis', icon: RefreshCw, onClick: onAnalyze, kind: 'analyze'}
+        : pr.analysisStatus === 'queued'
+          ? {label: 'Cancel', help: 'Cancel queued analysis', icon: X, onClick: onCancel, kind: 'cancel'}
+          : pr.analysisStatus === 'running'
+            ? {label: 'Cancel', help: 'Cancel analysis', icon: X, onClick: onCancel, kind: 'cancel'}
+            : {label: 'Open review', help: 'Open review', icon: BookOpen, onClick: onOpen, kind: 'open'}
+  return <div className="pr-row"><button className="pr-row-open" onClick={onOpen}><div className="pr-relation"><span className={`relation-mark ${relationship}`}/><div><span>{relationshipLabel(relationship)}</span><strong>{repoName(pr)}</strong></div></div><div className="pr-main"><div className="pr-title"><span>#{pr.ref.number}</span><strong>{pr.title}</strong>{pr.isDraft && <span className="badge neutral">Draft</span>}</div><div className="pr-meta"><span>by @{pr.author.login}</span><span>updated {relativeTime(pr.updatedAt)}</span><span>{pr.changedFiles} files</span><span className="additions">+{pr.additions}</span><span className="deletions">−{pr.deletions}</span>{pr.labels.slice(0, 2).map((item) => <span className="pr-label" key={item}>{item}</span>)}{pr.labels.length > 2 && <span className="pr-label-more">+{pr.labels.length - 2}</span>}</div></div><div className="pr-state"><div><AnalysisBadge status={pr.analysisStatus}/>{pr.analysisStatus === 'ready' && <RiskBadge level={pr.riskLevel}/>}</div>{progress.total > 0 ? <div className="progress-inline"><span><i style={{width: `${progress.percent}%`}}/></span><small>{progress.reviewed}/{progress.total} reviewed</small></div> : <small>{analysisLabel(pr.analysisStatus)}</small>}</div><span className="pr-action-space" aria-hidden="true"/><span className="pr-external-space" aria-hidden="true"/><ChevronRight size={18}/></button><RowActionButton action={action} busy={busy} error={error} pullRequest={pr}/>{pr.url && <button className="pr-external" aria-label={`Open ${repoName(pr)} pull request #${pr.ref.number} on GitHub`} title="Open on GitHub" onClick={() => backend.openGitHubURL(pr.url)}><ExternalLink size={15}/></button>}</div>
+}
+
+function RowActionButton({action, busy, error, pullRequest}: {action: {label: string; help: string; icon: typeof Sparkles; onClick: () => void; kind: string}; busy: boolean; error?: string; pullRequest: PullRequestSummary}) {
+  const tooltipId = useId()
+  const [tooltip, setTooltip] = useState(false)
+  const Icon = action.icon
+  const help = error || action.help
+  const label = action.label === 'Open review' ? `${action.label} for ${repoName(pullRequest)} pull request #${pullRequest.ref.number}` : `${action.label} ${repoName(pullRequest)} pull request #${pullRequest.ref.number}`
+  return <><button className={`pr-analysis-action ${action.kind}`} disabled={busy} aria-label={label} aria-describedby={tooltip ? tooltipId : undefined} onClick={action.onClick} onMouseEnter={() => setTooltip(true)} onMouseLeave={() => setTooltip(false)} onFocus={() => setTooltip(true)} onBlur={() => setTooltip(false)}>{busy ? <LoaderCircle className="spin" size={15}/> : <Icon size={15}/>}</button>{tooltip && <span id={tooltipId} className={`row-action-tooltip${error ? ' error' : ''}`} role="tooltip">{help}</span>}</>
 }
 
 const legacyOverviewAnalysisConfiguration = legacyAnalysisConfiguration([{name: 'codex', state: 'available'}])
@@ -611,7 +671,7 @@ export function OverviewScreen({session, analysisConfiguration = legacyOverviewA
       if (terminalSeen) void reloadSession()
     })
     const offSession = backend.on('reviewarc:session:v1', (raw) => { const value = raw as {sessionId?: string}; if (value.sessionId === session.id) void reloadSession() })
-    if (session.analysisStatus === 'running') {
+    if (session.analysisStatus === 'queued' || session.analysisStatus === 'running') {
       backend.getActiveAnalysisOperation(session.id).then((snapshot) => {
         if (disposed || terminalSeen) return
         if (!snapshot) { void reloadSession(); return }
@@ -633,7 +693,7 @@ export function OverviewScreen({session, analysisConfiguration = legacyOverviewA
       setProfileOpen(false)
     } catch (err) { setFailure(operationFailure(errorText(err), Boolean(analysis))) }
   }
-  const running = session.analysisStatus === 'running' || Boolean(operation && !['complete', 'completed', 'failed', 'cancelled'].includes(operation.state))
+  const running = session.analysisStatus === 'queued' || session.analysisStatus === 'running' || Boolean(operation && !['complete', 'completed', 'failed', 'cancelled'].includes(operation.state))
   const profileReady = analysisProfileReady(analysisConfiguration, profile)
   const cancel = async () => { if (!operation) return; try { await backend.cancelOperation(operation.id) } catch (err) { setFailure(operationFailure(errorText(err), Boolean(analysis))) } }
   const configured = Boolean(analysisConfiguration.defaultProfile)
@@ -641,11 +701,12 @@ export function OverviewScreen({session, analysisConfiguration = legacyOverviewA
     setCoverageOpen(true)
     setCoverageFocus((current) => ({kind, request: current.request + 1}))
   }
-  return <main className="detail-page overview-page"><div className="detail-top"><button className="button text" onClick={onBack}><ArrowLeft size={16}/>Inbox</button><div className="detail-actions">{analysis && profile && <AnalysisProfileSummary configuration={analysisConfiguration} profile={profile} expanded={profileOpen} onChange={running ? undefined : () => setProfileOpen((open) => !open)}/>} {analysis && !profile && <button className="button secondary" onClick={onOpenSettings}><Settings size={15}/>Configure AI analysis</button>} {session.isStale ? <><button className="button secondary" disabled={!analysis || running} onClick={() => onReview()}>Continue stale review</button>{profile && <button className="button primary" disabled={running || !profileReady} onClick={() => void analyze()}>{!running && <RefreshCw size={15}/>} {running ? 'Reanalysis running' : 'Reanalyze current revision'}</button>}</> : <>{analysis && profile && <button className="button secondary" disabled={running || !profileReady} onClick={() => void analyze()}>{!running && <RefreshCw size={15}/>} {running ? 'Reanalysis running' : 'Reanalyze'}</button>}<button className="button primary" disabled={!analysis || running} onClick={() => onReview()}>Start guided review<ArrowRight size={16}/></button></>}</div></div>
+  const staleBanner = session.isStale ? <div className="stale-banner overview-stale-banner"><AlertTriangle size={18}/><div className="stale-banner-copy"><strong>Analysis covers an older revision</strong><p>{session.staleReason || `This guided review covers ${session.headSha.slice(0, 8)}; the pull request is now ${pr.headSha.slice(0, 8)}. Notes, drafts, and progress are preserved.`}</p></div><div className="stale-banner-actions"><button className="button secondary" disabled={!analysis || running} onClick={() => onReview()}>Continue stale review</button>{profile && <button className="button primary" disabled={running || !profileReady} onClick={() => void analyze()}>{!running && <RefreshCw size={15}/>} {running ? 'Reanalysis running' : 'Reanalyze current revision'}</button>}</div></div> : undefined
+  return <main className="detail-page overview-page"><div className="detail-top"><button className="button text" onClick={onBack}><ArrowLeft size={16}/>Inbox</button><div className="detail-actions">{analysis && profile && <AnalysisProfileSummary configuration={analysisConfiguration} profile={profile} expanded={profileOpen} onChange={running ? undefined : () => setProfileOpen((open) => !open)}/>} {analysis && !profile && <button className="button secondary" onClick={onOpenSettings}><Settings size={15}/>Configure AI analysis</button>} {!session.isStale && <>{analysis && profile && <button className="button secondary" disabled={running || !profileReady} onClick={() => void analyze()}>{!running && <RefreshCw size={15}/>} {running ? 'Reanalysis running' : 'Reanalyze'}</button>}<button className="button primary" disabled={!analysis || running} onClick={() => onReview()}>Start guided review<ArrowRight size={16}/></button></>}</div></div>
     {analysis && !running && profileOpen && profile && <div className="analysis-override" id="analysis-profile-override"><div><strong>For this run</strong><small>This changes the next analysis only. Your Settings default stays the same.</small></div><AnalysisProfilePicker configuration={analysisConfiguration} value={profile} onChange={setProfile}/><button className="button text small" onClick={() => { setProfile(recommendedProfile(analysisConfiguration)); setProfileOpen(false) }}>Use default</button></div>}
-    {session.isStale && <div className="stale-banner"><AlertTriangle size={18}/><div><strong>Analysis covers an older revision</strong><p>{session.staleReason || `This guided review covers ${session.headSha.slice(0, 8)}; the pull request is now ${pr.headSha.slice(0, 8)}. Notes, drafts, and progress are preserved.`}</p></div></div>}
+    {!analysis && staleBanner}
     {!analysis && <header className="pr-hero compact"><div><span className="repo-label">{repoName(pr)}</span><h1><span>#{pr.ref.number}</span> {pr.title}</h1><div className="hero-meta"><span>@{pr.author.login}</span><span>{pr.baseRef} ← {pr.headRef}</span><span>{pr.commits.length} commit{pr.commits.length === 1 ? '' : 's'}</span><span>{pr.changedFiles} files</span>{pr.requestedReviewers.length > 0 && <span>Review: {pr.requestedReviewers.map((reviewer) => `@${reviewer.login}`).join(', ')}</span>}{pr.reviewState && <span>{pr.reviewState.replaceAll('_', ' ').toLowerCase()}</span>}<span className="additions">+{pr.additions}</span><span className="deletions">−{pr.deletions}</span></div></div><div className="hero-status"><AnalysisBadge status={running ? 'running' : session.analysisStatus}/><small>Head {pr.headSha.slice(0, 8)}</small></div></header>}
-    {!analysis ? <AnalysisPanel running={running} reanalysis={false} configured={configured} configuration={analysisConfiguration} profile={profile} profileOpen={profileOpen} events={events} failure={failure} onProfileChange={setProfile} onToggleProfile={() => setProfileOpen((open) => !open)} onStart={() => void analyze()} onCancel={() => void cancel()} onRefresh={onRefreshHarnesses} onOpenSettings={onOpenSettings}/> : <>{(running || failure) && <AnalysisPanel running={running} reanalysis configured configuration={analysisConfiguration} profile={profile} profileOpen={profileOpen} events={events} failure={failure} onProfileChange={setProfile} onToggleProfile={() => setProfileOpen((open) => !open)} onStart={() => void analyze()} onCancel={() => void cancel()} onRefresh={onRefreshHarnesses} onOpenSettings={onOpenSettings}/>}<AnalysisCoverageBanner run={session.latestAnalysisRun} onViewCoverage={showCoverage}/>{analysis.summaryValidation !== 'valid' && <div className="warning-banner"><AlertTriangle size={16}/><span><strong>Summary is unverified.</strong> {analysis.summaryMessage || 'No valid code evidence supports this summary.'}</span></div>}<AnalysisOverview session={session} analysisConfiguration={analysisConfiguration} coverageOpen={coverageOpen} onCoverageOpenChange={setCoverageOpen} onReview={onReview}/></>}
+    {!analysis ? <AnalysisPanel running={running} reanalysis={false} configured={configured} configuration={analysisConfiguration} profile={profile} profileOpen={profileOpen} events={events} failure={failure} onProfileChange={setProfile} onToggleProfile={() => setProfileOpen((open) => !open)} onStart={() => void analyze()} onCancel={() => void cancel()} onRefresh={onRefreshHarnesses} onOpenSettings={onOpenSettings}/> : <>{(running || failure) && <AnalysisPanel running={running} reanalysis configured configuration={analysisConfiguration} profile={profile} profileOpen={profileOpen} events={events} failure={failure} onProfileChange={setProfile} onToggleProfile={() => setProfileOpen((open) => !open)} onStart={() => void analyze()} onCancel={() => void cancel()} onRefresh={onRefreshHarnesses} onOpenSettings={onOpenSettings}/>}<AnalysisCoverageBanner run={session.latestAnalysisRun} onViewCoverage={showCoverage}/>{analysis.summaryValidation !== 'valid' && <div className="warning-banner"><AlertTriangle size={16}/><span><strong>Summary is unverified.</strong> {analysis.summaryMessage || 'No valid code evidence supports this summary.'}</span></div>}<AnalysisOverview session={session} analysisConfiguration={analysisConfiguration} coverageOpen={coverageOpen} onCoverageOpenChange={setCoverageOpen} onReview={onReview} statusBanner={staleBanner}/></>}
   </main>
 }
 
@@ -666,7 +727,7 @@ function AnalysisCoverageBanner({run, onViewCoverage}: {run?: AnalysisRun; onVie
   </div>
 }
 
-function AnalysisOverview({session, analysisConfiguration, coverageOpen, onCoverageOpenChange, onReview}: {session: ReviewSession; analysisConfiguration?: AnalysisConfiguration; coverageOpen: boolean; onCoverageOpenChange: (open: boolean) => void; onReview: (chapterId?: string) => void}) {
+function AnalysisOverview({session, analysisConfiguration, coverageOpen, onCoverageOpenChange, onReview, statusBanner}: {session: ReviewSession; analysisConfiguration?: AnalysisConfiguration; coverageOpen: boolean; onCoverageOpenChange: (open: boolean) => void; onReview: (chapterId?: string) => void; statusBanner?: ReactNode}) {
   const analysis = session.analysis!
   const pr = session.pullRequest
   const checks = pr.checkRuns ?? []
@@ -699,10 +760,11 @@ function AnalysisOverview({session, analysisConfiguration, coverageOpen, onCover
   return <div className="review-brief-layout">
     <section className="overview-document" aria-label="Pull request review overview">
       <header className="overview-masthead"><div><span className="repo-label">{repoName(pr)}</span><h1><span>#{pr.ref.number}</span> {pr.title}</h1><div className="hero-meta"><span>@{pr.author.login}</span><span>{pr.baseRef} ← {pr.headRef}</span><span>{pr.commits.length} commit{pr.commits.length === 1 ? '' : 's'}</span><span>{pr.changedFiles} files</span><span className="additions">+{pr.additions}</span><span className="deletions">−{pr.deletions}</span></div></div><div className="hero-status">{!session.isStale && <AnalysisBadge status={session.analysisStatus}/>}<RiskBadge level={highestRisk?.level ?? pr.riskLevel}/><small>Head {pr.headSha.slice(0, 8)}</small></div></header>
+      {statusBanner}
 
       <section className="overview-change" aria-labelledby="review-brief-title">
         <h2 id="review-brief-title">What changed</h2>
-        <p>{analysis.summary}</p>
+        <Markdown className="overview-summary">{analysis.summary}</Markdown>
         {analysis.affectedAreas.length > 0 && <div className="overview-change-map"><span>Affected areas</span><ul aria-label="Affected areas">{analysis.affectedAreas.map((area) => <li key={area.name}>{area.name}</li>)}</ul><details className="overview-area-details"><summary>Area details</summary><div>{analysis.affectedAreas.map((area) => <article key={area.name}><strong>{area.name}</strong><p>{area.description}</p></article>)}</div></details></div>}
       </section>
 
@@ -716,14 +778,15 @@ function AnalysisOverview({session, analysisConfiguration, coverageOpen, onCover
 
         <aside className="overview-context" aria-label="Review context">
           <details className="overview-context-disclosure"><summary><span>Review context</span><small>{blockingUnknown ? '1 open question' : 'No open questions'} · {analysis.validationIssues.length ? `${analysis.validationIssues.length} unsupported` : 'Evidence checked'}</small></summary><div className="overview-context-content"><article className={blockingUnknown ? 'overview-note unknown' : 'overview-note clear'}><CircleHelp size={18}/><div><span>{blockingUnknown ? 'Open question' : 'Questions'}</span><strong>{blockingUnknown?.text ?? 'No blocking unknowns'}</strong></div></article><article className="overview-note evidence"><ShieldCheck size={18}/><div><span>Evidence</span><strong>{analysis.validationIssues.length ? `${analysis.validationIssues.length} unsupported reference${analysis.validationIssues.length === 1 ? '' : 's'}` : 'References checked'}</strong><small>{checks.length ? `${validChecks} of ${checks.length} GitHub checks are complete or passing.` : 'CI status was not available in this snapshot.'}</small></div></article></div></details>
-          <div className="overview-support" aria-label="Supporting pull request context">
-            {session.latestAnalysisRun && <AnalysisRunDetails run={session.latestAnalysisRun} configuration={analysisConfiguration} open={coverageOpen} onOpenChange={onCoverageOpenChange}/>}
-            <details className="support-disclosure"><summary><span><BookOpen size={16}/>Author context</span><small>{pr.body ? 'Pull request description' : 'No description supplied'}</small></summary><div className="support-content">{pr.body ? <Markdown className="pr-description">{pr.body}</Markdown> : <p>No pull request description was provided.</p>}</div></details>
-            {checks.length > 0 && <details className="support-disclosure"><summary><span><Check size={16}/>Checks</span><small>{validChecks} of {checks.length} complete or passing</small></summary><div className="support-content">{checks.map((check) => <div className="check-row" key={check.id}><span className={`check-state ${check.conclusion || check.status}`}/><div><strong>{check.name}</strong><small>{check.conclusion || check.status}{check.appName ? ` · ${check.appName}` : ''}</small></div></div>)}</div></details>}
-            {discussionCount > 0 && <details className="support-disclosure"><summary><span><MessageSquare size={16}/>Existing discussion</span><small>{visibleDiscussionCount < discussionCount ? `Latest ${visibleDiscussionCount} of ${discussionCount}` : `${discussionCount} messages`}</small></summary><div className="support-content">{reviews.slice(-3).map((review) => <div className="discussion-row" key={`review-${review.id}`}><strong>@{review.author.login} · {review.state.toLowerCase()}</strong>{review.body && <p>{review.body}</p>}</div>)}{comments.slice(-3).map((comment) => <div className="discussion-row" key={`comment-${comment.id}`}><strong>@{comment.author.login} on {comment.path}{comment.line ? `:${comment.line}` : ''}</strong><p>{comment.body}</p></div>)}</div></details>}
-            {analysis.validationIssues.length > 0 && <details className="support-disclosure"><summary><span><AlertTriangle size={16}/>Unsupported analysis</span><small>{analysis.validationIssues.length > 5 ? `Showing 5 of ${analysis.validationIssues.length}` : `${analysis.validationIssues.length} references`}</small></summary><div className="support-content">{analysis.validationIssues.slice(0, 5).map((issue) => <p className="context-copy" key={issue.code + issue.evidenceId}>{issue.message}</p>)}</div></details>}
-          </div>
         </aside>
+        <section className="overview-support" aria-labelledby="overview-support-title">
+          <div className="section-title"><h2 id="overview-support-title">Supporting context</h2></div>
+          {session.latestAnalysisRun && <AnalysisRunDetails run={session.latestAnalysisRun} configuration={analysisConfiguration} open={coverageOpen} onOpenChange={onCoverageOpenChange}/>}
+          <details className="support-disclosure"><summary><span><BookOpen size={16}/>Author context</span><small>{pr.body ? 'Pull request description' : 'No description supplied'}</small></summary><div className="support-content">{pr.body ? <Markdown className="pr-description">{pr.body}</Markdown> : <p>No pull request description was provided.</p>}</div></details>
+          {checks.length > 0 && <details className="support-disclosure"><summary><span><Check size={16}/>Checks</span><small>{validChecks} of {checks.length} complete or passing</small></summary><div className="support-content">{checks.map((check) => <div className="check-row" key={check.id}><span className={`check-state ${check.conclusion || check.status}`}/><div><strong>{check.name}</strong><small>{check.conclusion || check.status}{check.appName ? ` · ${check.appName}` : ''}</small></div></div>)}</div></details>}
+          {discussionCount > 0 && <details className="support-disclosure"><summary><span><MessageSquare size={16}/>Existing discussion</span><small>{visibleDiscussionCount < discussionCount ? `Latest ${visibleDiscussionCount} of ${discussionCount}` : `${discussionCount} messages`}</small></summary><div className="support-content">{reviews.slice(-3).map((review) => <div className="discussion-row" key={`review-${review.id}`}><div className="discussion-row-heading"><strong>@{review.author.login} · {review.state.toLowerCase()}</strong>{review.url && <button className="discussion-link" type="button" aria-label={`Open review by @${review.author.login} on GitHub`} title="Open on GitHub" onClick={() => backend.openGitHubURL(review.url)}><ExternalLink size={13}/></button>}</div>{review.body && <p>{review.body}</p>}</div>)}{comments.slice(-3).map((comment) => <div className="discussion-row" key={`comment-${comment.id}`}><div className="discussion-row-heading"><strong>@{comment.author.login} on {comment.path}{comment.line ? `:${comment.line}` : ''}</strong>{comment.url && <button className="discussion-link" type="button" aria-label={`Open comment by @${comment.author.login} on GitHub`} title="Open on GitHub" onClick={() => backend.openGitHubURL(comment.url)}><ExternalLink size={13}/></button>}</div><p>{comment.body}</p></div>)}</div></details>}
+          {analysis.validationIssues.length > 0 && <details className="support-disclosure"><summary><span><AlertTriangle size={16}/>Unsupported analysis</span><small>{analysis.validationIssues.length > 5 ? `Showing 5 of ${analysis.validationIssues.length}` : `${analysis.validationIssues.length} references`}</small></summary><div className="support-content">{analysis.validationIssues.slice(0, 5).map((issue) => <p className="context-copy" key={issue.code + issue.evidenceId}>{issue.message}</p>)}</div></details>}
+        </section>
       </div>
     </section>
   </div>
@@ -794,6 +857,16 @@ export function ReviewWorkspace({session, initialChapterId = '', onSession, onBa
   const deleteDraft = async (id: string) => { setBusy(true); try { await backend.deleteDraft(id); onSession({...session, comments: session.comments.filter((item) => item.id !== id)}); setSelectedDrafts((value) => { const next = new Set(value); next.delete(id); return next }); if (editingDraftId === id) { setEditingDraftId(''); setDraft('') } } catch (err) { setActionError(errorText(err)) } finally { setBusy(false) } }
   const preparePublish = async () => { setBusy(true); setActionError(''); try { setPublish(await backend.preparePublish(session.id, [...selectedDrafts])) } catch (err) { setActionError(errorText(err)) } finally { setBusy(false) } }
   const prepareDecision = async (event: 'APPROVE' | 'REQUEST_CHANGES') => { setBusy(true); setActionError(''); try { setPublish(await backend.prepareReview(session.id, [...selectedDrafts], event)); setSummaryOpen(false) } catch (err) { setActionError(errorText(err)) } finally { setBusy(false) } }
+  const startReanalysis = async () => {
+    setBusy(true); setActionError('')
+    try {
+      await backend.startAnalysis(session.id)
+      onSession({...session, analysisStatus: 'queued'})
+      setSummaryOpen(false)
+      onBack()
+    } catch (err) { setActionError(errorText(err)) }
+    finally { setBusy(false) }
+  }
   const confirmPublish = async () => {
     if (!publish) return
     setBusy(true); setActionError('')
@@ -870,12 +943,12 @@ export function ReviewWorkspace({session, initialChapterId = '', onSession, onBa
       </aside>
       {(chapterPanelOpen || toolsPanelOpen) && <button className="review-panel-backdrop" aria-label="Close review panels" onClick={() => {setChapterPanelOpen(false); setToolsPanelOpen(false)}}/>}
     </div><footer className="review-footer"><div className="chapter-progress-control"><span>Chapter progress</span><SelectControl className="chapter-progress-select" label="Chapter progress" help="Saved privately in ReviewArc; this does not update GitHub." value={status} disabled={busy} onChange={(value) => setStatus(value as ChapterStatus)} options={([
-      ['notReviewed', 'Not reviewed', 'You have not started this chapter.'],
-      ['inProgress', 'In progress', 'You are actively reviewing this chapter.'],
-      ['reviewed', 'Reviewed', 'You have finished reviewing this chapter.'],
-      ['needsClarification', 'Needs clarification', 'An unresolved question remains.'],
-      ['blocked', 'Blocked', 'Missing context or access prevents completion.'],
-    ] as const).map(([value, label, description]) => ({value, label, description}))}/></div><span className="chapter-progress-note">Saved privately</span><span className="shortcut-hint">[ previous · ] next · F focus · ⌘K open</span><div className="footer-spacer"/><button className="button secondary small" disabled={chapterIndex === 0} onClick={() => setChapterId(chapters[chapterIndex - 1].id)}><ArrowLeft size={14}/>Previous</button>{chapterIndex === chapters.length - 1 ? <button className="button primary small" onClick={() => setSummaryOpen(true)}>Review summary<ShieldCheck size={14}/></button> : <button className="button primary small" onClick={() => setChapterId(chapters[chapterIndex + 1].id)}>Next chapter<ArrowRight size={14}/></button>}</footer>
+      ['notReviewed', 'Not reviewed'],
+      ['inProgress', 'In progress'],
+      ['reviewed', 'Reviewed'],
+      ['needsClarification', 'Needs clarification'],
+      ['blocked', 'Blocked'],
+    ] as const).map(([value, label]) => ({value, label}))}/></div><span className="chapter-progress-note">Saved privately</span><span className="shortcut-hint">[ previous · ] next · F focus · ⌘K open</span><div className="footer-spacer"/><button className="button secondary small" disabled={chapterIndex === 0} onClick={() => setChapterId(chapters[chapterIndex - 1].id)}><ArrowLeft size={14}/>Previous</button>{chapterIndex === chapters.length - 1 ? <button className="button primary small" onClick={() => setSummaryOpen(true)}>Review summary<ShieldCheck size={14}/></button> : <button className="button primary small" onClick={() => setChapterId(chapters[chapterIndex + 1].id)}>Next chapter<ArrowRight size={14}/></button>}</footer>
     {actionError && <div className="global-error"><ErrorBanner title="Review action failed" message={actionError} onRetry={() => setActionError('')} actionLabel="Dismiss"/></div>}
     {publish && <PublishConfirmation preview={publish} busy={busy} onCancel={() => setPublish(undefined)} onConfirm={confirmPublish}/>}
     {threadReply && <ThreadReplyConfirmation preview={threadReply} busy={busy} onCancel={() => setThreadReply(undefined)} onConfirm={confirmThreadReply}/>}
@@ -889,6 +962,7 @@ export function ReviewWorkspace({session, initialChapterId = '', onSession, onBa
           setSummaryOpen(false)
           openTools('drafts')
         }}
+        onReanalyze={() => void startReanalysis()}
         onDecision={prepareDecision}
       />
     )}
@@ -1011,13 +1085,16 @@ function DraftsPanel({drafts, published, selected, onSelected, value, onChange, 
   return <div className="composer-panel"><div className="composer-intro"><h2>Review drafts</h2><p>Drag across line numbers to comment on a range. Publishing always requires confirmation.</p></div>{target && <div className="draft-target"><Code2 size={12}/><span>{commentLocation(target)}</span><button aria-label="Make this a general comment" onClick={onClearTarget}><X size={12}/></button></div>}<textarea autoCapitalize="none" autoCorrect="off" spellCheck={false} value={value} onChange={(e) => onChange(e.target.value)} placeholder={target ? `Comment on ${commentLocation(target)}…` : 'Write a clear, actionable review comment…'}/><button className="button primary small" disabled={busy || !value.trim()} onClick={onSave}>{editing ? 'Update' : 'Save'} {target ? 'inline ' : ''}draft</button><div className="saved-items drafts">{drafts.map((draft) => <label key={draft.id}><input type="checkbox" checked={selected.has(draft.id)} onChange={() => toggle(draft.id)}/><article><p>{draft.body}</p><footer><small>{commentLocation(draft)}</small><button aria-label="Edit draft" onClick={() => onEdit(draft)}><Pencil size={13}/></button><button aria-label="Delete draft" onClick={() => onDelete(draft.id)}><Trash2 size={13}/></button></footer></article></label>)}</div>{drafts.length > 0 && <button className="button danger wide" disabled={busy || !selected.size} onClick={onPublish}>Preview {selected.size} comment{selected.size === 1 ? '' : 's'}</button>}{published.length > 0 && <section className="publication-history"><h3>Published from ReviewArc</h3>{published.map((comment) => <button type="button" key={comment.id} disabled={!comment.githubUrl} onClick={() => comment.githubUrl && backend.openGitHubURL(comment.githubUrl)}><Check size={13}/><span>{comment.body}</span><ExternalLink size={12}/></button>)}</section>}</div>
 }
 
-function ReviewSummary({session, busy, selectedDrafts, onClose, onDrafts, onDecision}: {session: ReviewSession; busy: boolean; selectedDrafts: number; onClose: () => void; onDrafts: () => void; onDecision: (event: 'APPROVE' | 'REQUEST_CHANGES') => void}) {
+function ReviewSummary({session, busy, selectedDrafts, onClose, onDrafts, onReanalyze, onDecision}: {session: ReviewSession; busy: boolean; selectedDrafts: number; onClose: () => void; onDrafts: () => void; onReanalyze: () => void; onDecision: (event: 'APPROVE' | 'REQUEST_CHANGES') => void}) {
   useDialogFocus(onClose)
   const states = session.chapters.map((item) => ({...item, chapter: session.analysis?.chapters.find((chapter) => chapter.id === item.chapterId)}))
   const unresolved = states.filter((item) => item.status !== 'reviewed')
   const drafts = session.comments.filter((comment) => comment.status === 'draft')
   const ready = unresolved.length === 0 && !session.isStale
-  return <div className="modal-backdrop"><section className="review-summary-modal" role="dialog" aria-modal="true" aria-labelledby="review-summary-title"><header><div><ShieldCheck size={20}/><div><h2 id="review-summary-title">Review summary</h2><p>{ready ? 'All chapters are reviewed. Choose the review event to send to GitHub.' : 'Resolve the items below before making a final decision.'}</p></div></div><button className="icon-button" aria-label="Close review summary" onClick={onClose}><X size={18}/></button></header><div className="summary-status"><div><strong>{session.progress.reviewed}/{session.progress.total}</strong><span>chapters reviewed</span></div><div><strong>{unresolved.length}</strong><span>unresolved</span></div><div><strong>{drafts.length}</strong><span>local drafts</span></div></div>{session.isStale && <div className="warning-banner"><AlertTriangle size={16}/>Analysis is stale. Reanalyze before deciding.</div>}<div className="summary-unresolved"><h3>Unresolved chapters</h3>{unresolved.length ? unresolved.map((item) => <div key={item.chapterId}><StatusDot status={item.status}/><span><strong>{item.chapter?.title ?? item.chapterId}</strong><small>{chapterStatusLabel(item.status)}</small></span></div>) : <p><Check size={16}/>No unresolved chapters.</p>}</div><footer><button className="button secondary" onClick={onDrafts}><MessageSquare size={15}/>Review {drafts.length} draft{drafts.length === 1 ? '' : 's'}</button><button className="button danger" disabled={busy || selectedDrafts === 0 || session.isStale} title={selectedDrafts === 0 ? 'Select at least one draft explaining the requested changes' : ''} onClick={() => onDecision('REQUEST_CHANGES')}>Request changes</button><button className="button primary" disabled={busy || !ready} onClick={() => onDecision('APPROVE')}><Check size={15}/>Approve</button></footer></section></div>
+  const approveBlockers = [session.isStale ? 'Reanalyze the latest revision' : '', unresolved.length ? `review ${unresolved.length} remaining chapter${unresolved.length === 1 ? '' : 's'}` : ''].filter(Boolean)
+  const approveTitle = approveBlockers.length ? `${approveBlockers.join(' and ')} before approving.` : ''
+  const requestChangesTitle = session.isStale ? 'Reanalyze the latest revision before requesting changes.' : selectedDrafts === 0 ? 'Select at least one draft explaining the requested changes.' : ''
+  return <div className="modal-backdrop"><section className="review-summary-modal" role="dialog" aria-modal="true" aria-labelledby="review-summary-title"><header><div><ShieldCheck size={20}/><div><h2 id="review-summary-title">Review summary</h2><p>{ready ? 'All chapters are reviewed. Choose the review event to send to GitHub.' : 'Resolve the items below before making a final decision.'}</p></div></div><button className="icon-button" aria-label="Close review summary" onClick={onClose}><X size={18}/></button></header><div className="summary-status"><div><strong>{session.progress.reviewed}/{session.progress.total}</strong><span>chapters reviewed</span></div><div><strong>{unresolved.length}</strong><span>unresolved</span></div><div><strong>{drafts.length}</strong><span>local drafts</span></div></div>{session.isStale && <div className="warning-banner summary-stale-warning"><AlertTriangle size={16}/><span><strong>This PR changed since it was analyzed.</strong> Reanalyze the latest revision before approving or requesting changes.</span><button className="button secondary small" disabled={busy} onClick={onReanalyze}>{busy ? <LoaderCircle className="spin" size={14}/> : <RefreshCw size={14}/>}Reanalyze latest revision</button></div>}<div className="summary-unresolved"><h3>Unresolved chapters</h3>{unresolved.length ? unresolved.map((item) => <div key={item.chapterId}><StatusDot status={item.status}/><span><strong>{item.chapter?.title ?? item.chapterId}</strong><small>{chapterStatusLabel(item.status)}</small></span></div>) : <p><Check size={16}/>No unresolved chapters.</p>}</div><footer><button className="button secondary" onClick={onDrafts}><MessageSquare size={15}/>Review {drafts.length} draft{drafts.length === 1 ? '' : 's'}</button><button className="button danger" disabled={busy || selectedDrafts === 0 || session.isStale} title={requestChangesTitle} onClick={() => onDecision('REQUEST_CHANGES')}>Request changes</button><button className="button primary" disabled={busy || !ready} title={approveTitle} onClick={() => onDecision('APPROVE')}><Check size={15}/>Approve</button></footer></section></div>
 }
 
 function PublishConfirmation({preview, busy, onCancel, onConfirm}: {preview: PublishPreview; busy: boolean; onCancel: () => void; onConfirm: () => void}) {

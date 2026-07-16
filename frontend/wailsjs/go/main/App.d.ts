@@ -17,6 +17,8 @@ export function DeleteDraftComment(arg1:string):Promise<void>;
 
 export function DeleteNote(arg1:string):Promise<void>;
 
+export function GetActiveAnalysisOperation(arg1:string):Promise<main.OperationSnapshot>;
+
 export function GetAnalysisConfiguration():Promise<main.AnalysisConfiguration>;
 
 export function GetChangedFiles(arg1:string):Promise<Array<domain.ChangedFile>>;
@@ -42,6 +44,8 @@ export function PreparePublish(arg1:string,arg2:Array<string>):Promise<main.Publ
 export function PrepareReview(arg1:string,arg2:Array<string>,arg3:string):Promise<main.PublishPreview>;
 
 export function PrepareThreadReply(arg1:string,arg2:number,arg3:string):Promise<main.ThreadReplyPreview>;
+
+export function QueueInboxAnalysis(arg1:domain.PullRequestRef):Promise<main.InboxAnalysis>;
 
 export function RefreshAccount():Promise<main.AccountState>;
 

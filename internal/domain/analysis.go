@@ -29,6 +29,7 @@ const (
 	ReasoningXHigh  ReasoningLevel = "xhigh"
 	ReasoningMax    ReasoningLevel = "max"
 
+	AnalysisRunQueued    AnalysisRunStatus = "queued"
 	AnalysisRunPreparing AnalysisRunStatus = "preparing"
 	AnalysisRunRunning   AnalysisRunStatus = "running"
 	AnalysisRunCompleted AnalysisRunStatus = "completed"

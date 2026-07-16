@@ -18,7 +18,7 @@ export function chapterStatusLabel(value: ChapterStatus) {
 }
 
 export function analysisLabel(value: AnalysisStatus) {
-  return ({notStarted: 'Not analyzed', running: 'Analyzing', ready: 'Walkthrough ready', failed: 'Analysis failed', stale: 'Analysis stale'} satisfies Record<AnalysisStatus, string>)[value]
+  return ({notStarted: 'Not analyzed', queued: 'Queued', running: 'Analyzing', ready: 'Walkthrough ready', failed: 'Analysis failed', stale: 'Analysis stale'} satisfies Record<AnalysisStatus, string>)[value]
 }
 
 export function riskLabel(value: RiskLevel) { return value === 'unknown' ? 'Risk pending' : `${value[0].toUpperCase()}${value.slice(1)} risk` }
