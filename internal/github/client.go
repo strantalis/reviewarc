@@ -274,29 +274,36 @@ func (c *Client) ListAccessibleRepositoriesPage(ctx context.Context, query Acces
 	if pageSize > 100 {
 		pageSize = 100
 	}
-	const graphQL = `query($first:Int!,$after:String){viewer{login repositories(first:$first,after:$after,affiliations:[OWNER,COLLABORATOR,ORGANIZATION_MEMBER],orderBy:{field:NAME,direction:ASC}){totalCount nodes{id name nameWithOwner url isPrivate isArchived description updatedAt owner{login}} pageInfo{hasNextPage endCursor}}}}`
-	args := []string{"api", "graphql", "-F", fmt.Sprintf("first=%d", pageSize)}
+	pageNumber := 1
 	if query.Cursor != "" {
-		args = append(args, "-f", "after="+query.Cursor)
+		parsed, err := strconv.Atoi(query.Cursor)
+		if err != nil || parsed < 2 || parsed > 1_000_000 {
+			return RepositoryPage{}, errors.New("invalid GitHub pagination cursor")
+		}
+		pageNumber = parsed
 	}
-	args = append(args, "-f", "query="+graphQL)
-	result, err := c.run(ctx, args)
+	endpoint := fmt.Sprintf("user/repos?per_page=%d&page=%d&affiliation=owner%%2Ccollaborator%%2Corganization_member&visibility=all&sort=full_name&direction=asc", pageSize, pageNumber)
+	result, err := c.run(ctx, []string{"api", endpoint})
 	if err != nil {
 		return RepositoryPage{}, fmt.Errorf("list accessible GitHub repositories: %w", classifyAuth(result.Stderr, err))
 	}
-	var raw repositoriesPageJSON
+	var raw []restRepositoryJSON
 	if err := json.Unmarshal(result.Stdout, &raw); err != nil {
 		return RepositoryPage{}, fmt.Errorf("parse accessible GitHub repositories: %w", err)
 	}
-	connection := raw.Data.Viewer.Repositories
-	items := appendRepositories([]domain.Repository{}, map[string]bool{}, connection.Nodes, false)
-	if items == nil {
-		items = []domain.Repository{}
+	items := make([]domain.Repository, 0, len(raw))
+	for _, repository := range raw {
+		if repository.Archived || !validName(repository.Owner.Login) || !validName(repository.Name) || !strings.EqualFold(repository.FullName, repository.Owner.Login+"/"+repository.Name) {
+			continue
+		}
+		items = append(items, repository.domain())
 	}
-	if !validName(raw.Data.Viewer.Login) {
-		return RepositoryPage{}, errors.New("accessible GitHub repository response has no account")
+	hasNextPage := len(raw) == pageSize
+	endCursor := ""
+	if hasNextPage {
+		endCursor = strconv.Itoa(pageNumber + 1)
 	}
-	return RepositoryPage{Items: items, TotalCount: connection.TotalCount, EndCursor: connection.PageInfo.EndCursor, HasNextPage: connection.PageInfo.HasNextPage, AccountLogin: raw.Data.Viewer.Login}, nil
+	return RepositoryPage{Items: items, EndCursor: endCursor, HasNextPage: hasNextPage}, nil
 }
 
 func (c *Client) ListOwnerRepositories(ctx context.Context, query RepositoryPageQuery) (RepositoryPage, error) {

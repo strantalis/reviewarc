@@ -216,6 +216,7 @@ type App struct {
 	updateCancel      context.CancelFunc
 	accessibleMu      sync.Mutex
 	accessibleSyncID  string
+	accessibleAccount string
 }
 
 func NewApp() (*App, error) {
@@ -550,15 +551,23 @@ func (a *App) RefreshAccessibleRepositories(input AccessibleRepositoryRefreshInp
 		if input.Cursor != "" {
 			return AccessibleRepositoryRefresh{}, errors.New("invalid accessible repository refresh")
 		}
+		user, err := a.github.CurrentUser(a.appContext())
+		if err != nil {
+			return AccessibleRepositoryRefresh{}, err
+		}
+		if !strings.EqualFold(user.Login, input.Account) {
+			return AccessibleRepositoryRefresh{}, errors.New("authenticated GitHub account changed during repository refresh")
+		}
 		input.SyncID = newID()
 		a.accessibleMu.Lock()
 		a.accessibleSyncID = input.SyncID
+		a.accessibleAccount = input.Account
 		a.accessibleMu.Unlock()
 	} else if !validSyncID(input.SyncID) {
 		return AccessibleRepositoryRefresh{}, errors.New("invalid accessible repository refresh")
 	}
 	a.accessibleMu.Lock()
-	active := a.accessibleSyncID == input.SyncID
+	active := a.accessibleSyncID == input.SyncID && strings.EqualFold(a.accessibleAccount, input.Account)
 	a.accessibleMu.Unlock()
 	if !active {
 		return AccessibleRepositoryRefresh{}, errors.New("accessible repository refresh was replaced")
@@ -568,22 +577,16 @@ func (a *App) RefreshAccessibleRepositories(input AccessibleRepositoryRefreshInp
 		a.accessibleMu.Lock()
 		if a.accessibleSyncID == input.SyncID {
 			a.accessibleSyncID = ""
+			a.accessibleAccount = ""
 		}
 		a.accessibleMu.Unlock()
 		return AccessibleRepositoryRefresh{}, err
-	}
-	if !strings.EqualFold(page.AccountLogin, input.Account) {
-		a.accessibleMu.Lock()
-		if a.accessibleSyncID == input.SyncID {
-			a.accessibleSyncID = ""
-		}
-		a.accessibleMu.Unlock()
-		return AccessibleRepositoryRefresh{}, errors.New("authenticated GitHub account changed during repository refresh")
 	}
 	if page.HasNextPage && page.EndCursor == "" {
 		a.accessibleMu.Lock()
 		if a.accessibleSyncID == input.SyncID {
 			a.accessibleSyncID = ""
+			a.accessibleAccount = ""
 		}
 		a.accessibleMu.Unlock()
 		return AccessibleRepositoryRefresh{}, errors.New("GitHub returned an incomplete repository cursor")
@@ -595,22 +598,26 @@ func (a *App) RefreshAccessibleRepositories(input AccessibleRepositoryRefreshInp
 	}
 	if err := a.store.UpsertAccessibleRepositories(a.appContext(), page.Items, input.Account, input.SyncID); err != nil {
 		a.accessibleSyncID = ""
+		a.accessibleAccount = ""
 		return AccessibleRepositoryRefresh{}, err
 	}
 	result := AccessibleRepositoryRefresh{SyncID: input.SyncID, Processed: len(page.Items), TotalCount: page.TotalCount, EndCursor: page.EndCursor, HasNextPage: page.HasNextPage}
 	if !page.HasNextPage {
 		if err := a.store.CompleteAccessibleRepositorySync(a.appContext(), input.Account, input.SyncID); err != nil {
 			a.accessibleSyncID = ""
+			a.accessibleAccount = ""
 			return AccessibleRepositoryRefresh{}, err
 		}
 		completedAt := time.Now().UTC()
 		settingKey := accessibleCatalogSetting + ":" + strings.ToLower(input.Account)
 		if err := a.store.SetSetting(a.appContext(), settingKey, accessibleCatalogSnapshot{LastSyncedAt: completedAt}); err != nil {
 			a.accessibleSyncID = ""
+			a.accessibleAccount = ""
 			return AccessibleRepositoryRefresh{}, err
 		}
 		result.CompletedAt = completedAt.Format(time.RFC3339)
 		a.accessibleSyncID = ""
+		a.accessibleAccount = ""
 	}
 	return result, nil
 }

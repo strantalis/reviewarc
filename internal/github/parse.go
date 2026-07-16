@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,6 +30,23 @@ type repositoryJSON struct {
 	ID, Name, NameWithOwner, Description, UpdatedAt string
 	IsPrivate, IsArchived                           bool
 	Owner                                           struct{ Login string }
+}
+
+type restRepositoryJSON struct {
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	FullName    string `json:"full_name"`
+	Description string `json:"description"`
+	CloneURL    string `json:"clone_url"`
+	UpdatedAt   string `json:"updated_at"`
+	Private     bool   `json:"private"`
+	Archived    bool   `json:"archived"`
+	Owner       struct{ Login string }
+}
+
+func (r restRepositoryJSON) domain() domain.Repository {
+	updated, _ := time.Parse(time.RFC3339, r.UpdatedAt)
+	return domain.Repository{Ref: domain.RepositoryRef{Host: "github.com", Owner: r.Owner.Login, Name: r.Name, DatabaseID: strconv.FormatInt(r.ID, 10), CloneURL: r.CloneURL}, Description: r.Description, IsPrivate: r.Private, IsArchived: r.Archived, UpdatedAt: updated}
 }
 
 func (r repositoryJSON) domain() domain.Repository {

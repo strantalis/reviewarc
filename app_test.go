@@ -317,9 +317,18 @@ func TestAccessibleRepositoryRefreshIsIncrementalSearchableAndPrunesOnCompletion
 	if err := store.UpsertAccessibleRepositories(ctx, []domain.Repository{old}, "sean", "previous-sync"); err != nil {
 		t.Fatal(err)
 	}
-	first := `{"data":{"viewer":{"login":"sean","repositories":{"totalCount":2,"nodes":[{"id":"R1","name":"api","nameWithOwner":"acme/api","description":"Payments backend","owner":{"login":"acme"}}],"pageInfo":{"hasNextPage":true,"endCursor":"page-two"}}}}}`
-	second := `{"data":{"viewer":{"login":"sean","repositories":{"totalCount":2,"nodes":[{"id":"R2","name":"reviewarc","nameWithOwner":"sean/reviewarc","description":"Review client","owner":{"login":"sean"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`
-	runner := &appFixtureRunner{results: []proc.Result{{Stdout: []byte(first)}, {Stdout: []byte(second)}}}
+	firstPage := make([]map[string]any, 100)
+	firstPage[0] = map[string]any{"id": 1, "name": "api", "full_name": "acme/api", "description": "Payments backend", "owner": map[string]any{"login": "acme"}}
+	for index := 1; index < len(firstPage); index++ {
+		name := fmt.Sprintf("old-%03d", index)
+		firstPage[index] = map[string]any{"id": index + 1, "name": name, "full_name": "acme/" + name, "archived": true, "owner": map[string]any{"login": "acme"}}
+	}
+	first, err := json.Marshal(firstPage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := `[{"id":101,"name":"reviewarc","full_name":"sean/reviewarc","description":"Review client","owner":{"login":"sean"}}]`
+	runner := &appFixtureRunner{results: []proc.Result{{Stdout: []byte(`{"login":"sean"}`)}, {Stdout: first}, {Stdout: []byte(second)}}}
 	app := &App{ctx: ctx, github: githubclient.New(runner), store: store}
 
 	initial, err := app.ListAccessibleRepositories(AccessibleRepositorySearchInput{Account: "sean"})
@@ -327,7 +336,7 @@ func TestAccessibleRepositoryRefreshIsIncrementalSearchableAndPrunesOnCompletion
 		t.Fatalf("initial=%+v err=%v", initial, err)
 	}
 	page, err := app.RefreshAccessibleRepositories(AccessibleRepositoryRefreshInput{Account: "sean"})
-	if err != nil || !page.HasNextPage || page.EndCursor != "page-two" || page.Processed != 1 || page.TotalCount != 2 {
+	if err != nil || !page.HasNextPage || page.EndCursor != "2" || page.Processed != 1 || page.TotalCount != 0 {
 		t.Fatalf("first page=%+v err=%v", page, err)
 	}
 	matching, err := app.ListAccessibleRepositories(AccessibleRepositorySearchInput{Account: "sean", Query: "payments"})

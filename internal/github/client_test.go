@@ -286,22 +286,36 @@ func TestListRepositoriesIncludesOrganizationRepositoriesAndDeduplicates(t *test
 	}
 }
 
-func TestListAccessibleRepositoriesPageUsesViewerAffiliationsAndCursor(t *testing.T) {
-	body := `{"data":{"viewer":{"login":"sean","repositories":{"totalCount":12000,"nodes":[{"id":"R1","name":"api","nameWithOwner":"acme/api","description":"backend","owner":{"login":"acme"}},{"id":"R2","name":"old","nameWithOwner":"acme/old","isArchived":true,"owner":{"login":"acme"}}],"pageInfo":{"hasNextPage":true,"endCursor":"next-page"}}}}}`
-	f := &fakeRunner{responses: []proc.Result{{Stdout: []byte(body)}}}
-	page, err := New(f).ListAccessibleRepositoriesPage(context.Background(), AccessibleRepositoryPageQuery{Cursor: "current-page", PageSize: 500})
+func TestListAccessibleRepositoriesPageUsesCompleteRESTAffiliationsAndCursor(t *testing.T) {
+	repositories := make([]restRepositoryJSON, 100)
+	for index := range repositories {
+		repositories[index].ID = int64(index + 1)
+		repositories[index].Name = fmt.Sprintf("repo-%03d", index)
+		repositories[index].FullName = "acme/" + repositories[index].Name
+		repositories[index].Owner.Login = "acme"
+	}
+	repositories[1].Archived = true
+	body, err := json.Marshal(repositories)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if page.AccountLogin != "sean" || page.TotalCount != 12000 || len(page.Items) != 1 || page.Items[0].Ref.Owner != "acme" || page.Items[0].Ref.Name != "api" || !page.HasNextPage || page.EndCursor != "next-page" {
+	f := &fakeRunner{responses: []proc.Result{{Stdout: body}}}
+	page, err := New(f).ListAccessibleRepositoriesPage(context.Background(), AccessibleRepositoryPageQuery{Cursor: "2", PageSize: 500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.TotalCount != 0 || len(page.Items) != 99 || page.Items[0].Ref.Owner != "acme" || page.Items[0].Ref.Name != "repo-000" || !page.HasNextPage || page.EndCursor != "3" {
 		t.Fatalf("page=%+v", page)
 	}
 	args := f.commands[0].Args
-	if containsString(args, "--paginate") || !containsString(args, "first=100") || !containsString(args, "after=current-page") || !strings.Contains(args[len(args)-1], "affiliations:[OWNER,COLLABORATOR,ORGANIZATION_MEMBER]") {
+	if !reflect.DeepEqual(args, []string{"api", "user/repos?per_page=100&page=2&affiliation=owner%2Ccollaborator%2Corganization_member&visibility=all&sort=full_name&direction=asc"}) {
 		t.Fatalf("accessible repository command=%v", args)
 	}
 	if _, err := New(&fakeRunner{}).ListAccessibleRepositoriesPage(context.Background(), AccessibleRepositoryPageQuery{Cursor: strings.Repeat("x", 4097)}); err == nil {
 		t.Fatal("oversized cursor reached accessible repository paging")
+	}
+	if _, err := New(&fakeRunner{}).ListAccessibleRepositoriesPage(context.Background(), AccessibleRepositoryPageQuery{Cursor: "not-a-page"}); err == nil {
+		t.Fatal("invalid cursor reached accessible repository paging")
 	}
 }
 

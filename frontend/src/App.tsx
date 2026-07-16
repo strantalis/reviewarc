@@ -72,6 +72,7 @@ export function App() {
   const [analysisConfiguration, setAnalysisConfiguration] = useState<AnalysisConfiguration>()
   const [analysisConfigurationBusy, setAnalysisConfigurationBusy] = useState(false)
   const [analysisConfigurationError, setAnalysisConfigurationError] = useState('')
+  const [inboxRefreshErrors, setInboxRefreshErrors] = useState<Record<string, string>>({})
   const updateInbox = useCallback((update: (items: PullRequestSummary[]) => PullRequestSummary[]) => setBootstrap((current) => current ? {...current, inbox: update(current.inbox)} : current), [])
   const openRequest = useRef(0)
   const environmentRequest = useRef(0)
@@ -199,11 +200,17 @@ export function App() {
     <AppHeader state={bootstrap} analysisConfiguration={effectiveAnalysisConfiguration} screen={screen} onNavigate={(next) => { setScreen(next); if (next === 'inbox') { openRequest.current++; setSession(undefined); setOpeningPR(undefined) } }}/>
     {(softwareUpdate?.state === 'available' || softwareUpdate?.state === 'ready') && softwareUpdate.release && softwareUpdate.release.build !== dismissedUpdateBuild && <UpdateBanner update={softwareUpdate} busy={updateBusy} onLater={() => setDismissedUpdateBuild(softwareUpdate.release!.build)} onInstall={() => setInstallUpdateOpen(true)}/>}
     {error && <div className="global-error"><ErrorBanner message={error} onRetry={() => setError('')} actionLabel="Dismiss"/></div>}
-    {screen === 'sources' && <SourceSelector state={bootstrap} onDone={async () => { const next = await backend.bootstrap(); setBootstrap({...next, account: bootstrap.account}); setScreen('inbox') }} />}
+    {screen === 'sources' && <SourceSelector state={bootstrap} onDone={async () => {
+      const result = await backend.refreshInbox()
+      const next = await backend.bootstrap()
+      setInboxRefreshErrors(result.errors ?? {})
+      setBootstrap({...next, account: bootstrap.account, inbox: result.items ?? []})
+      setScreen('inbox')
+    }} />}
     {screen === 'settings' && (
       <SettingsScreen state={bootstrap} theme={theme.preference} onThemeChange={theme.setPreference} update={softwareUpdate} updateBusy={updateBusy} onCheckUpdate={() => void checkForUpdates()} onSetUpdateChannel={(channel) => void setUpdateChannel(channel)} onInstallUpdate={() => setInstallUpdateOpen(true)} onSources={() => setScreen('sources')} analysisConfiguration={effectiveAnalysisConfiguration} analysisConfigurationLoading={configurableAnalysisBackend && !analysisConfiguration && !analysisConfigurationError} analysisConfigurationBusy={analysisConfigurationBusy} analysisConfigurationError={analysisConfigurationError} onRefreshAnalysis={() => void refreshAnalysisHarnesses()} onSaveAnalysisDefaults={saveAnalysisDefaults}/>
     )}
-    {screen === 'inbox' && <InboxScreen state={bootstrap} onUpdate={updateInbox} onOpen={(pr) => void openPR(pr)}/>}
+    {screen === 'inbox' && <InboxScreen state={bootstrap} initialErrors={inboxRefreshErrors} onRefreshErrors={setInboxRefreshErrors} onUpdate={updateInbox} onOpen={(pr) => void openPR(pr)}/>}
     {openingPR && screen === 'overview' && <OpeningPullRequest pr={openingPR} onBack={() => { openRequest.current++; setOpeningPR(undefined); setScreen('inbox') }}/>}
     {session && screen === 'overview' && !effectiveAnalysisConfiguration && (
       <AnalysisConfigurationGate session={session} error={analysisConfigurationError} busy={analysisConfigurationBusy} onRetry={() => void refreshAnalysisHarnesses()} onBack={() => { openRequest.current++; setSession(undefined); setReviewChapterId(''); setReviewFindingId(''); setDecisionReview({}); setScreen('inbox') }}/>

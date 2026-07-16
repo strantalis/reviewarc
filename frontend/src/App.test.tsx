@@ -127,6 +127,26 @@ describe('App startup', () => {
 	expect(screen.getByText('Your review queue is clear')).toBeInTheDocument()
   })
 
+  it('refreshes the inbox after saving sources and preserves actionable partial errors', async () => {
+    const pullRequest = reviewSession().pullRequest
+    const state: BootstrapState = {dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], paths, account: {login: 'sean', name: 'Sean', avatarUrl: ''}, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: [pullRequest]}
+    installBackend(state)
+    const app = window.go!.main!.App!
+    app.ListSources = vi.fn().mockResolvedValue({organizations: [], repositories: [], selections: state.selections})
+    app.RefreshSourceAccess = vi.fn().mockResolvedValue([])
+    app.RefreshSelectedRepositories = vi.fn().mockResolvedValue({repositories: [], archivedKeys: [], errors: {}})
+    Object.assign(app, accessibleSourceMethods())
+    app.SaveSelections = vi.fn().mockResolvedValue(undefined)
+    app.RefreshInbox = vi.fn().mockResolvedValue({items: [pullRequest], errors: {'repository:acme/api': 'GitHub authorization is required.'}, partial: true})
+    render(<App/>)
+    fireEvent.click(await screen.findByRole('button', {name: 'Sources'}))
+    fireEvent.click(await screen.findByRole('button', {name: 'Save sources'}))
+    expect(await screen.findByText('Some sources could not be refreshed')).toBeInTheDocument()
+    expect(screen.getByText('acme/api', {selector: 'code'})).toBeInTheDocument()
+    expect(screen.getByText('GitHub authorization is required.')).toBeInTheDocument()
+    expect(app.RefreshInbox).toHaveBeenCalledOnce()
+  })
+
   it('keeps the inbox usable when no AI harness is installed', async () => {
     installBackend({dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'missing'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: []})
     render(<App/>)
@@ -673,6 +693,8 @@ describe('Repository sources', () => {
     render(<SourceSelector state={state} onDone={onDone}/>)
 
     expect(await screen.findByText('SSO authorization required')).toBeInTheDocument()
+    expect(screen.getByText('Some organization repositories are not searchable')).toBeInTheDocument()
+    expect(screen.getByText(/locked requires authorization or restored access/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', {name: 'Authorize SSO for locked'}))
     expect(openURL).toHaveBeenCalledWith('https://github.com/orgs/locked/sso?authorization_request=temporary')
 

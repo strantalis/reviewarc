@@ -231,7 +231,8 @@ export function SourceSelector({state, onDone}: {state: BootstrapState; onDone: 
   const save = async () => {
     setBusy(true); setError('')
     const selections: SourceSelection[] = [...selected].map((entry) => { const [kind, ...parts] = entry.split(':'); return {kind: kind as SourceSelection['kind'], key: parts.join(':'), enabled: true} })
-    try { await backend.saveSelections(selections); await onDone() } catch (err) { setError(errorText(err)); setBusy(false) }
+    let saved = false
+    try { await backend.saveSelections(selections); saved = true; await onDone() } catch (err) { setError(saved ? `Sources were saved, but the inbox could not be refreshed: ${errorText(err)}` : errorText(err)); setBusy(false) }
   }
 
   const personalLogin = state.account?.login ?? ''
@@ -259,6 +260,7 @@ export function SourceSelector({state, onDone}: {state: BootstrapState; onDone: 
   const placeholder = scope === accessibleScope ? 'Search repositories you can access' : scope === includedScope ? 'Search included repositories' : `Search ${scope} repositories`
   const heading = scope === accessibleScope ? 'All accessible repositories' : scope === includedScope ? 'Included sources' : personalSelected ? 'Personal repositories' : `${scope} repositories`
   const shownCount = scope === includedScope ? selected.size : page?.totalCount ?? '—'
+  const blockedOrganizations = catalog?.organizations.filter((org) => org.accessStatus === 'ssoRequired' || org.accessStatus === 'denied') ?? []
 
   return <main className="page source-page"><div className="page-heading"><div><h1>Repository sources</h1><p>Choose where ReviewArc should look for open pull requests. Repositories are only fetched when you open a PR.</p></div><button className="button primary" disabled={busy || selected.size === 0} onClick={() => void save()}>{busy ? <LoaderCircle className="spin" size={16}/> : <Check size={16}/>}Save sources</button></div>
     {error && <ErrorBanner message={error}/>}<div className="source-toolbar"><label className="search-field"><Search size={16}/><input autoCapitalize="none" autoCorrect="off" spellCheck={false} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={placeholder}/></label><button className="button secondary small" disabled={accessBusy || sync.running} onClick={() => void refreshAccess()}>{accessBusy || sync.running ? <LoaderCircle className="spin" size={14}/> : <RefreshCw size={14}/>}Refresh access</button><span>{selected.size} {selected.size === 1 ? 'source' : 'sources'} included</span></div>
@@ -283,6 +285,7 @@ export function SourceSelector({state, onDone}: {state: BootstrapState; onDone: 
       </aside>
       <section>
         <div className="source-section-heading"><h2>{heading}</h2><span>{shownCount}</span></div>
+        {scope === accessibleScope && blockedOrganizations.length > 0 && <div className="warning-banner source-coverage-warning" role="status"><ShieldCheck size={16}/><div><strong>Some organization repositories are not searchable</strong><p>{blockedOrganizations.map((org) => org.login).join(', ')} {blockedOrganizations.length === 1 ? 'requires' : 'require'} authorization or restored access. Use the organization controls, then refresh access.</p></div></div>}
         {scope === accessibleScope && sync.running && <div className="source-sync-status" role="status"><LoaderCircle className="spin" size={13}/><span>Refreshing repository access</span><small>{sync.total ? `${Math.min(sync.processed, sync.total)} of ${sync.total}` : `${sync.processed} indexed`}</small></div>}
         <div className="repository-choices">
           {scope === includedScope && selectedOrganizations.map((owner) => <div className="source-rule" key={`included:${owner}`}><span className="included-mark"><Check size={13}/></span><span className="source-rule-copy"><strong>{owner}</strong><small>Every active repository in this organization</small></span><button className="button text small" aria-label={`Remove ${owner} organization from included sources`} onClick={() => toggle(`organization:${owner}`)}>Remove</button></div>)}

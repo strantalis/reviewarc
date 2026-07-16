@@ -50,6 +50,72 @@ func TestMigrationsAndReopen(t *testing.T) {
 	}
 }
 
+func TestAccessibleRepositoryMigrationRepairsPreAccountCatalog(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "reviewarc.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := s.db.ExecContext(ctx, `
+		DROP TABLE accessible_repositories;
+		CREATE TABLE accessible_repositories (
+			repo_key TEXT PRIMARY KEY REFERENCES repositories(repo_key) ON DELETE CASCADE,
+			owner TEXT NOT NULL,
+			name TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			sync_id TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);
+		DELETE FROM schema_migrations WHERE version='007_rebuild_accessible_repositories.sql';
+		INSERT INTO repositories(repo_key,repository_json,updated_at) VALUES('github.com/acme/api','{}','2026-07-16T00:00:00Z');
+		INSERT INTO accessible_repositories(repo_key,owner,name,description,sync_id,updated_at) VALUES('github.com/acme/api','acme','api','','old-sync','2026-07-16T00:00:00Z');
+		INSERT INTO settings(key,value_json,updated_at) VALUES('accessible_repository_catalog:sean','{}','2026-07-16T00:00:00Z');
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	columns, err := s.db.QueryContext(ctx, `PRAGMA table_info(accessible_repositories)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = columns.Close() }()
+	hasAccount := false
+	for columns.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := columns.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatal(err)
+		}
+		hasAccount = hasAccount || name == "account_login"
+	}
+	if !hasAccount {
+		t.Fatal("accessible repository catalog was not rebuilt with account isolation")
+	}
+	var snapshots int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM settings WHERE key LIKE 'accessible_repository_catalog:%'`).Scan(&snapshots); err != nil {
+		t.Fatal(err)
+	}
+	if snapshots != 0 {
+		t.Fatalf("stale accessible repository snapshots = %d", snapshots)
+	}
+	var catalogRows int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM accessible_repositories`).Scan(&catalogRows); err != nil {
+		t.Fatal(err)
+	}
+	if catalogRows != 0 {
+		t.Fatalf("stale accessible repository rows = %d", catalogRows)
+	}
+}
+
 func TestSelectionsReplaceAndPersist(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
