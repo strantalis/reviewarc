@@ -38,6 +38,16 @@ const releaseNotes: Record<string, PublicReleaseNotes> = {
       "ReviewArc remains usable for inbox and existing-review workflows when no compatible AI harness is installed.",
     ],
   },
+  "0.1.0-beta.10": {
+    summary: "Pull-request analysis is now safer to start, queue, monitor, and act on from the inbox.",
+    changes: [
+      "Start or rerun analysis directly from any inbox row, with compact actions and clear queued, running, and stale states.",
+      "Multiple pull requests can wait in a durable local queue while ReviewArc limits concurrent AI work and recovers pending jobs after a restart.",
+      "Canceling active analysis stops its local AI process, while queued work can be removed before it starts.",
+      "Stale analysis must be refreshed before approving a pull request or requesting changes.",
+      "Live model activity, progress, coverage, and Claude harness compatibility are clearer and more reliable.",
+    ],
+  },
 };
 
 export function releaseNotesFor(version: string): PublicReleaseNotes | null {
