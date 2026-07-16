@@ -112,7 +112,11 @@ export function AnalysisProgress({events, running, reanalysis = false, onCancel}
     {!steps.length ? <div className="event-placeholder"><CircleHelp size={17}/><p>{running ? 'Preparing the read-only analysis context…' : 'ReviewArc prepares a bounded context, validates the structured result, checks evidence, and saves the guided review.'}</p></div> : <ol className="event-list">{steps.map(({event, copy}, index) => {
       const currentStep = index === steps.length - 1
       const status = event.status === 'failed' ? 'failed' : currentStep && running && event.status !== 'complete' ? 'running' : 'complete'
-      return <li className={`event-row ${status}`} key={copy.label}><span className={status}>{status === 'complete' ? <Check size={13}/> : status === 'failed' ? <X size={13}/> : <LoaderCircle className="spin" size={13}/>}</span><div><strong>{copy.label}</strong><small>{event.message || copy.detail}</small></div>{status === 'running' && event.progress != null && <em role="progressbar" aria-label={copy.label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(event.progress)}>{Math.round(event.progress)}%</em>}</li>
+      const activity = event.message?.trim()
+      const distinctActivity = activity && activity !== copy.label && activity !== copy.detail
+      const primary = status === 'running' && distinctActivity ? activity : copy.label
+      const secondary = status === 'running' ? (distinctActivity ? copy.label : copy.detail) : activity || copy.detail
+      return <li className={`event-row ${status}`} key={copy.label}><span className={status}>{status === 'complete' ? <Check size={13}/> : status === 'failed' ? <X size={13}/> : <LoaderCircle className="spin" size={13}/>}</span><div><strong>{primary}</strong>{secondary !== primary && <small>{secondary}</small>}</div>{status === 'running' && event.progress != null && <em role="progressbar" aria-label={copy.label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(event.progress)}>{Math.round(event.progress)}%</em>}</li>
     })}</ol>}
   </div>
 }

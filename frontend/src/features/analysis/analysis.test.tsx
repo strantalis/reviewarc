@@ -69,8 +69,8 @@ describe('analysis configuration components', () => {
 
   it('maps provider-shaped stages to harness-neutral progress copy', () => {
     render(<AnalysisProgress running events={[{stage: 'runningCodex', message: 'Reading src/greet.go lines 10–24', status: 'running', progress: 42}]} onCancel={vi.fn()}/>)
-    expect(screen.getByText('Analyzing the change', {selector: 'strong'})).toBeInTheDocument()
-    expect(screen.getByText('Reading src/greet.go lines 10–24')).toBeInTheDocument()
+    expect(screen.getByText('Reading src/greet.go lines 10–24', {selector: 'strong'})).toBeInTheDocument()
+    expect(screen.getByText('Analyzing the change', {selector: 'small'})).toBeInTheDocument()
     expect(screen.getByRole('progressbar', {name: 'Analyzing the change'})).toHaveAttribute('aria-valuenow', '42')
   })
 
@@ -86,8 +86,14 @@ describe('analysis configuration components', () => {
     expect(container.querySelectorAll('.event-row .spin')).toHaveLength(1)
     expect(container.querySelectorAll('.event-row.complete')).toHaveLength(2)
     expect(screen.getAllByText('Preparing review context', {selector: 'strong'})).toHaveLength(1)
-    expect(screen.getAllByText('Analyzing the change', {selector: 'strong'})).toHaveLength(1)
-    expect(screen.getByText('Reading src/greet.go lines 10–24')).toBeInTheDocument()
+    expect(screen.getAllByText('Analyzing the change', {selector: 'small'})).toHaveLength(1)
+    expect(screen.getByText('Reading src/greet.go lines 10–24', {selector: 'strong'})).toBeInTheDocument()
+  })
+
+  it('explains the current phase when no concrete model activity is available', () => {
+    render(<AnalysisProgress running events={[{stage: 'validatingOutput', message: 'Validating structured output', status: 'running'}]} onCancel={vi.fn()}/>)
+    expect(screen.getByText('Validating structured output', {selector: 'strong'})).toBeInTheDocument()
+    expect(screen.getByText('Checking the generated review against ReviewArc’s schema.')).toBeInTheDocument()
   })
 
   it('explains that missing harnesses do not block the rest of ReviewArc', () => {
