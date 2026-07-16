@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { App, appendOperationEvent, DiffView, FileContextView, OverviewScreen, ReviewWorkspace, SettingsScreen, SourceSelector, SplitDiffView } from './App'
 import { AnalysisBadge, Markdown, WindowControls } from './components'
-import type { AnalysisConfiguration, BootstrapState, EnvironmentState, RepositoryPage, ReviewSession, SoftwareUpdateStatus } from './types'
+import type { AnalysisConfiguration, BootstrapState, EnvironmentState, OperationEvent, RepositoryPage, ReviewSession, SoftwareUpdateStatus } from './types'
 
 const paths = {root: '/tmp/reviewarc', repositories: '/tmp/reviewarc/repos', worktrees: '/tmp/reviewarc/worktrees', database: '/tmp/reviewarc/db.sqlite', logs: '/tmp/reviewarc/logs', cache: '/tmp/reviewarc/cache'}
 const idleUpdate: SoftwareUpdateStatus = {currentVersion: '0.1.0', currentBuild: '7', state: 'idle', channel: 'stable'}
@@ -557,10 +557,19 @@ describe('Repository sources', () => {
 })
 
 describe('Analysis setup', () => {
-  it('coalesces repeated progress events while preserving changed activity', () => {
-    const repeated = {stage: 'analyzingChange', message: 'Reading diff for src/first.go', status: 'running' as const, progress: 20}
-    expect(appendOperationEvent([repeated], {...repeated, progress: 40})).toEqual([{...repeated, progress: 40}])
-    expect(appendOperationEvent([repeated], {...repeated, message: 'Reading diff for src/second.go'})).toHaveLength(2)
+  it('keeps completed phases while replacing repeated activity within the current phase', () => {
+    const loading = {stage: 'loadingPullRequestContext', message: 'Loading GitHub discussion and checks', status: 'running' as const}
+    const preparing = {stage: 'preparingContext', message: 'Preparing bounded review context', status: 'running' as const}
+    const firstRead = {stage: 'analyzingChange', message: 'Reading diff for src/first.go', status: 'running' as const, progress: 20}
+    let events: OperationEvent[] = [loading, preparing, firstRead]
+    for (let index = 0; index < 20; index++) {
+      events = appendOperationEvent(events, {...firstRead, message: `Reading diff for src/file-${index}.go`, progress: index})
+    }
+    expect(events).toEqual([
+      loading,
+      preparing,
+      {...firstRead, message: 'Reading diff for src/file-19.go', progress: 19},
+    ])
   })
 
   it('does not expose a fake Codex profile while the saved Claude configuration is loading', async () => {

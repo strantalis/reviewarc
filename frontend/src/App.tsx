@@ -566,11 +566,7 @@ function operationFailure(message: string, hasPreviousAnalysis: boolean): Analys
 }
 
 export function appendOperationEvent(current: OperationEvent[], event: OperationEvent) {
-  const last = current.at(-1)
-  if (last && last.stage === event.stage && last.message === event.message && last.status === event.status) {
-    return [...current.slice(0, -1), event]
-  }
-  return [...current.slice(-7), event]
+  return [...current.filter((existing) => existing.stage !== event.stage), event]
 }
 
 function eventForOperation(operation: Operation): OperationEvent {
