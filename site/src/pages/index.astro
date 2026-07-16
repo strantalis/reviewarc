@@ -6,14 +6,13 @@ import ThemeBootstrap from "../components/ThemeBootstrap.astro";
 
 const title = "ReviewArc — Review the change. Follow the evidence.";
 const description =
-  "ReviewArc is a guided pull request review app for macOS. It breaks large GitHub pull requests into focused chapters, with the relevant diff, risks, tests, and evidence kept together.";
+  "ReviewArc is a guided pull request review app that breaks large GitHub pull requests into focused chapters, with the relevant diff, risks, tests, and evidence kept together.";
 const canonical = new URL("/", Astro.site);
 const ogImage = new URL("/images/og/reviewarc-og.png", Astro.site);
 const structuredData = {
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
   name: "ReviewArc",
-  operatingSystem: "macOS",
   applicationCategory: "DeveloperApplication",
   description,
   url: canonical.href,
@@ -40,7 +39,7 @@ const structuredData = {
     <meta property="og:image" content={ogImage.href} />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="ReviewArc — Review the change. Follow the evidence. Guided pull request review for macOS." />
+    <meta property="og:image:alt" content="ReviewArc — Review the change. Follow the evidence." />
     <meta name="twitter:card" content="summary_large_image" />
     <script type="application/ld+json" is:inline set:html={JSON.stringify(structuredData)} />
     <ThemeBootstrap />
@@ -68,14 +67,14 @@ const structuredData = {
         <div class="hero-panel">
           <div class="hero-copy">
             <div class="hero-message">
-              <p class="availability-line" data-state="loading"><span class="status-dot" aria-hidden="true"></span>Guided pull request review for macOS</p>
+              <p class="availability-line" data-state="loading"><span class="status-dot" aria-hidden="true"></span>Guided pull request review</p>
               <h1 id="hero-title">Review the change. <span>Follow the evidence.</span></h1>
               <p class="lede">ReviewArc breaks a pull request into focused chapters, with the relevant diff, risks, tests, and open questions kept together.</p>
 
               <div class="download-group">
                 <a class="download-button is-loading" id="download" data-release-action aria-disabled="true">
                   <span data-release-title>Checking signed release</span>
-                  <small data-release-detail>Universal macOS build</small>
+                  <small data-release-detail>Latest signed desktop build</small>
                 </a>
               </div>
 
@@ -175,7 +174,7 @@ const structuredData = {
           <h2 id="trust-title">Nothing reaches GitHub until you confirm it.</h2>
         </div>
         <div class="trust-summary">
-          <p>ReviewArc works in its own copy of the repository. Your checkout stays untouched, and your notes and drafts stay on your Mac.</p>
+          <p>ReviewArc works in its own copy of the repository. Your checkout stays untouched, and your notes and drafts stay local.</p>
           <a class="secondary-action" href="/docs/security-and-local-data/">Read about security and local data <span aria-hidden="true">→</span></a>
         </div>
       </section>
@@ -186,7 +185,7 @@ const structuredData = {
           <h2 id="final-cta-title">Try ReviewArc on a change that needs a closer look.</h2>
         </div>
         <div class="final-actions">
-          <a class="download-button is-loading" data-release-action aria-disabled="true"><span data-release-title>Checking signed release</span><small data-release-detail>Universal macOS build</small></a>
+          <a class="download-button is-loading" data-release-action aria-disabled="true"><span data-release-title>Checking signed release</span><small data-release-detail>Latest signed desktop build</small></a>
           <a class="secondary-action" data-release-secondary href="/docs/getting-started/">Read the setup guide <span aria-hidden="true">→</span></a>
         </div>
       </section>
@@ -197,7 +196,7 @@ const structuredData = {
         <img class="brand-mark" src={reviewArcMark.src} alt="" width="31" height="25" />
         <span>ReviewArc</span>
       </a>
-      <span>A focused pull request reviewer for macOS.</span>
+      <span>A focused pull request reviewer.</span>
       <nav aria-label="Footer navigation"><a href="/docs/">Docs</a><a href="/docs/security-and-local-data/">Security</a><a class="is-loading" data-release-action aria-disabled="true">Checking…</a></nav>
     </footer>
 

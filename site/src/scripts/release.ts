@@ -74,13 +74,13 @@ const renderRelease = (release: ReleaseManifest) => {
   const artifact = release.macOS;
   updateReleaseActions({
     titleCopy: `Download ReviewArc ${release.version}`,
-    detailCopy: `Universal macOS · ${formatBytes(artifact.sizeBytes)}`,
+    detailCopy: `Signed desktop build · ${formatBytes(artifact.sizeBytes)}`,
     compactCopy: "Download",
     state: "ready",
     href: artifact.downloadUrl,
-    accessibleLabel: `Download ReviewArc ${release.version} for macOS`,
+    accessibleLabel: `Download ReviewArc ${release.version}`,
   });
-  setStatus("ready", `macOS ${artifact.minimumVersion}+ · Apple notarized · SHA-256 ${artifact.sha256.slice(0, 12)}…`);
+  setStatus("ready", `Signed and verified · SHA-256 ${artifact.sha256.slice(0, 12)}…`);
   if (releaseDetails) {
     releaseDetails.href = `/releases/v${release.version}/`;
     releaseDetails.textContent = "Release notes and checksum";
@@ -92,13 +92,13 @@ const renderRelease = (release: ReleaseManifest) => {
 const renderNoRelease = () => {
   updateReleaseActions({
     titleCopy: "View setup requirements",
-    detailCopy: "Public macOS release coming soon",
+    detailCopy: "Public release coming soon",
     compactCopy: "Setup",
     state: "recovery",
     href: "/docs/getting-started/",
     accessibleLabel: "View ReviewArc setup requirements",
   });
-  setStatus("empty", "A public macOS build isn’t available yet.");
+  setStatus("empty", "A public build isn’t available yet.");
   if (releaseDetails) releaseDetails.hidden = true;
   if (retryRelease) retryRelease.hidden = true;
 };
@@ -130,7 +130,7 @@ const loadRelease = async () => {
   activeRequest = new AbortController();
   updateReleaseActions({
     titleCopy: "Checking signed release",
-    detailCopy: "Universal macOS build",
+    detailCopy: "Latest signed desktop build",
     compactCopy: "Checking…",
     state: "loading",
     accessibleLabel: "Checking ReviewArc release availability",

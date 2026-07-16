@@ -43,7 +43,7 @@ export default defineConfig({
   integrations: [
     starlight({
       title: "ReviewArc docs",
-      description: "Evidence-backed pull request review for macOS.",
+      description: "Evidence-backed pull request review.",
       favicon: "/favicon.svg",
       logo: {
         src: "./src/assets/reviewarc-mark.svg"
@@ -63,7 +63,7 @@ export default defineConfig({
           label: "ReviewArc",
           items: [
             { label: "Product home", link: "/" },
-            { label: "Download for macOS", link: "/#download" }
+            { label: "Download ReviewArc", link: "/#download" }
           ]
         },
         {
