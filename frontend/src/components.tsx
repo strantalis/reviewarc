@@ -57,7 +57,7 @@ export function AnalysisBadge({status}: {status: AnalysisStatus}) {
 }
 
 export function DependencyPills({dependencies}: {dependencies: DependencyStatus[]}) {
-  return <div className="dependency-pills" aria-label="Dependency status">{dependencies.map((dep) => <span key={dep.name} className={`dependency ${dep.state}`} title={dep.message || dep.path}><span aria-hidden="true">{dep.state === 'available' ? '●' : '!'}</span>{dep.name}</span>)}</div>
+  return <div className="dependency-pills" aria-label="Dependency status">{dependencies.map((dep) => <span key={dep.name} className={`dependency ${dep.state}`} title={[dep.path, dep.message].filter(Boolean).join(' — ') || dep.version}><span aria-hidden="true">{dep.state === 'available' ? '●' : '!'}</span>{dep.name}</span>)}</div>
 }
 
 export function EmptyState({icon, title, children, action}: {icon: ReactNode; title: string; children: ReactNode; action?: ReactNode}) {

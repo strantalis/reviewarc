@@ -11,7 +11,7 @@ const dualHarnessConfiguration: AnalysisConfiguration = {
   defaultProfile: {harness: 'claude', model: 'sonnet', reasoning: 'high'},
   harnesses: [
     ...analysisConfiguration.harnesses,
-    {id: 'claude', label: 'Claude Code', availability: 'available', eligible: true, version: '2.1.0', capabilities: {jsonSchema: true, readOnly: true, progress: true, contextTransport: ['reviewarcTools']}, models: [{id: 'sonnet', label: 'Sonnet', reasoningLevels: [{id: 'medium', label: 'Medium'}, {id: 'high', label: 'High'}]}]},
+    {id: 'claude', label: 'Claude Code', availability: 'available', eligible: true, path: '/Users/sean/.local/bin/claude', version: '2.1.0', capabilities: {jsonSchema: true, readOnly: true, progress: true, contextTransport: ['reviewarcTools']}, models: [{id: 'sonnet', label: 'Sonnet', reasoningLevels: [{id: 'medium', label: 'Medium'}, {id: 'high', label: 'High'}]}]},
   ],
 }
 
@@ -43,6 +43,18 @@ function installBackend(state: BootstrapState) {
 }
 
 describe('App startup', () => {
+  it('shows the selected analysis harness and its resolved path in the header', async () => {
+    installBackend({dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available', path: '/opt/homebrew/bin/codex'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: []})
+    window.go!.main!.App!.GetAnalysisConfiguration = vi.fn().mockResolvedValue(dualHarnessConfiguration)
+    render(<App/>)
+    const dependencyStatus = await screen.findByLabelText('Dependency status')
+    const claude = await screen.findByText('claude', {selector: '.dependency'})
+    expect(dependencyStatus).toContainElement(claude)
+    expect(claude).toHaveAttribute('title', '/Users/sean/.local/bin/claude')
+    expect(dependencyStatus).not.toHaveTextContent('codex')
+    expect(window.go?.main?.App?.GetAnalysisConfiguration).toHaveBeenCalledOnce()
+  })
+
   it('wires the custom stoplights to Wails window actions', () => {
     const quit = vi.fn()
     const minimise = vi.fn()

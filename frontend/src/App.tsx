@@ -120,12 +120,12 @@ export function App() {
   useEffect(() => { void load() }, [])
   useEffect(() => backend.on('reviewarc:update:v1', (raw) => setSoftwareUpdate(raw as SoftwareUpdateStatus)), [])
   useEffect(() => {
-    if (!bootstrap || (screen !== 'settings' && screen !== 'overview') || analysisConfiguration || typeof window.go?.main?.App?.GetAnalysisConfiguration !== 'function') return
+    if (!bootstrap || analysisConfiguration || typeof window.go?.main?.App?.GetAnalysisConfiguration !== 'function') return
     void (async () => {
       try { setAnalysisConfigurationError(''); setAnalysisConfiguration(await backend.getAnalysisConfiguration()) }
       catch (err) { setAnalysisConfigurationError(errorText(err)) }
     })()
-  }, [analysisConfiguration, bootstrap, screen])
+  }, [analysisConfiguration, bootstrap])
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); setCommandOpen(true) }
@@ -207,7 +207,7 @@ export function App() {
   const effectiveAnalysisConfiguration = analysisConfiguration ?? (configurableAnalysisBackend ? undefined : legacyAnalysisConfiguration(bootstrap.dependencies))
 
   return <div className="app-shell">
-    <AppHeader state={bootstrap} screen={screen} onNavigate={(next) => { setScreen(next); if (next === 'inbox') { openRequest.current++; setSession(undefined); setOpeningPR(undefined) } }}/>
+    <AppHeader state={bootstrap} analysisConfiguration={effectiveAnalysisConfiguration} screen={screen} onNavigate={(next) => { setScreen(next); if (next === 'inbox') { openRequest.current++; setSession(undefined); setOpeningPR(undefined) } }}/>
     {(softwareUpdate?.state === 'available' || softwareUpdate?.state === 'ready') && softwareUpdate.release && softwareUpdate.release.build !== dismissedUpdateBuild && <UpdateBanner update={softwareUpdate} busy={updateBusy} onLater={() => setDismissedUpdateBuild(softwareUpdate.release!.build)} onInstall={() => setInstallUpdateOpen(true)}/>}
     {error && <div className="global-error"><ErrorBanner message={error} onRetry={() => setError('')} actionLabel="Dismiss"/></div>}
     {screen === 'sources' && <SourceSelector state={bootstrap} onDone={async () => { const next = await backend.bootstrap(); setBootstrap({...next, account: bootstrap.account}); setScreen('inbox') }} />}
@@ -272,14 +272,30 @@ function DependencyGate({state, onRefresh, refreshing, error}: {state: Bootstrap
   </main>
 }
 
-function AppHeader({state, screen, onNavigate}: {state: BootstrapState; screen: Screen; onNavigate: (screen: Screen) => void}) {
+export function headerDependencies(dependencies: DependencyStatus[], configuration?: AnalysisConfiguration): DependencyStatus[] {
+  const coreDependencies = dependencies.filter((dependency) => dependency.name !== 'codex' && dependency.name !== 'claude')
+  const selectedHarness = configuration?.harnesses.find((harness) => harness.id === configuration.defaultProfile?.harness)
+  if (!selectedHarness || (selectedHarness.id !== 'codex' && selectedHarness.id !== 'claude')) return coreDependencies
+  const state = selectedHarness.availability === 'available' && selectedHarness.eligible
+    ? 'available'
+    : selectedHarness.availability === 'missing' ? 'missing' : 'broken'
+  return [...coreDependencies, {
+    name: selectedHarness.id,
+    state,
+    path: selectedHarness.path,
+    version: selectedHarness.version,
+    message: selectedHarness.message,
+  }]
+}
+
+function AppHeader({state, analysisConfiguration, screen, onNavigate}: {state: BootstrapState; analysisConfiguration?: AnalysisConfiguration; screen: Screen; onNavigate: (screen: Screen) => void}) {
   const accountName = state.account?.name || state.account?.login || 'GitHub account'
   const accountLogin = state.account?.login
   return <header className="app-header" onDoubleClick={toggleWindowOnHeaderDoubleClick}>
     <WindowControls/>
     <button className="brand-button" onClick={() => onNavigate('inbox')}><Logo/></button>
     <nav aria-label="Primary"><button className={screen === 'inbox' ? 'active' : ''} onClick={() => onNavigate('inbox')}><Inbox size={16}/>Inbox</button><button className={screen === 'sources' ? 'active' : ''} onClick={() => onNavigate('sources')}><SlidersHorizontal size={16}/>Sources</button></nav>
-    <div className="header-spacer"/><DependencyPills dependencies={state.dependencies}/>
+    <div className="header-spacer"/><DependencyPills dependencies={headerDependencies(state.dependencies, analysisConfiguration)}/>
     <button className={`account-chip${screen === 'settings' ? ' active' : ''}`} aria-label={`Open settings for ${accountName}${accountLogin ? ` (@${accountLogin})` : ''}`} aria-current={screen === 'settings' ? 'page' : undefined} onClick={() => onNavigate('settings')}>
       {state.account?.avatarUrl ? <img src={state.account.avatarUrl} alt=""/> : <span>{accountLogin?.slice(0, 1).toUpperCase()}</span>}
       <div><strong>{accountName}</strong>{accountLogin && <small>@{accountLogin}</small>}</div><Settings className="account-settings-icon" size={16}/>

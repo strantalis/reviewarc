@@ -1,4 +1,4 @@
-export type DependencyName = 'git' | 'gh' | 'codex'
+export type DependencyName = 'git' | 'gh' | 'codex' | 'claude'
 export type DependencyState = 'available' | 'missing' | 'broken'
 export type Relationship = 'reviewRequested' | 'assigned' | 'authored' | 'selectedRepo'
 export type AnalysisStatus = 'notStarted' | 'running' | 'ready' | 'failed' | 'stale'
