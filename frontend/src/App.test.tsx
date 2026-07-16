@@ -236,6 +236,29 @@ describe('App startup', () => {
     expect(screen.getByRole('button', {name: 'Cancel acme/api pull request #1'})).toBeInTheDocument()
   })
 
+  it('keeps overview analysis state synchronized when returning to the inbox', async () => {
+    const base = reviewSession()
+    const session: ReviewSession = {...base, analysis: undefined, analysisStatus: 'notStarted', chapters: [], progress: {total: 0, reviewed: 0, blocked: 0, clarify: 0, percent: 0}, pullRequest: {...base.pullRequest, analysisStatus: 'notStarted', progress: {total: 0, reviewed: 0, blocked: 0, clarify: 0, percent: 0}}}
+    const operation = {id: 'operation-1', sessionId: session.id, kind: 'analysis', stage: 'preparingContext', message: 'Preparing context', state: 'running' as const}
+    installBackend({dependencies: [{name: 'git', state: 'available'}, {name: 'gh', state: 'available'}, {name: 'codex', state: 'available'}], paths, selections: [{kind: 'repository', key: 'acme/api', enabled: true}], inbox: [session.pullRequest]})
+    Object.assign(window.go!.main!.App!, {
+      OpenPullRequest: vi.fn().mockResolvedValue(session),
+      RefreshPullRequestContext: vi.fn().mockResolvedValue(session),
+      StartAnalysis: vi.fn().mockResolvedValue(operation),
+      GetActiveAnalysisOperation: vi.fn().mockResolvedValue({operation, events: []}),
+    })
+    window.runtime = {EventsOn: vi.fn(() => () => {})}
+    render(<App/>)
+
+    fireEvent.click((await screen.findByText(session.pullRequest.title)).closest('button')!)
+    fireEvent.click(await screen.findByRole('button', {name: 'Analyze pull request'}))
+    await waitFor(() => expect(window.go!.main!.App!.StartAnalysis).toHaveBeenCalledWith(session.id))
+    fireEvent.click(screen.getAllByRole('button', {name: 'Inbox'})[0])
+
+    expect(await screen.findByText('1 analyzing')).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: 'Cancel acme/api pull request #1'})).toBeInTheDocument()
+  })
+
   it('preserves both queued states when inbox analysis requests resolve out of order', async () => {
     const base = reviewSession()
     const first = {...base, id: 'session-1', analysisStatus: 'notStarted' as const, pullRequest: {...base.pullRequest, analysisStatus: 'notStarted' as const, sessionId: undefined}}

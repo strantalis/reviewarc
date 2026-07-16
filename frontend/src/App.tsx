@@ -74,6 +74,15 @@ export function App() {
   const [analysisConfigurationError, setAnalysisConfigurationError] = useState('')
   const [inboxRefreshErrors, setInboxRefreshErrors] = useState<Record<string, string>>({})
   const updateInbox = useCallback((update: (items: PullRequestSummary[]) => PullRequestSummary[]) => setBootstrap((current) => current ? {...current, inbox: update(current.inbox)} : current), [])
+  const syncInboxSession = useCallback((next: ReviewSession) => {
+    updateInbox((current) => current.map((item) => item.sessionId === next.id || (repoName(item) === repoName(next.pullRequest) && item.ref.number === next.pullRequest.ref.number)
+      ? {...item, sessionId: next.id, analysisStatus: next.analysisStatus, progress: next.progress, riskLevel: next.pullRequest.riskLevel}
+      : item))
+  }, [updateInbox])
+  const syncSession = useCallback((next: ReviewSession) => {
+    setSession(next)
+    syncInboxSession(next)
+  }, [syncInboxSession])
   const openRequest = useRef(0)
   const environmentRequest = useRef(0)
 
@@ -109,6 +118,15 @@ export function App() {
 
   useEffect(() => { void load() }, [])
   useEffect(() => backend.on('reviewarc:update:v1', (raw) => setSoftwareUpdate(raw as SoftwareUpdateStatus)), [])
+  useEffect(() => backend.on('reviewarc:operation:v1', (raw) => {
+    const operation = raw as Operation
+    if (!operation.sessionId) return
+    if (operation.state === 'queued' || operation.state === 'running') {
+      updateInbox((current) => current.map((item) => item.sessionId === operation.sessionId ? {...item, analysisStatus: operation.state as 'queued' | 'running'} : item))
+      return
+    }
+    if (['completed', 'complete', 'failed', 'cancelled'].includes(operation.state)) void backend.getSession(operation.sessionId).then(syncInboxSession).catch(() => {})
+  }), [syncInboxSession, updateInbox])
   useEffect(() => {
     if (!bootstrap || analysisConfiguration || typeof window.go?.main?.App?.GetAnalysisConfiguration !== 'function') return
     void (async () => {
@@ -132,10 +150,10 @@ export function App() {
 	try { value = await backend.openPullRequest(pr.ref) }
 	catch (err) { if (openRequest.current === request) { setOpeningPR(undefined); setScreen('inbox'); setError(errorText(err)) }; return }
 	if (openRequest.current !== request) return
-	setSession(value); setOpeningPR(undefined)
+	syncSession(value); setOpeningPR(undefined)
 	try {
 	  const hydrated = await backend.refreshPullRequestContext(value.id)
-	  if (openRequest.current === request && hydrated.id === value.id) setSession(hydrated)
+	  if (openRequest.current === request && hydrated.id === value.id) syncSession(hydrated)
 	} catch (err) {
 	  if (openRequest.current === request) setError(`Pull request opened, but GitHub discussion and checks could not be loaded: ${errorText(err)}`)
 	}
@@ -216,10 +234,10 @@ export function App() {
       <AnalysisConfigurationGate session={session} error={analysisConfigurationError} busy={analysisConfigurationBusy} onRetry={() => void refreshAnalysisHarnesses()} onBack={() => { openRequest.current++; setSession(undefined); setReviewChapterId(''); setReviewFindingId(''); setDecisionReview({}); setScreen('inbox') }}/>
     )}
     {session && screen === 'overview' && effectiveAnalysisConfiguration && (
-      <OverviewScreen session={session} analysisConfiguration={effectiveAnalysisConfiguration} legacyAnalysis={!configurableAnalysisBackend} decisionReview={decisionReview} onAnalysisConfiguration={(configuration) => setAnalysisConfiguration(configuration)} onRefreshHarnesses={() => void refreshAnalysisHarnesses()} onOpenSettings={() => setScreen('settings')} onBack={() => { openRequest.current++; setSession(undefined); setReviewChapterId(''); setReviewFindingId(''); setDecisionReview({}); setScreen('inbox') }} onSession={setSession} onReview={(chapterId, findingId) => { setReviewChapterId(chapterId ?? ''); setReviewFindingId(findingId ?? ''); setScreen('review') }}/>
+      <OverviewScreen session={session} analysisConfiguration={effectiveAnalysisConfiguration} legacyAnalysis={!configurableAnalysisBackend} decisionReview={decisionReview} onAnalysisConfiguration={(configuration) => setAnalysisConfiguration(configuration)} onRefreshHarnesses={() => void refreshAnalysisHarnesses()} onOpenSettings={() => setScreen('settings')} onBack={() => { openRequest.current++; setSession(undefined); setReviewChapterId(''); setReviewFindingId(''); setDecisionReview({}); setScreen('inbox') }} onSession={syncSession} onReview={(chapterId, findingId) => { setReviewChapterId(chapterId ?? ''); setReviewFindingId(findingId ?? ''); setScreen('review') }}/>
     )}
     {session && screen === 'review' && (
-      <ReviewWorkspace session={session} initialChapterId={reviewChapterId} initialFindingId={reviewFindingId} initialSummaryOpen={reviewFindingId === '__summary__'} decisionReview={decisionReview} onDecisionReview={(id, review) => setDecisionReview((current) => ({...current, [id]: review}))} onSession={setSession} onBack={() => setScreen('overview')}/>
+      <ReviewWorkspace session={session} initialChapterId={reviewChapterId} initialFindingId={reviewFindingId} initialSummaryOpen={reviewFindingId === '__summary__'} decisionReview={decisionReview} onDecisionReview={(id, review) => setDecisionReview((current) => ({...current, [id]: review}))} onSession={syncSession} onBack={() => setScreen('overview')}/>
     )}
     {commandOpen && <CommandPalette items={bootstrap.inbox} onClose={() => setCommandOpen(false)} onOpen={(pr) => { setCommandOpen(false); void openPR(pr) }}/>}
     {installUpdateOpen && softwareUpdate?.release && <UpdateInstallConfirmation update={softwareUpdate} busy={updateBusy} onCancel={() => setInstallUpdateOpen(false)} onConfirm={() => { setInstallUpdateOpen(false); void installUpdate() }}/>}
@@ -412,6 +430,9 @@ export function OverviewScreen({session, analysisConfiguration = legacyOverviewA
       const saveAsDefault = !analysisConfiguration.defaultProfile
       const next = await backend.startAnalysis(session.id, legacyAnalysis ? undefined : {profile: selected, saveAsDefault})
       setOperation(next)
+      if (next.state === 'queued' || next.state === 'running') {
+        onSession({...session, analysisStatus: next.state, pullRequest: {...session.pullRequest, analysisStatus: next.state}})
+      }
       if (saveAsDefault && !legacyAnalysis) onAnalysisConfiguration({...analysisConfiguration, defaultProfile: selected})
       setProfileOpen(false)
     } catch (err) { setFailure(operationFailure(errorText(err), Boolean(analysis))) }

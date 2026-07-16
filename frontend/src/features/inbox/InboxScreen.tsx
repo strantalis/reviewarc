@@ -4,7 +4,7 @@ import { backend } from '../../bridge'
 import { EmptyState, ErrorBanner, SelectControl, Skeleton } from '../../components'
 import { errorText } from '../../errors'
 import { filterInbox, repoName } from '../../lib'
-import type { AnalysisStatus, BootstrapState, Operation, PullRequestSummary, Relationship, ReviewSession } from '../../types'
+import type { AnalysisStatus, BootstrapState, PullRequestSummary, Relationship, ReviewSession } from '../../types'
 import { PullRequestRow } from './PullRequestRow'
 
 const inboxPageSize = 100
@@ -55,16 +55,6 @@ export function InboxScreen({state, initialErrors = {}, onRefreshErrors = ignore
   const allOpen = !query.trim() && relationship === 'all' && organization === 'all' && repository === 'all' && label === 'all' && analysis === 'all'
   const resetFilters = () => { resetVisibleLimit(); setQuery(''); setRelationship('all'); setOrganization('all'); setRepository('all'); setLabel('all'); setAnalysis('all') }
   const patchSession = useCallback((session: ReviewSession) => onUpdate((current) => current.map((item) => item.sessionId === session.id || (repoName(item) === repoName(session.pullRequest) && item.ref.number === session.pullRequest.ref.number) ? {...item, sessionId: session.id, analysisStatus: session.analysisStatus, progress: session.progress, riskLevel: session.pullRequest.riskLevel} : item)), [onUpdate])
-  useEffect(() => backend.on('reviewarc:operation:v1', (raw) => {
-    const operation = raw as Operation
-    if (!operation.sessionId) return
-    if (operation.state === 'queued' || operation.state === 'running') {
-      const status = operation.state
-      onUpdate((current) => current.map((candidate) => candidate.sessionId === operation.sessionId ? {...candidate, analysisStatus: status} : candidate))
-      return
-    }
-    if (['completed', 'complete', 'failed', 'cancelled'].includes(operation.state)) void backend.getSession(operation.sessionId).then(patchSession).catch(() => {})
-  }), [onUpdate, patchSession])
   const startInboxAnalysis = async (pr: PullRequestSummary) => {
     const key = analysisKey(pr)
     if (analysisBusyRef.current.has(key)) return
