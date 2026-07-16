@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+: "${APPLE_NOTARY_KEY_P8_BASE64:?APPLE_NOTARY_KEY_P8_BASE64 is required}"
+: "${APPLE_NOTARY_KEY_ID:?APPLE_NOTARY_KEY_ID is required}"
+: "${APPLE_NOTARY_ISSUER_ID:?APPLE_NOTARY_ISSUER_ID is required}"
+
 dmg="${1:?DMG path required}"
 mkdir -p dist
 key_file="${RUNNER_TEMP:?}/reviewarc-signing/AuthKey_${APPLE_NOTARY_KEY_ID}.p8"

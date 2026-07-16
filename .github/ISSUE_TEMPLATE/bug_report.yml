@@ -1,0 +1,72 @@
+name: Bug report
+description: Report a reproducible problem and propose a bounded investigation.
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Do not include credentials, private repository contents, personal data, or security vulnerabilities. Use the Security tab for vulnerabilities.
+  - type: input
+    id: version
+    attributes:
+      label: ReviewArc version
+      description: Use the release version or commit SHA.
+      placeholder: v0.1.0-beta.10 or abc1234
+    validations:
+      required: true
+  - type: dropdown
+    id: architecture
+    attributes:
+      label: Mac architecture
+      options:
+        - Apple Silicon
+        - Intel
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe what happened and which workflow is blocked.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest reproducible sequence using sanitized data.
+      placeholder: |
+        1. Open ...
+        2. Select ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostics
+      description: Add relevant logs or screenshots after removing secrets and private repository data.
+  - type: textarea
+    id: scope
+    attributes:
+      label: Proposed scope and validation
+      description: If you want to contribute a fix, describe the smallest change and how you would test it. Wait for agreement before opening a pull request.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I searched for an existing issue.
+          required: true
+        - label: This report contains no secrets, private repository contents, or personal data.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true

@@ -11,12 +11,6 @@ case "$scope" in
       APPLE_TEAM_ID
       SPARKLE_FEED_URL
       SPARKLE_PUBLIC_ED_KEY
-      APPLE_DEVELOPER_ID_P12_BASE64
-      APPLE_DEVELOPER_ID_P12_PASSWORD
-      APPLE_NOTARY_KEY_P8_BASE64
-      APPLE_NOTARY_KEY_ID
-      APPLE_NOTARY_ISSUER_ID
-      SPARKLE_ED25519_PRIVATE_KEY_BASE64
     )
     ;;
   publish|channel)
@@ -63,6 +57,22 @@ fi
 
 if [[ ! "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$ ]]; then
   echo "::error::Release tags must look like v0.1.0 or v0.1.0-beta.1."
+  exit 1
+fi
+
+repo_root="$(git rev-parse --show-toplevel)"
+allowed_signers="$repo_root/.github/release-allowed-signers"
+if [[ ! -s "$allowed_signers" ]]; then
+  echo "::error::Trusted release signer configuration is missing."
+  exit 1
+fi
+if ! git -c gpg.ssh.allowedSignersFile="$allowed_signers" verify-tag "$GITHUB_REF_NAME"; then
+  echo "::error::Release tags must be signed by a trusted ReviewArc release key."
+  exit 1
+fi
+tagged_commit="$(git rev-parse "$GITHUB_REF_NAME^{commit}")"
+if [[ "$tagged_commit" != "$GITHUB_SHA" ]]; then
+  echo "::error::Release tag does not resolve to the workflow commit."
   exit 1
 fi
 

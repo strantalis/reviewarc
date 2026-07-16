@@ -1,4 +1,4 @@
-import { defineConfig } from "astro/config";
+import { defineConfig, passthroughImageService } from "astro/config";
 import starlight from "@astrojs/starlight";
 import vercel from "@astrojs/vercel";
 
@@ -7,6 +7,9 @@ const isDev = process.argv.includes("dev");
 export default defineConfig({
   site: "https://www.reviewarc.dev",
   output: "static",
+  image: {
+    service: passthroughImageService()
+  },
   devToolbar: { enabled: false },
   markdown: { syntaxHighlight: "prism" },
   adapter: vercel({ staticHeaders: true }),

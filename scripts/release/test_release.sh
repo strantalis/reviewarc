@@ -47,7 +47,7 @@ plutil -create xml1 "$plist"
 /usr/libexec/PlistBuddy -c 'Add :CFBundleGetInfoString string ReviewArc' "$plist"
 /usr/libexec/PlistBuddy -c 'Add :NSHumanReadableCopyright string placeholder' "$plist"
 /usr/libexec/PlistBuddy -c 'Add :LSMinimumSystemVersion string 10.13.0' "$plist"
-"$script_dir/prepare_app.sh" "$app" com.example.reviewarc 0.3.0 57 'Copyright 2026 Example LLC' \
+"$script_dir/prepare_app.sh" "$app" com.example.reviewarc 0.3.0 57 'Copyright 2026 Example Publisher' \
   AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= https://www.reviewarc.dev/api/appcast.xml
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")" == com.example.reviewarc ]]
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")" == 57 ]]

@@ -1,5 +1,7 @@
 # Build ReviewArc End-to-End MVP
 
+> Historical implementation specification. For current behavior and limitations, see the root README and user documentation.
+
 Build a functional end-to-end MVP of ReviewArc, a local-first desktop application for understanding and reviewing complex pull requests across multiple GitHub repositories.
 
 This must be a working product vertical slice, not a static mockup, UI-only prototype, or disconnected collection of partially implemented modules.

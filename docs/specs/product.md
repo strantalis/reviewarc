@@ -1,5 +1,7 @@
 # ReviewArc Product Brief
 
+> Historical product specification. For current behavior and limitations, see the root README and user documentation.
+
 ## Product Summary
 
 ReviewArc is a local-first pull request review application that helps engineers understand complex code changes before approving them.

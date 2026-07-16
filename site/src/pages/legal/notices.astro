@@ -1,0 +1,76 @@
+---
+import "../../styles/landing.css";
+import "../../styles/release.css";
+import reviewArcMark from "../../assets/reviewarc-mark.svg";
+import ThemeControl from "../../components/ThemeControl.astro";
+import ThemeBootstrap from "../../components/ThemeBootstrap.astro";
+
+const description = "Open-source software, font licenses, and attribution notices for ReviewArc.";
+const canonical = new URL("/legal/notices/", Astro.site);
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f6f8fb" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#171d26" />
+    <meta name="description" content={description} />
+    <title>ReviewArc legal notices</title>
+    <link rel="canonical" href={canonical.href} />
+    <ThemeBootstrap />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preload" href="/fonts/commissioner-latin.woff2" as="font" type="font/woff2" crossorigin />
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to main content</a>
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="ReviewArc home">
+        <img class="brand-mark" src={reviewArcMark.src} alt="" width="31" height="25" />
+        <span>ReviewArc</span>
+      </a>
+      <nav aria-label="Primary navigation">
+        <a href="/docs/">Docs</a>
+        <a href="/releases/">Releases</a>
+        <a class="header-download" href="/#download">Download</a>
+        <ThemeControl />
+      </nav>
+    </header>
+
+    <main id="main-content" class="release-page">
+      <header class="release-heading">
+        <a class="back-link" href="/">← ReviewArc home</a>
+        <h1>Legal <span>notices</span></h1>
+        <p class="release-summary">ReviewArc includes open-source software and self-hosted fonts. Their licenses remain applicable to those components.</p>
+      </header>
+
+      <div class="release-body">
+        <section>
+          <h2>Desktop software</h2>
+          <p class="muted-copy">Every signed ReviewArc app includes a complete <strong>ThirdPartyNotices.txt</strong> in its Resources folder. You can open the same file from <strong>Settings → About &amp; legal → View notices</strong>.</p>
+          <p class="muted-copy">That inventory includes the pinned Go modules and runtime, Wails, React, Pierre, Radix UI, Shiki, Lucide and Feather icon notices, and Sparkle’s bundled external notices.</p>
+        </section>
+
+        <section class="release-details" aria-labelledby="font-license-heading">
+          <h2 id="font-license-heading">Site fonts</h2>
+          <dl>
+            <div><dt>Commissioner</dt><dd><a href="/fonts/OFL-Commissioner.txt">SIL Open Font License 1.1</a></dd></div>
+            <div><dt>Spline Sans Mono</dt><dd><a href="/fonts/OFL-Spline-Sans-Mono.txt">SIL Open Font License 1.1</a></dd></div>
+            <div><dt>Provenance</dt><dd><a href="/fonts/README.md">Sources and SHA-256 records</a></dd></div>
+          </dl>
+          <p class="muted-copy">The font files are licensed separately from ReviewArc’s application source. They are not covered by the Apache-2.0 license.</p>
+        </section>
+      </div>
+    </main>
+
+    <footer>
+      <a class="brand footer-brand" href="/" aria-label="ReviewArc home">
+        <img class="brand-mark" src={reviewArcMark.src} alt="" width="31" height="25" />
+        <span>ReviewArc</span>
+      </a>
+      <span>A focused pull request reviewer.</span>
+      <nav aria-label="Footer navigation"><a href="/docs/">Docs</a><a href="/docs/security-and-local-data/">Security</a><a href="/legal/notices/" aria-current="page">Legal</a></nav>
+    </footer>
+  </body>
+</html>

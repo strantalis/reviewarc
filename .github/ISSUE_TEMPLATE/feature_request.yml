@@ -1,0 +1,54 @@
+name: Feature proposal
+description: Propose a user problem and the smallest useful change.
+title: "feat: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Issues are required before implementation. Describe the problem first and wait for scope agreement before opening a pull request.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Who has the problem, in which workflow, and what is the current cost?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the smallest useful behavior change without prescribing unrelated cleanup.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Include existing workflows or smaller solutions that might address the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Security, privacy, and release implications
+      description: Note effects on GitHub mutation, local data, AI context, credentials, updates, or distribution. Write "None identified" when applicable.
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation plan
+      description: Explain the automated tests and manual workflow that would prove the change.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Proposal checks
+      options:
+        - label: I searched for an existing issue or specification covering this request.
+          required: true
+        - label: I will wait for scope agreement before opening a pull request.
+          required: true

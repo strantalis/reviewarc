@@ -3,9 +3,9 @@ set -euo pipefail
 
 app="${1:?app bundle required}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repository_root="$(cd "$script_dir/../../.." && pwd)"
 source_framework="${2:-}"
 if [[ -z "$source_framework" ]]; then
-  repository_root="$(cd "$script_dir/../../.." && pwd)"
   if [[ -d "$repository_root/dist/sparkle/Sparkle.framework" ]]; then
     source_framework="$repository_root/dist/sparkle/Sparkle.framework"
   else
@@ -39,5 +39,7 @@ fi
   echo "Sparkle framework symlinks were not preserved" >&2
   exit 1
 }
+
+"$repository_root/scripts/release/bundle_legal_notices.sh" "$app" >/dev/null
 
 echo "$destination"

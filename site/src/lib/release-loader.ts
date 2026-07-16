@@ -150,5 +150,5 @@ export async function loadAppcastReleases(getBlob: BlobGetter = get): Promise<{ 
   }
 
   if (releases.length === 0) throw new NoReleaseError("No active release manifest is available");
-  return { manifests: releases, sourceEtag: `W/\"${encodeURIComponent(etags.join("|"))}\"` };
+  return { manifests: releases, sourceEtag: `W/"${encodeURIComponent(etags.join("|"))}"` };
 }

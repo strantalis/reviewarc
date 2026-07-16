@@ -6,6 +6,7 @@ framework="$app/Contents/Frameworks/Sparkle.framework"
 plist="$app/Contents/Info.plist"
 executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist")"
 binary="$app/Contents/MacOS/$executable"
+repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 
 [[ -d "$framework" ]] || {
   echo "Sparkle.framework is not embedded in $app" >&2
@@ -24,3 +25,4 @@ otool -l "$binary" | grep -A3 LC_RPATH | grep -E '@executable_path/\.\./Framewor
 
 codesign --verify --strict --verbose=2 "$framework"
 codesign --verify --deep --strict --verbose=2 "$app"
+"$repository_root/scripts/release/verify_legal_notices.sh" "$app"

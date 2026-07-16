@@ -6,8 +6,9 @@ Product documentation and signed release downloads are published at [reviewarc.d
 
 ## Prerequisites
 
-- Go 1.24 or newer
-- Node.js and npm
+- macOS with Xcode Command Line Tools (`xcode-select --install`)
+- Go 1.26.5 or newer
+- Node.js 24 and npm
 - `git`
 - GitHub CLI (`gh`), authenticated with `gh auth login`
 - For guided analysis, either Codex CLI (`codex`) or Claude Code (`claude`), installed and authenticated. A harness is optional for the inbox and existing reviews.
@@ -20,11 +21,17 @@ On macOS the default root is `~/Library/Application Support/ReviewArc`. Managed 
 
 ```sh
 cd frontend
-npm install
+npm ci
 npm run check
 cd ..
+export REVIEWARC_DATA_DIR="$(mktemp -d "${TMPDIR:-/tmp}/reviewarc-dev.XXXXXX")"
 go run github.com/wailsapp/wails/v2/cmd/wails@v2.13.0 dev
 ```
+
+The development data directory is isolated from normal ReviewArc state and is
+not removed automatically. Delete it after ReviewArc exits when it is no longer
+needed. See [the contribution guide](CONTRIBUTING.md) for all workspaces,
+validation commands, and generated-file rules.
 
 ## Build and test
 
@@ -36,7 +43,7 @@ go run github.com/wailsapp/wails/v2/cmd/wails@v2.13.0 build
 
 ## Signed macOS releases
 
-Tags such as `v0.1.0-beta.1` and `v1.0.0` start the same fail-closed macOS release workflow. Prerelease SemVer tags publish to the beta channel; plain SemVer tags publish to the stable channel. The workflow builds a universal app, applies release metadata, signs it with the LLC's Developer ID Application certificate, creates and signs a DMG, submits it to Apple for notarization, staples and verifies the ticket, then publishes the immutable DMG to Vercel Blob and GitHub Releases. The Vercel-hosted Astro site reads the promoted channel manifest dynamically, so publishing a release does not require a site deployment. If signing, notarization, Gatekeeper assessment, upload verification, or packaging fails, the release is not promoted.
+Tags such as `v0.1.0-beta.1` and `v1.0.0` start the same fail-closed macOS release workflow. Prerelease SemVer tags publish to the beta channel; plain SemVer tags publish to the stable channel. The workflow builds a universal app, applies release metadata, signs it with a Developer ID Application certificate, creates and signs a DMG, submits it to Apple for notarization, staples and verifies the ticket, then publishes the immutable DMG to Vercel Blob and GitHub Releases. The Vercel-hosted Astro site reads the promoted channel manifest dynamically, so publishing a release does not require a site deployment. If signing, notarization, Gatekeeper assessment, upload verification, or packaging fails, the release is not promoted.
 
 The protected `release` GitHub environment requires these variables:
 

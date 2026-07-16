@@ -14,11 +14,14 @@ build must:
 3. Run `build/darwin/updater/embed_sparkle.sh <ReviewArc.app>
    dist/sparkle/Sparkle.framework` before signing. The embed step also adds
    `@executable_path/../Frameworks` to the executable's runtime search paths;
-   it must therefore run before code signing.
+   it must therefore run before code signing. The same step verifies the
+   generated third-party notice inventory and installs it at
+   `Contents/Resources/ThirdPartyNotices.txt`.
 4. Run `build/darwin/updater/sign_sparkle.sh <ReviewArc.app> <identity>`, then
    sign the ReviewArc executable and outer app last. Do not use `codesign
    --deep` for signing.
-5. Run `build/darwin/updater/verify_sparkle.sh <ReviewArc.app>`.
+5. Run `build/darwin/updater/verify_sparkle.sh <ReviewArc.app>`. Verification
+   fails if the bundled third-party notices are missing, altered, or stale.
 
 The framework and release tools remain in `.deps/`, which is ignored. Preserve
 framework symlinks whenever the app bundle is copied or packaged.

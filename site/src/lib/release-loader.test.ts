@@ -37,6 +37,8 @@ const manifestFor = (channel: "stable" | "beta") => {
   };
 };
 
+type ManifestFixture = ReturnType<typeof manifestFor>;
+
 const blobResult = (body: unknown, overrides: Partial<GetBlobResult> = {}): GetBlobResult => {
   const text = typeof body === "string" ? body : JSON.stringify(body);
   return {
@@ -71,16 +73,16 @@ describe("release manifest validation", () => {
 
   it("keeps the download endpoint compatible with manifests published before Sparkle", () => {
     const legacy = manifestFor("stable");
-    delete (legacy.macOS as any).sparkle;
+    Reflect.deleteProperty(legacy.macOS, "sparkle");
     expect(parseReleaseManifest(legacy, "stable").version).toBe("1.2.3");
   });
 
   it.each([
-    ["wrong channel", (value: any) => { value.channel = "beta"; }],
-    ["tag mismatch", (value: any) => { value.git.tag = "v9.9.9"; }],
-    ["unsafe filename", (value: any) => { value.macOS.fileName = "../ReviewArc.dmg"; }],
-    ["noncanonical filename", (value: any) => { value.macOS.fileName = "ReviewArc-extra-1.2.3-macOS-universal.dmg"; }],
-    ["invalid numeric prerelease", (value: any) => {
+    ["wrong channel", (value: ManifestFixture) => { value.channel = "beta"; }],
+    ["tag mismatch", (value: ManifestFixture) => { value.git.tag = "v9.9.9"; }],
+    ["unsafe filename", (value: ManifestFixture) => { value.macOS.fileName = "../ReviewArc.dmg"; }],
+    ["noncanonical filename", (value: ManifestFixture) => { value.macOS.fileName = "ReviewArc-extra-1.2.3-macOS-universal.dmg"; }],
+    ["invalid numeric prerelease", (value: ManifestFixture) => {
       value.channel = "beta";
       value.version = "1.2.3-01";
       value.git.tag = "v1.2.3-01";
@@ -88,12 +90,12 @@ describe("release manifest validation", () => {
       value.macOS.downloadUrl = "https://reviewarc.public.blob.vercel-storage.com/releases/beta/v1.2.3-01/ReviewArc-1.2.3-01-macOS-universal.dmg";
       value.releaseNotesUrl = "https://github.com/strantalis/reviewarc/releases/tag/v1.2.3-01";
     }],
-    ["invalid hash", (value: any) => { value.macOS.sha256 = "nope"; }],
-    ["invalid Sparkle signature", (value: any) => { value.macOS.sparkle.edSignature = "nope"; }],
-    ["unstapled ticket", (value: any) => { value.macOS.ticketStapled = false; }],
-    ["untrusted download", (value: any) => { value.macOS.downloadUrl = "https://example.com/release.dmg"; }],
-    ["notes mismatch", (value: any) => { value.releaseNotesUrl = "https://github.com/strantalis/reviewarc/releases/tag/v9.9.9"; }],
-    ["extra data", (value: any) => { value.untrusted = true; }],
+    ["invalid hash", (value: ManifestFixture) => { value.macOS.sha256 = "nope"; }],
+    ["invalid Sparkle signature", (value: ManifestFixture) => { value.macOS.sparkle.edSignature = "nope"; }],
+    ["unstapled ticket", (value: ManifestFixture) => { value.macOS.ticketStapled = false; }],
+    ["untrusted download", (value: ManifestFixture) => { value.macOS.downloadUrl = "https://example.com/release.dmg"; }],
+    ["notes mismatch", (value: ManifestFixture) => { value.releaseNotesUrl = "https://github.com/strantalis/reviewarc/releases/tag/v9.9.9"; }],
+    ["extra data", (value: ManifestFixture) => { Object.assign(value, { untrusted: true }); }],
   ])("rejects %s", (_name, mutate) => {
     const value = structuredClone(manifestFor("stable"));
     mutate(value);
@@ -143,7 +145,7 @@ describe("appcast release loading", () => {
 
   it("fails closed when a release is not signed for Sparkle", async () => {
     const unsigned = manifestFor("stable");
-    delete (unsigned.macOS as any).sparkle;
+    Reflect.deleteProperty(unsigned.macOS, "sparkle");
     const getter = vi.fn<BlobGetter>().mockResolvedValueOnce(blobResult(unsigned));
 
     await expect(loadAppcastReleases(getter)).rejects.toBeInstanceOf(ReleaseSourceError);

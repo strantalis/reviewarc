@@ -4,7 +4,7 @@ ReviewArc releases are built from version tags by `.github/workflows/release.yml
 
 ## Apple Developer inputs
 
-Prepare these items in the LLC's Apple Developer team. Do not paste private keys, certificate archives, passwords, or tokens into an issue, commit, or chat.
+Prepare these items in the Apple Developer team used to publish ReviewArc. Do not paste private keys, certificate archives, passwords, or tokens into an issue, commit, or chat.
 
 1. Use the stable bundle identifier `com.silkcitylabs.reviewarc`. This is the `APPLE_BUNDLE_ID` GitHub environment variable and must not change after distribution begins.
 2. Copy the 10-character Apple Developer Team ID. This is the `APPLE_TEAM_ID` environment variable.
@@ -16,7 +16,7 @@ Prepare these items in the LLC's Apple Developer team. Do not paste private keys
    security find-identity -v -p codesigning
    ```
 
-   The identity should look like `Developer ID Application: Legal LLC Name (TEAMID)`.
+   The identity should look like `Developer ID Application: Certificate Holder Name (TEAMID)`.
 
 The DMG workflow does not need a Developer ID Installer certificate or a Mac App Store provisioning profile.
 
@@ -60,7 +60,7 @@ ReviewArc uses Sparkle's Ed25519 signature in addition to Apple code signing and
 base64 -i /secure/path/reviewarc-sparkle-private-key | gh secret set SPARKLE_ED25519_PRIVATE_KEY_BASE64 --env release --repo strantalis/reviewarc
 ```
 
-Copy the public value printed by `generate_keys` to the protected environment variable `SPARKLE_PUBLIC_ED_KEY`. Back up the exported private key in the LLC's credential vault; losing it requires a carefully staged key rotation.
+Copy the public value printed by `generate_keys` to the protected environment variable `SPARKLE_PUBLIC_ED_KEY`. Back up the exported private key in a secure credential vault; losing it requires a carefully staged key rotation.
 
 The workflow downloads Sparkle 2.9.2 from its official GitHub release and verifies SHA-256 `1cb340cbbef04c6c0d162078610c25e2221031d794a3449d89f2f56f4df77c95` before using either the framework or `sign_update`. Update the version, URL, and checksum together in `build/darwin/updater/sparkle.env`; both developer and release fetchers read that file.
 
@@ -77,6 +77,7 @@ The updater reads `/api/appcast.xml`. That feed validates both current channel m
 - the monotonic GitHub run number as `sparkle:version`;
 - the full SemVer, including any prerelease suffix, as `sparkle:shortVersionString`;
 - the DMG byte length and Sparkle Ed25519 signature;
+- the complete third-party notice inventory bundled in the signed app;
 - stable releases on Sparkle's default channel;
 - beta releases on the `beta` Sparkle channel.
 

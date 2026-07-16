@@ -1,0 +1,10 @@
+# Sean is the final reviewer for all changes while ReviewArc has one maintainer.
+* @strantalis
+
+# Security- and release-sensitive paths are listed explicitly for visibility.
+/.github/ @strantalis
+/build/darwin/ @strantalis
+/scripts/release/ @strantalis
+/internal/update/ @strantalis
+/native_ui_darwin.m @strantalis
+/software_update*.go @strantalis

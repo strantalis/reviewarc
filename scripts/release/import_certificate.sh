@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+: "${APPLE_DEVELOPER_ID_P12_BASE64:?APPLE_DEVELOPER_ID_P12_BASE64 is required}"
+: "${APPLE_DEVELOPER_ID_P12_PASSWORD:?APPLE_DEVELOPER_ID_P12_PASSWORD is required}"
+
 signing_dir="${RUNNER_TEMP:?}/reviewarc-signing"
 keychain="$signing_dir/reviewarc.keychain-db"
 certificate="$signing_dir/developer-id.p12"
