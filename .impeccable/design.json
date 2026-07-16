@@ -1,0 +1,178 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-16T14:58:11Z",
+  "title": "Design System: ReviewArc",
+  "extensions": {
+    "colorMeta": {
+      "accent": {
+        "role": "primary",
+        "displayName": "Review Indigo",
+        "canonical": "oklch(0.55 0.19 265)",
+        "tonalRamp": ["oklch(0.15 0.08 265)", "oklch(0.25 0.12 265)", "oklch(0.35 0.16 265)", "oklch(0.45 0.19 265)", "oklch(0.55 0.19 265)", "oklch(0.68 0.15 265)", "oklch(0.82 0.09 265)", "oklch(0.95 0.03 265)"]
+      },
+      "cyan": {
+        "role": "secondary",
+        "displayName": "Arc Cyan",
+        "canonical": "oklch(0.67 0.13 215)",
+        "tonalRamp": ["oklch(0.15 0.05 215)", "oklch(0.25 0.08 215)", "oklch(0.35 0.1 215)", "oklch(0.48 0.12 215)", "oklch(0.67 0.13 215)", "oklch(0.76 0.1 215)", "oklch(0.86 0.07 215)", "oklch(0.95 0.03 215)"]
+      },
+      "canvas": {
+        "role": "neutral",
+        "displayName": "Paper Canvas",
+        "canonical": "oklch(0.975 0.006 260)",
+        "tonalRamp": ["oklch(0.15 0.02 260)", "oklch(0.25 0.02 260)", "oklch(0.35 0.018 260)", "oklch(0.48 0.015 260)", "oklch(0.62 0.012 260)", "oklch(0.75 0.01 260)", "oklch(0.87 0.008 260)", "oklch(0.975 0.006 260)"]
+      },
+      "green": {
+        "role": "tertiary",
+        "displayName": "Verified Green",
+        "canonical": "oklch(0.55 0.15 158)",
+        "tonalRamp": ["oklch(0.15 0.05 158)", "oklch(0.25 0.08 158)", "oklch(0.35 0.11 158)", "oklch(0.45 0.14 158)", "oklch(0.55 0.15 158)", "oklch(0.7 0.12 158)", "oklch(0.83 0.08 158)", "oklch(0.95 0.035 158)"]
+      },
+      "amber": {
+        "role": "tertiary",
+        "displayName": "Caution Amber",
+        "canonical": "oklch(0.65 0.15 78)",
+        "tonalRamp": ["oklch(0.15 0.05 78)", "oklch(0.25 0.08 78)", "oklch(0.35 0.11 78)", "oklch(0.48 0.14 78)", "oklch(0.65 0.15 78)", "oklch(0.75 0.12 78)", "oklch(0.85 0.08 78)", "oklch(0.95 0.04 78)"]
+      },
+      "red": {
+        "role": "tertiary",
+        "displayName": "Decision Red",
+        "canonical": "oklch(0.56 0.2 28)",
+        "tonalRamp": ["oklch(0.15 0.07 28)", "oklch(0.25 0.11 28)", "oklch(0.35 0.15 28)", "oklch(0.46 0.18 28)", "oklch(0.56 0.2 28)", "oklch(0.7 0.16 28)", "oklch(0.84 0.09 28)", "oklch(0.95 0.04 28)"]
+      }
+    },
+    "typographyMeta": {
+      "marketing-display": {"displayName": "Marketing Display", "purpose": "Public-site hero statements only."},
+      "desktop-display": {"displayName": "Desktop Display", "purpose": "Onboarding and rare empty-workspace orientation."},
+      "heading": {"displayName": "Heading", "purpose": "Pull-request identity and major page headings."},
+      "subheading": {"displayName": "Subheading", "purpose": "Dialogs, panels, and section titles."},
+      "body": {"displayName": "Body", "purpose": "Explanations and sustained reading."},
+      "ui": {"displayName": "UI", "purpose": "Controls and compact application copy."},
+      "caption": {"displayName": "Caption", "purpose": "Passive metadata and compact labels."},
+      "code": {"displayName": "Code", "purpose": "Code, paths, revisions, and provenance."}
+    },
+    "shadows": [
+      {"name": "control-lift", "value": "0 1px 2px var(--shadow)", "purpose": "Rare low elevation for compact floating controls."},
+      {"name": "menu-lift", "value": "0 6px 8px var(--shadow)", "purpose": "Select menus and short-lived dropdowns."},
+      {"name": "panel-edge", "value": "0 0 8px var(--shadow)", "purpose": "Open side panels overlapping the review workspace."},
+      {"name": "modal-lift", "value": "0 24px 70px var(--shadow-strong)", "purpose": "Confirmation dialogs, command palette, and review summary."}
+    ],
+    "motion": [
+      {"name": "state-transition", "value": "160ms ease", "purpose": "Compact hover, color, and control feedback."},
+      {"name": "site-ease-out", "value": "cubic-bezier(.22, 1, .36, 1)", "purpose": "Public-site button and control movement."},
+      {"name": "reduced-motion", "value": ".01ms", "purpose": "Collapses animation and transition duration when reduced motion is requested."}
+    ],
+    "breakpoints": [
+      {"name": "compact", "value": "520px"},
+      {"name": "narrow", "value": "760px"},
+      {"name": "stacked", "value": "1040px"},
+      {"name": "workspace", "value": "1180px"}
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single primary action in a local decision area.",
+      "html": "<button class=\"ds-button ds-button-primary\">Continue review</button>",
+      "css": ".ds-button{height:38px;padding:0 15px;border:0;border-radius:7px;font:600 .875rem/1.4 ui-sans-serif,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;cursor:pointer;transition:background-color 160ms,color 160ms,transform 160ms}.ds-button-primary{color:var(--on-accent,oklch(.985 .005 260));background:var(--accent,oklch(.55 .19 265))}.ds-button-primary:hover{background:var(--accent-dark,oklch(.42 .17 265))}.ds-button:focus-visible{outline:2px solid var(--accent,oklch(.55 .19 265));outline-offset:2px}.ds-button:active{transform:translateY(1px)}.ds-button:disabled{opacity:.5;cursor:not-allowed}"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "A reversible supporting action that stays subordinate to the primary decision.",
+      "html": "<button class=\"ds-button ds-button-secondary\">Keep editing</button>",
+      "css": ".ds-button{height:38px;padding:0 15px;border-radius:7px;font:600 .875rem/1.4 ui-sans-serif,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;cursor:pointer;transition:background-color 160ms,border-color 160ms,transform 160ms}.ds-button-secondary{color:var(--ink,oklch(.23 .035 265));background:var(--surface,oklch(.995 .003 260));border:1px solid var(--line-strong,oklch(.78 .032 260))}.ds-button-secondary:hover{background:var(--panel,oklch(.955 .012 260));border-color:var(--subtle,oklch(.52 .025 265))}.ds-button:focus-visible{outline:2px solid var(--accent,oklch(.55 .19 265));outline-offset:2px}.ds-button:active{transform:translateY(1px)}.ds-button:disabled{opacity:.5;cursor:not-allowed}"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "An explicit destructive or externally consequential action.",
+      "html": "<button class=\"ds-button ds-button-danger\">Request changes</button>",
+      "css": ".ds-button{height:38px;padding:0 15px;border:0;border-radius:7px;font:600 .875rem/1.4 ui-sans-serif,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;cursor:pointer;transition:background-color 160ms,transform 160ms}.ds-button-danger{color:var(--on-accent,oklch(.985 .005 260));background:var(--red,oklch(.56 .2 28))}.ds-button-danger:hover{background:var(--red-dark,oklch(.46 .18 28))}.ds-button:focus-visible{outline:2px solid var(--accent,oklch(.55 .19 265));outline-offset:2px}.ds-button:active{transform:translateY(1px)}.ds-button:disabled{opacity:.5;cursor:not-allowed}"
+    },
+    {
+      "name": "Repository Search",
+      "kind": "input",
+      "refersTo": "search-field",
+      "description": "A compact technical search field for repositories and pull requests.",
+      "html": "<label class=\"ds-search\"><svg aria-hidden=\"true\" width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><circle cx=\"11\" cy=\"11\" r=\"8\"/><path d=\"m21 21-4.3-4.3\"/></svg><input aria-label=\"Search pull requests\" placeholder=\"Search pull requests\" /></label>",
+      "css": ".ds-search{height:38px;display:flex;align-items:center;gap:8px;padding:0 11px;color:var(--muted,oklch(.43 .03 265));background:var(--surface,oklch(.995 .003 260));border:1px solid var(--line-strong,oklch(.78 .032 260));border-radius:7px}.ds-search:focus-within{outline:2px solid var(--accent,oklch(.55 .19 265));outline-offset:2px}.ds-search input{min-width:260px;border:0;outline:0;color:var(--ink,oklch(.23 .035 265));background:transparent;font:400 .8125rem/1.4 ui-sans-serif,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif}.ds-search input::placeholder{color:var(--muted,oklch(.43 .03 265))}"
+    },
+    {
+      "name": "Validated Status Badge",
+      "kind": "chip",
+      "refersTo": "status-badge",
+      "description": "A semantic state label pairing color with an icon and explicit text.",
+      "html": "<span class=\"ds-badge ds-badge-valid\"><svg aria-hidden=\"true\" width=\"12\" height=\"12\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.5\"><path d=\"m5 12 4 4L19 6\"/></svg>Validated</span>",
+      "css": ".ds-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 7px;border-radius:999px;font:700 .75rem/1.4 ui-sans-serif,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;white-space:nowrap}.ds-badge-valid{color:var(--green-ink,oklch(.4 .12 158));background:var(--green-soft,oklch(.94 .045 158))}"
+    },
+    {
+      "name": "Evidence Surface",
+      "kind": "card",
+      "refersTo": "evidence-surface",
+      "description": "A claim kept visually connected to its source path and validation state.",
+      "html": "<article class=\"ds-evidence\"><header><code>internal/github/client.go</code><strong>Validated</strong></header><p>The response is checked against the pinned head revision.</p><footer><span>HEAD · L118–132</span><button>Open code</button></footer></article>",
+      "css": ".ds-evidence{width:min(420px,100%);overflow:hidden;color:var(--ink,oklch(.23 .035 265));background:var(--code-surface,oklch(.965 .009 265));border:1px solid var(--line,oklch(.88 .018 260));border-radius:8px;font:400 .875rem/1.6 ui-sans-serif,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif}.ds-evidence header,.ds-evidence footer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;background:var(--panel,oklch(.955 .012 260))}.ds-evidence header{border-bottom:1px solid var(--line,oklch(.88 .018 260))}.ds-evidence footer{border-top:1px solid var(--line,oklch(.88 .018 260));color:var(--muted,oklch(.43 .03 265));font-size:.75rem}.ds-evidence code{font:400 .8125rem/1.55 \"SFMono-Regular\",Menlo,Consolas,monospace}.ds-evidence strong{color:var(--green-ink,oklch(.4 .12 158));font-size:.75rem}.ds-evidence p{margin:0;padding:16px}.ds-evidence button{padding:4px 8px;border:0;border-radius:5px;color:var(--accent-dark,oklch(.42 .17 265));background:transparent;font:600 .75rem/1.4 ui-sans-serif,-apple-system,sans-serif;cursor:pointer}.ds-evidence button:hover{background:var(--accent-soft,oklch(.94 .035 265))}.ds-evidence button:focus-visible{outline:2px solid var(--accent,oklch(.55 .19 265));outline-offset:2px}"
+    },
+    {
+      "name": "Review Navigation",
+      "kind": "nav",
+      "refersTo": "navigation",
+      "description": "Stable desktop navigation with a restrained active underline.",
+      "html": "<nav class=\"ds-nav\" aria-label=\"ReviewArc\"><button>Inbox</button><button class=\"is-active\" aria-current=\"page\">Review</button><button>Settings</button></nav>",
+      "css": ".ds-nav{height:60px;display:flex;align-items:stretch;gap:3px;padding:0 12px;border-bottom:1px solid var(--line,oklch(.88 .018 260));background:var(--surface,oklch(.995 .003 260))}.ds-nav button{position:relative;padding:0 12px;border:0;color:var(--muted,oklch(.43 .03 265));background:transparent;font:600 .8125rem/1.4 ui-sans-serif,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;cursor:pointer}.ds-nav button:hover{color:var(--ink,oklch(.23 .035 265));background:var(--panel,oklch(.955 .012 260))}.ds-nav button.is-active{color:var(--accent-dark,oklch(.42 .17 265))}.ds-nav button.is-active::after{content:\"\";position:absolute;inset:auto 10px 0;height:2px;background:var(--accent,oklch(.55 .19 265))}.ds-nav button:focus-visible{outline:2px solid var(--accent,oklch(.55 .19 265));outline-offset:-4px}"
+    },
+    {
+      "name": "Publish Confirmation",
+      "kind": "custom",
+      "refersTo": "dialog",
+      "description": "A lifted confirmation boundary for externally visible GitHub actions.",
+      "html": "<section class=\"ds-dialog\" role=\"dialog\" aria-labelledby=\"ds-dialog-title\"><header><div><strong id=\"ds-dialog-title\">Publish review?</strong><p>This review will be externally visible on GitHub.</p></div></header><div class=\"ds-dialog-target\"><span>reviewarc/reviewarc #42</span><strong>Comment</strong></div><footer><button class=\"ds-cancel\">Keep editing</button><button class=\"ds-confirm\">Confirm publish</button></footer></section>",
+      "css": ".ds-dialog{width:min(620px,100%);overflow:hidden;border-radius:10px;color:var(--ink,oklch(.23 .035 265));background:var(--surface,oklch(.995 .003 260));box-shadow:0 24px 70px var(--shadow-strong,oklch(.18 .035 265/.28));font:400 .875rem/1.4 ui-sans-serif,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif}.ds-dialog header{padding:24px;border-bottom:1px solid var(--line,oklch(.88 .018 260))}.ds-dialog header p{margin:4px 0 0;color:var(--muted,oklch(.43 .03 265));line-height:1.6}.ds-dialog-target{display:flex;justify-content:space-between;gap:12px;padding:12px 24px;background:var(--panel,oklch(.955 .012 260));font-size:.8125rem}.ds-dialog footer{display:flex;justify-content:flex-end;gap:8px;padding:16px 24px;border-top:1px solid var(--line,oklch(.88 .018 260))}.ds-dialog button{height:38px;padding:0 15px;border-radius:7px;font:600 .875rem/1.4 ui-sans-serif,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;cursor:pointer}.ds-cancel{color:var(--ink,oklch(.23 .035 265));background:var(--surface,oklch(.995 .003 260));border:1px solid var(--line-strong,oklch(.78 .032 260))}.ds-confirm{color:var(--on-accent,oklch(.985 .005 260));background:var(--red,oklch(.56 .2 28));border:0}.ds-cancel:hover{background:var(--panel,oklch(.955 .012 260))}.ds-confirm:hover{background:var(--red-dark,oklch(.46 .18 28))}.ds-dialog button:focus-visible{outline:2px solid var(--accent,oklch(.55 .19 265));outline-offset:2px}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Evidence Desk",
+    "overview": "ReviewArc is a focused technical workbench where every conclusion has a visible path back to evidence. Its cool ink-and-paper foundation feels calm during long review sessions, while the indigo-to-cyan arc accent supplies orientation and identity without becoming decoration. The desktop app is compact and information-dense; the public site can breathe more but must demonstrate the same evidence-first posture.",
+    "keyCharacteristics": [
+      "Cool ink-and-paper surfaces with a restrained indigo-to-cyan identity.",
+      "Dense, stable review geometry with progressive disclosure rather than nested cards.",
+      "Evidence and code rendered as first-class reading material.",
+      "Semantic state communicated with color, iconography, and direct language.",
+      "Flat-by-default surfaces; elevation reserved for temporary overlays and focus.",
+      "Compact, purposeful motion with a complete reduced-motion fallback."
+    ],
+    "rules": [
+      {"name": "The Semantic Scarcity Rule", "body": "Green, amber, and red are state, not decoration. If a semantic color does not clarify risk, validity, warning, failure, or consequence, use a neutral.", "section": "colors"},
+      {"name": "The One Primary Voice Rule", "body": "Indigo owns primary action and active orientation. Cyan supports the arc identity; it must not create a second competing call to action.", "section": "colors"},
+      {"name": "The Reading Floor Rule", "body": "Do not compress essential body copy below the UI size or essential controls below the caption size. Dense means less repetition and better hierarchy, not smaller text.", "section": "typography"},
+      {"name": "The Evidence Type Rule", "body": "Monospace identifies code, paths, revisions, and machine-derived provenance. It is not a decorative substitute for hierarchy.", "section": "typography"},
+      {"name": "The Flat-by-Default Rule", "body": "Permanent content surfaces use tone and one-pixel rules. If a resting page needs a large shadow to make its hierarchy legible, the hierarchy is wrong.", "section": "elevation"},
+      {"name": "The Consequence Lift Rule", "body": "Strong elevation is reserved for a temporary choice or external consequence. It must never make routine cards look equally urgent.", "section": "elevation"}
+    ],
+    "dos": [
+      "Do lead from a claim to its real path, revision, and line range.",
+      "Do use the 4/8/12/16/24/32px spacing scale and stable panel geometry to create dense, scannable layouts.",
+      "Do pair semantic color with text and icons, including explicit labels for stale, unverified, failed, and externally visible states.",
+      "Do keep surfaces flat until a menu, panel, or consequential dialog temporarily rises above the workspace.",
+      "Do preserve the same review arc from inbox through overview, chapters, evidence, drafts, and deliberate decision.",
+      "Do support light, dark, system, keyboard, coarse-pointer, and reduced-motion behavior in every new pattern.",
+      "Do give interactive components consistent default, hover, focus, active, disabled, loading, and error states."
+    ],
+    "donts": [
+      "Don't build generic SaaS dashboards or card soup that flatten every piece of information into an equal container.",
+      "Don't design an AI review autopilot that replaces reviewer judgment or implies approval can be delegated to a model.",
+      "Don't use glossy, neon, glassy, or playful treatments; gradients and glow are not substitutes for ReviewArc's arc identity.",
+      "Don't present black-box confidence, hide uncertainty, or style unsupported claims like verified facts.",
+      "Don't use over-spacious marketing layouts or compressed microtype; remove repetition before reducing readable type.",
+      "Don't add decorative motion, gamification, confetti, or celebration around routine or consequential review actions.",
+      "Don't use green, amber, or red as decoration, or make state distinguishable by color alone.",
+      "Don't stack rounded surfaces, add permanent dashboard shadows, or introduce ornamental side stripes to manufacture hierarchy.",
+      "Don't use a modal as the first solution; reserve it for focused choices and consequential confirmation after inline or progressive alternatives are exhausted."
+    ]
+  }
+}

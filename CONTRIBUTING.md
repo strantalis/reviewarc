@@ -76,10 +76,16 @@ npm --prefix site run dev
 - `build/darwin/`: macOS metadata and pinned Sparkle integration.
 - `scripts/release/`: deterministic signing, notarization, packaging, and
   publication tooling.
-- `docs/`: architecture, security, managed-cache, release, and historical
-  product specifications.
+- `.agents/context/`: canonical public product and design context for humans
+  and AI-assisted development.
+- `.impeccable/design.json`: generated Impeccable design metadata; update it
+  together with `.agents/context/DESIGN.md`.
+- `docs/`: architecture, security, managed-cache, release, and current product
+  documentation.
 
-Read [the architecture overview](docs/architecture.md),
+Read [the product context](.agents/context/PRODUCT.md),
+[design system](.agents/context/DESIGN.md),
+[architecture overview](docs/architecture.md),
 [security model](docs/security-model.md), and
 [managed repository cache](docs/managed-repository-cache.md) before changing a
 trust boundary or data flow. Release changes also require
@@ -110,6 +116,8 @@ Codex context boundary. State which optional checks ran in the pull request.
 - Do not hand-edit `THIRD_PARTY_NOTICES.txt`. Fetch the pinned Sparkle archive,
   then run `node scripts/release/generate_third_party_notices.mjs` and commit the
   generated notice file.
+- Keep `.impeccable/critique/` local. Convert actionable design findings into
+  scoped GitHub issues instead of committing generated critique snapshots.
 - Update `package-lock.json` files with npm, not by editing them directly.
 - Treat committed SQLite migrations as append-only. Add a new numbered
   migration rather than changing a migration that may already have run.
