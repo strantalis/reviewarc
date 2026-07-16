@@ -113,13 +113,13 @@ export interface SoftwareUpdateStatus {
 export interface BootstrapState { dependencies: DependencyStatus[]; paths: AppPaths; account?: GitHubUser; gitProtocol?: 'ssh' | 'https'; selections: SourceSelection[]; inbox: PullRequestSummary[]; environmentCached?: boolean }
 export interface SourceCatalog { organizations: Organization[]; repositories: Repository[]; selections?: SourceSelection[] }
 export interface SessionDetail { session: ReviewSession; files: ChangedFile[]; diffs?: DiffFile[] }
-export interface OperationEvent { stage: string; message: string; progress?: number; status?: 'running' | 'complete' | 'failed' }
+export interface OperationEvent { stage: string; message: string; progress?: number; status?: 'running' | 'complete' | 'failed'; updatedAt?: string }
 export interface AccountState { status: string; user?: GitHubUser; message?: string }
 export interface SourceState extends SourceCatalog {}
 export interface RepositoryPage { items: Repository[]; totalCount: number; endCursor?: string; hasNextPage: boolean; cached: boolean }
 export interface SelectedRepositoryRefresh { repositories: Repository[]; archivedKeys: string[]; errors: Record<string, string> }
 export interface InboxResult { items: PullRequestSummary[]; errors?: Record<string, string>; partial?: boolean }
-export interface Operation { id: string; sessionId?: string; kind: string; stage: string; message: string; state: string; progress?: number; runId?: string; failure?: AnalysisFailure }
+export interface Operation { id: string; sessionId?: string; kind: string; stage: string; message: string; state: string; progress?: number; runId?: string; failure?: AnalysisFailure; updatedAt?: string }
 export interface OperationSnapshot { operation: Operation; events: Operation[] }
 export interface PublishItem { draftId: string; kind: 'general' | 'inline'; body: string; path?: string; startLine?: number; startSide?: 'LEFT' | 'RIGHT'; line?: number; side?: 'LEFT' | 'RIGHT' }
 export type ReviewEvent = 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES'

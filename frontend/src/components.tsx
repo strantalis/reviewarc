@@ -1,6 +1,6 @@
 import { useRef, type ReactNode } from 'react'
 import * as RadixSelect from '@radix-ui/react-select'
-import { AlertTriangle, Check, ChevronDown, Circle, Clock3, LoaderCircle, Minus, Plus, ShieldAlert, Sparkles, X } from 'lucide-react'
+import { AlertTriangle, Check, ChevronDown, Circle, Clock3, Minus, Plus, ShieldAlert, Sparkles, X } from 'lucide-react'
 import { Quit, WindowMinimise, WindowToggleMaximise } from '../wailsjs/runtime/runtime'
 import type { AnalysisStatus, ChapterStatus, DependencyStatus, RiskLevel } from './types'
 import { analysisLabel, chapterStatusLabel, riskLabel } from './lib'
@@ -52,8 +52,8 @@ export function StatusDot({status}: {status: ChapterStatus}) {
 
 export function RiskBadge({level}: {level: RiskLevel}) { return <span className={`badge risk-${level}`}><ShieldAlert size={12}/>{riskLabel(level)}</span> }
 export function AnalysisBadge({status}: {status: AnalysisStatus}) {
-  const Icon = status === 'running' ? LoaderCircle : status === 'ready' ? Sparkles : status === 'failed' || status === 'stale' ? AlertTriangle : Circle
-  return <span className={`badge analysis-${status}`}><Icon className={status === 'running' ? 'spin' : ''} size={12}/>{analysisLabel(status)}</span>
+  const Icon = status === 'running' ? Clock3 : status === 'ready' ? Sparkles : status === 'failed' || status === 'stale' ? AlertTriangle : Circle
+  return <span className={`badge analysis-${status}`}><Icon size={12}/>{analysisLabel(status)}</span>
 }
 
 export function DependencyPills({dependencies}: {dependencies: DependencyStatus[]}) {

@@ -78,6 +78,7 @@ type Operation struct {
 	Progress  *float64                `json:"progress,omitempty"`
 	RunID     string                  `json:"runId,omitempty"`
 	Failure   *domain.AnalysisFailure `json:"failure,omitempty"`
+	UpdatedAt time.Time               `json:"updatedAt"`
 }
 type OperationSnapshot struct {
 	Operation Operation   `json:"operation"`
@@ -930,7 +931,7 @@ func (a *App) startAnalysis(sessionID string, request AnalysisRequest) (Operatio
 		}
 	}
 	runID := newID()
-	op := Operation{ID: newID(), SessionID: sessionID, RunID: runID, Kind: "analysis", Stage: "loadingPullRequestContext", State: "running", Message: "Loading GitHub discussion and checks"}
+	op := Operation{ID: newID(), SessionID: sessionID, RunID: runID, Kind: "analysis", Stage: "loadingPullRequestContext", State: "running", Message: "Loading GitHub discussion and checks", UpdatedAt: time.Now().UTC()}
 	ctx, cancel := context.WithCancel(a.appContext())
 	a.mu.Lock()
 	if _, exists := a.analysisBySession[sessionID]; exists {
@@ -1473,6 +1474,7 @@ func persistenceFailure(err error) domain.AnalysisFailure {
 
 func ptrAnalysisFailure(failure domain.AnalysisFailure) *domain.AnalysisFailure { return &failure }
 func (a *App) emitOperation(op Operation) {
+	op.UpdatedAt = time.Now().UTC()
 	a.mu.Lock()
 	if a.operationHistory == nil {
 		a.operationHistory = map[string][]Operation{}
@@ -1487,7 +1489,7 @@ func (a *App) emitOperation(op Operation) {
 		a.operationHistory[op.ID] = history
 	}
 	a.mu.Unlock()
-	_ = a.store.SaveOperation(a.appContext(), persistence.Operation{ID: op.ID, Kind: op.Kind, Subject: op.SessionID, Status: op.State, Detail: op.Message, UpdatedAt: time.Now().UTC()})
+	_ = a.store.SaveOperation(a.appContext(), persistence.Operation{ID: op.ID, Kind: op.Kind, Subject: op.SessionID, Status: op.State, Detail: op.Message, UpdatedAt: op.UpdatedAt})
 	if a.ctx != nil {
 		runtime.EventsEmit(a.appContext(), "reviewarc:operation:v1", op)
 	}

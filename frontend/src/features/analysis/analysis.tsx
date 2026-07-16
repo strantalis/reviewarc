@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, Check, CircleHelp, LoaderCircle, RefreshCw, Settings, ShieldCheck, Sparkles, X } from 'lucide-react'
+import { AlertTriangle, Check, CircleHelp, Clock3, LoaderCircle, RefreshCw, Settings, ShieldCheck, Sparkles, X } from 'lucide-react'
 import { SelectControl } from '../../components'
 import type {
   AnalysisConfiguration, AnalysisFailure, AnalysisProfile, AnalysisRun, DependencyStatus,
@@ -95,7 +95,22 @@ const stageCopy: Record<string, {label: string; detail: string}> = {
   cancelled: {label: 'Analysis canceled', detail: 'No repository files were changed.'},
 }
 
+function durationLabel(milliseconds: number) {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000))
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  const remainder = seconds % 60
+  return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`
+}
+
 export function AnalysisProgress({events, running, reanalysis = false, onCancel}: {events: OperationEvent[]; running: boolean; reanalysis?: boolean; onCancel: () => void}) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!running) return
+    setNow(Date.now())
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [running])
   const current = events.at(-1)
   const currentCopy = current ? (stageCopy[current.stage] ?? {label: 'Analysis in progress', detail: 'ReviewArc is processing the change.'}) : undefined
   const liveStatus = current && currentCopy ? `${currentCopy.label}: ${current.message || currentCopy.detail}` : 'Starting analysis'
@@ -106,9 +121,22 @@ export function AnalysisProgress({events, running, reanalysis = false, onCancel}
     else result.push({event, copy})
     return result
   }, [])
+  const startedAt = events.find((event) => event.updatedAt)?.updatedAt
+  const lastActivityAt = current?.updatedAt
+  const startedTime = startedAt ? Date.parse(startedAt) : Number.NaN
+  const lastActivityTime = lastActivityAt ? Date.parse(lastActivityAt) : Number.NaN
+  const elapsed = Number.isFinite(startedTime) ? Math.max(0, now - startedTime) : undefined
+  const quietFor = Number.isFinite(lastActivityTime) ? Math.max(0, now - lastActivityTime) : undefined
+  const timing = elapsed == null || quietFor == null ? '' : `Running ${durationLabel(elapsed)} · ${quietFor < 5000 ? 'Activity just now' : `Last activity ${durationLabel(quietFor)} ago`}`
+  const quietMessage = quietFor != null && quietFor >= 120000
+    ? `No new observable activity for ${durationLabel(quietFor)}. The harness is still running; cancel and retry if this appears stuck.`
+    : quietFor != null && quietFor >= 30000
+      ? `No new observable activity for ${durationLabel(quietFor)}. The harness is still running; models can be quiet while reasoning or composing a response.`
+      : ''
   return <div className="analysis-events" aria-busy={running}>
     <div className="event-heading"><strong>{running ? (reanalysis ? 'Reanalysis progress' : 'Analysis progress') : 'What happens next'}</strong>{running && <button className="button text small" onClick={onCancel}>Cancel</button>}</div>
     <div className="analysis-live-status" role="status" aria-live="polite">{running ? liveStatus : 'Ready to analyze'}</div>
+    {running && timing && <div className="event-timing"><Clock3 size={13}/><span>{timing}</span></div>}
     {!steps.length ? <div className="event-placeholder"><CircleHelp size={17}/><p>{running ? 'Preparing the read-only analysis context…' : 'ReviewArc prepares a bounded context, validates the structured result, checks evidence, and saves the guided review.'}</p></div> : <ol className="event-list">{steps.map(({event, copy}, index) => {
       const currentStep = index === steps.length - 1
       const status = event.status === 'failed' ? 'failed' : currentStep && running && event.status !== 'complete' ? 'running' : 'complete'
@@ -118,6 +146,7 @@ export function AnalysisProgress({events, running, reanalysis = false, onCancel}
       const secondary = status === 'running' ? (distinctActivity ? copy.label : copy.detail) : activity || copy.detail
       return <li className={`event-row ${status}`} key={copy.label}><span className={status}>{status === 'complete' ? <Check size={13}/> : status === 'failed' ? <X size={13}/> : <LoaderCircle className="spin" size={13}/>}</span><div><strong>{primary}</strong>{secondary !== primary && <small>{secondary}</small>}</div>{status === 'running' && event.progress != null && <em role="progressbar" aria-label={copy.label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(event.progress)}>{Math.round(event.progress)}%</em>}</li>
     })}</ol>}
+    {running && quietMessage && <p className="event-quiet-note">{quietMessage}</p>}
   </div>
 }
 

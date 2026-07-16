@@ -853,8 +853,11 @@ func TestActiveAnalysisOperationRestoresHistoryAndCancelIdentity(t *testing.T) {
 	app.emitOperation(second)
 
 	snapshot, err := app.GetActiveAnalysisOperation("session-1")
-	if err != nil || snapshot == nil || snapshot.Operation != second || len(snapshot.Events) != 2 || snapshot.Events[0] != first {
+	if err != nil || snapshot == nil || snapshot.Operation.Stage != second.Stage || snapshot.Operation.Message != second.Message || len(snapshot.Events) != 2 || snapshot.Events[0].Stage != first.Stage {
 		t.Fatalf("snapshot=%+v err=%v", snapshot, err)
+	}
+	if snapshot.Events[0].UpdatedAt.IsZero() || snapshot.Events[1].UpdatedAt.IsZero() || snapshot.Events[1].UpdatedAt.Before(snapshot.Events[0].UpdatedAt) {
+		t.Fatalf("operation history is not timestamped in order: %+v", snapshot.Events)
 	}
 	if err := app.CancelOperation(snapshot.Operation.ID); err != nil || !cancelled {
 		t.Fatalf("cancelled=%t err=%v", cancelled, err)

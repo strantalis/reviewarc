@@ -90,6 +90,34 @@ describe('analysis configuration components', () => {
     expect(screen.getByText('Reading src/greet.go lines 10–24', {selector: 'strong'})).toBeInTheDocument()
   })
 
+  it('shows elapsed and last-activity timing without inventing progress events', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-15T12:02:05Z'))
+    try {
+      render(<AnalysisProgress running events={[
+        {stage: 'preparingContext', message: 'Preparing bounded review context', status: 'running', updatedAt: '2026-07-15T12:01:00Z'},
+        {stage: 'runningCodex', message: 'Reading src/greet.go lines 10–24', status: 'running', updatedAt: '2026-07-15T12:01:34Z'},
+      ]} onCancel={vi.fn()}/>)
+      expect(screen.getByText('Running 1m 5s · Last activity 31s ago')).toBeInTheDocument()
+      expect(screen.getByText(/No new observable activity for 31s/)).toHaveTextContent('models can be quiet while reasoning or composing a response')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('offers recovery when the harness has been quiet for two minutes', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-15T12:03:01Z'))
+    try {
+      render(<AnalysisProgress running events={[
+        {stage: 'runningCodex', message: 'Reading src/greet.go lines 10–24', status: 'running', updatedAt: '2026-07-15T12:01:00Z'},
+      ]} onCancel={vi.fn()}/>)
+      expect(screen.getByText(/No new observable activity for 2m 1s/)).toHaveTextContent('cancel and retry if this appears stuck')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('explains the current phase when no concrete model activity is available', () => {
     render(<AnalysisProgress running events={[{stage: 'validatingOutput', message: 'Validating structured output', status: 'running'}]} onCancel={vi.fn()}/>)
     expect(screen.getByText('Validating structured output', {selector: 'strong'})).toBeInTheDocument()

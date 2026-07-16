@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { App, appendOperationEvent, DiffView, FileContextView, OverviewScreen, ReviewWorkspace, SettingsScreen, SourceSelector, SplitDiffView } from './App'
-import { Markdown, WindowControls } from './components'
+import { AnalysisBadge, Markdown, WindowControls } from './components'
 import type { AnalysisConfiguration, BootstrapState, EnvironmentState, RepositoryPage, ReviewSession, SoftwareUpdateStatus } from './types'
 
 const paths = {root: '/tmp/reviewarc', repositories: '/tmp/reviewarc/repos', worktrees: '/tmp/reviewarc/worktrees', database: '/tmp/reviewarc/db.sqlite', logs: '/tmp/reviewarc/logs', cache: '/tmp/reviewarc/cache'}
@@ -67,6 +67,12 @@ describe('App startup', () => {
     expect(quit).toHaveBeenCalledOnce()
     expect(minimise).toHaveBeenCalledOnce()
     expect(zoom).toHaveBeenCalledOnce()
+  })
+
+  it('uses a static icon for the analysis badge', () => {
+    const {container} = render(<AnalysisBadge status="running"/>)
+    expect(screen.getByText('Analyzing')).toBeInTheDocument()
+    expect(container.querySelector('.spin')).not.toBeInTheDocument()
   })
 
   it('shows Finder-launch-aware dependency remediation when gh is missing', async () => {
@@ -719,7 +725,9 @@ describe('Reanalysis state', () => {
     fireEvent.click(screen.getByRole('button', {name: /Existing chapter/}))
     expect(onReview).toHaveBeenCalledWith('chapter-1')
     fireEvent.click(screen.getByRole('button', {name: 'Reanalyze'}))
-    expect(await screen.findByRole('button', {name: 'Reanalyzing'})).toBeDisabled()
+    const runningButton = await screen.findByRole('button', {name: 'Reanalysis running'})
+    expect(runningButton).toBeDisabled()
+    expect(runningButton.querySelector('.spin')).not.toBeInTheDocument()
     expect(screen.getByText('Reanalysis progress')).toBeInTheDocument()
     expect(screen.getByText('Previous validated walkthrough')).toBeInTheDocument()
     expect(screen.getByRole('button', {name: /Start guided review/})).toBeDisabled()
