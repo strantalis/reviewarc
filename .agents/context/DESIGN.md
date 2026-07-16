@@ -184,8 +184,10 @@ Dark mode reassigns the same semantic custom properties in `frontend/src/styles.
 
 ## 3. Typography
 
-**Display Font:** Commissioner with Avenir Next and Segoe UI fallbacks on the public site  
-**Body Font:** Native system sans in the desktop app; Commissioner on the public site  
+**Display Font:** Commissioner with Avenir Next and Segoe UI fallbacks on the public site
+
+**Body Font:** Native system sans in the desktop app; Commissioner on the public site
+
 **Label/Mono Font:** SFMono-compatible system stack in the desktop app; Spline Sans Mono on the public site
 
 **Character:** The desktop app favors crisp native density and predictable code alignment. The public site adds a humanist display voice, but remains technical and controlled. Neither surface uses ornamental type or a novelty face to manufacture personality.
