@@ -45,11 +45,13 @@ type SourceState struct {
 	Selections    []domain.SourceSelection `json:"selections"`
 }
 type RepositoryPage struct {
-	Items       []domain.Repository `json:"items"`
-	TotalCount  int                 `json:"totalCount"`
-	EndCursor   string              `json:"endCursor,omitempty"`
-	HasNextPage bool                `json:"hasNextPage"`
-	Cached      bool                `json:"cached"`
+	Items           []domain.Repository `json:"items"`
+	TotalCount      int                 `json:"totalCount"`
+	EndCursor       string              `json:"endCursor,omitempty"`
+	HasNextPage     bool                `json:"hasNextPage"`
+	Cached          bool                `json:"cached"`
+	RefreshRequired bool                `json:"refreshRequired,omitempty"`
+	LastSyncedAt    string              `json:"lastSyncedAt,omitempty"`
 }
 type RepositoryPageInput struct {
 	Owner  string `json:"owner"`
@@ -60,6 +62,24 @@ type RepositorySearchInput struct {
 	Query        string `json:"query"`
 	Cursor       string `json:"cursor"`
 	Organization bool   `json:"organization"`
+}
+type AccessibleRepositorySearchInput struct {
+	Account string `json:"account"`
+	Query   string `json:"query"`
+	Offset  int    `json:"offset"`
+}
+type AccessibleRepositoryRefreshInput struct {
+	Account string `json:"account"`
+	SyncID  string `json:"syncId"`
+	Cursor  string `json:"cursor"`
+}
+type AccessibleRepositoryRefresh struct {
+	SyncID      string `json:"syncId"`
+	Processed   int    `json:"processed"`
+	TotalCount  int    `json:"totalCount"`
+	EndCursor   string `json:"endCursor,omitempty"`
+	HasNextPage bool   `json:"hasNextPage"`
+	CompletedAt string `json:"completedAt,omitempty"`
 }
 type SelectedRepositoryRefresh struct {
 	Repositories []domain.Repository `json:"repositories"`
@@ -161,7 +181,15 @@ type analysisPlan struct {
 	runID     string
 }
 
-const environmentSnapshotSetting = "environment_snapshot_v1"
+const (
+	environmentSnapshotSetting = "environment_snapshot_v1"
+	accessibleCatalogSetting   = "accessible_repository_catalog_v1"
+	accessibleCatalogMaxAge    = 30 * time.Minute
+)
+
+type accessibleCatalogSnapshot struct {
+	LastSyncedAt time.Time `json:"lastSyncedAt"`
+}
 
 type App struct {
 	ctx               context.Context
@@ -186,6 +214,8 @@ type App struct {
 	gitProtocol       func() string
 	updater           *update.Service
 	updateCancel      context.CancelFunc
+	accessibleMu      sync.Mutex
+	accessibleSyncID  string
 }
 
 func NewApp() (*App, error) {
@@ -482,6 +512,100 @@ func (a *App) RefreshSelectedRepositories() (SelectedRepositoryRefresh, error) {
 	}
 	repositories, archived, refreshErrors := a.refreshExplicitRepositories(ctx, selections)
 	return SelectedRepositoryRefresh{Repositories: repositories, ArchivedKeys: archived, Errors: refreshErrors}, nil
+}
+func (a *App) ListAccessibleRepositories(input AccessibleRepositorySearchInput) (RepositoryPage, error) {
+	input.Account = strings.TrimSpace(input.Account)
+	input.Query = strings.TrimSpace(input.Query)
+	if !validSourceOwner(input.Account) || len(input.Query) > 256 || input.Offset < 0 {
+		return RepositoryPage{}, errors.New("invalid accessible repository search")
+	}
+	items, total, err := a.store.SearchAccessibleRepositories(a.appContext(), input.Account, input.Query, input.Offset, 50)
+	if err != nil {
+		return RepositoryPage{}, err
+	}
+	page := RepositoryPage{Items: items, TotalCount: total, HasNextPage: input.Offset+len(items) < total, Cached: true}
+	var snapshot accessibleCatalogSnapshot
+	settingKey := accessibleCatalogSetting + ":" + strings.ToLower(input.Account)
+	if err := a.store.GetSetting(a.appContext(), settingKey, &snapshot); err != nil || snapshot.LastSyncedAt.IsZero() {
+		page.RefreshRequired = true
+		return page, nil
+	}
+	page.LastSyncedAt = snapshot.LastSyncedAt.UTC().Format(time.RFC3339)
+	page.RefreshRequired = time.Since(snapshot.LastSyncedAt) > accessibleCatalogMaxAge
+	return page, nil
+}
+func (a *App) RefreshAccessibleRepositories(input AccessibleRepositoryRefreshInput) (AccessibleRepositoryRefresh, error) {
+	input.Account = strings.TrimSpace(input.Account)
+	if !validSourceOwner(input.Account) {
+		return AccessibleRepositoryRefresh{}, errors.New("invalid accessible repository refresh")
+	}
+	if input.SyncID == "" {
+		if input.Cursor != "" {
+			return AccessibleRepositoryRefresh{}, errors.New("invalid accessible repository refresh")
+		}
+		input.SyncID = newID()
+		a.accessibleMu.Lock()
+		a.accessibleSyncID = input.SyncID
+		a.accessibleMu.Unlock()
+	} else if !validSyncID(input.SyncID) {
+		return AccessibleRepositoryRefresh{}, errors.New("invalid accessible repository refresh")
+	}
+	a.accessibleMu.Lock()
+	active := a.accessibleSyncID == input.SyncID
+	a.accessibleMu.Unlock()
+	if !active {
+		return AccessibleRepositoryRefresh{}, errors.New("accessible repository refresh was replaced")
+	}
+	page, err := a.github.ListAccessibleRepositoriesPage(a.appContext(), githubclient.AccessibleRepositoryPageQuery{Cursor: input.Cursor, PageSize: 100})
+	if err != nil {
+		a.accessibleMu.Lock()
+		if a.accessibleSyncID == input.SyncID {
+			a.accessibleSyncID = ""
+		}
+		a.accessibleMu.Unlock()
+		return AccessibleRepositoryRefresh{}, err
+	}
+	if !strings.EqualFold(page.AccountLogin, input.Account) {
+		a.accessibleMu.Lock()
+		if a.accessibleSyncID == input.SyncID {
+			a.accessibleSyncID = ""
+		}
+		a.accessibleMu.Unlock()
+		return AccessibleRepositoryRefresh{}, errors.New("authenticated GitHub account changed during repository refresh")
+	}
+	if page.HasNextPage && page.EndCursor == "" {
+		a.accessibleMu.Lock()
+		if a.accessibleSyncID == input.SyncID {
+			a.accessibleSyncID = ""
+		}
+		a.accessibleMu.Unlock()
+		return AccessibleRepositoryRefresh{}, errors.New("GitHub returned an incomplete repository cursor")
+	}
+	a.accessibleMu.Lock()
+	defer a.accessibleMu.Unlock()
+	if a.accessibleSyncID != input.SyncID {
+		return AccessibleRepositoryRefresh{}, errors.New("accessible repository refresh was replaced")
+	}
+	if err := a.store.UpsertAccessibleRepositories(a.appContext(), page.Items, input.Account, input.SyncID); err != nil {
+		a.accessibleSyncID = ""
+		return AccessibleRepositoryRefresh{}, err
+	}
+	result := AccessibleRepositoryRefresh{SyncID: input.SyncID, Processed: len(page.Items), TotalCount: page.TotalCount, EndCursor: page.EndCursor, HasNextPage: page.HasNextPage}
+	if !page.HasNextPage {
+		if err := a.store.CompleteAccessibleRepositorySync(a.appContext(), input.Account, input.SyncID); err != nil {
+			a.accessibleSyncID = ""
+			return AccessibleRepositoryRefresh{}, err
+		}
+		completedAt := time.Now().UTC()
+		settingKey := accessibleCatalogSetting + ":" + strings.ToLower(input.Account)
+		if err := a.store.SetSetting(a.appContext(), settingKey, accessibleCatalogSnapshot{LastSyncedAt: completedAt}); err != nil {
+			a.accessibleSyncID = ""
+			return AccessibleRepositoryRefresh{}, err
+		}
+		result.CompletedAt = completedAt.Format(time.RFC3339)
+		a.accessibleSyncID = ""
+	}
+	return result, nil
 }
 func (a *App) ListCachedOwnerRepositories(owner string) (RepositoryPage, error) {
 	if !validSourceOwner(owner) {
@@ -1697,6 +1821,13 @@ func newID() string {
 	value := make([]byte, 16)
 	_, _ = rand.Read(value)
 	return hex.EncodeToString(value)
+}
+func validSyncID(value string) bool {
+	if len(value) != 32 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 func safeMessage(err error) string {
 	if err == nil {

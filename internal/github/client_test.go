@@ -286,6 +286,25 @@ func TestListRepositoriesIncludesOrganizationRepositoriesAndDeduplicates(t *test
 	}
 }
 
+func TestListAccessibleRepositoriesPageUsesViewerAffiliationsAndCursor(t *testing.T) {
+	body := `{"data":{"viewer":{"login":"sean","repositories":{"totalCount":12000,"nodes":[{"id":"R1","name":"api","nameWithOwner":"acme/api","description":"backend","owner":{"login":"acme"}},{"id":"R2","name":"old","nameWithOwner":"acme/old","isArchived":true,"owner":{"login":"acme"}}],"pageInfo":{"hasNextPage":true,"endCursor":"next-page"}}}}}`
+	f := &fakeRunner{responses: []proc.Result{{Stdout: []byte(body)}}}
+	page, err := New(f).ListAccessibleRepositoriesPage(context.Background(), AccessibleRepositoryPageQuery{Cursor: "current-page", PageSize: 500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.AccountLogin != "sean" || page.TotalCount != 12000 || len(page.Items) != 1 || page.Items[0].Ref.Owner != "acme" || page.Items[0].Ref.Name != "api" || !page.HasNextPage || page.EndCursor != "next-page" {
+		t.Fatalf("page=%+v", page)
+	}
+	args := f.commands[0].Args
+	if containsString(args, "--paginate") || !containsString(args, "first=100") || !containsString(args, "after=current-page") || !strings.Contains(args[len(args)-1], "affiliations:[OWNER,COLLABORATOR,ORGANIZATION_MEMBER]") {
+		t.Fatalf("accessible repository command=%v", args)
+	}
+	if _, err := New(&fakeRunner{}).ListAccessibleRepositoriesPage(context.Background(), AccessibleRepositoryPageQuery{Cursor: strings.Repeat("x", 4097)}); err == nil {
+		t.Fatal("oversized cursor reached accessible repository paging")
+	}
+}
+
 func TestListRepositoriesRejectsInvalidOrganizationBeforeRunningIt(t *testing.T) {
 	f := &fakeRunner{responses: []proc.Result{{Stdout: []byte(`[]`)}}}
 	_, err := New(f).ListRepositories(context.Background(), RepositoryQuery{Organizations: []string{"../escape"}})

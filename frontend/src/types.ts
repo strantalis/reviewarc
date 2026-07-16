@@ -122,7 +122,8 @@ export interface SessionDetail { session: ReviewSession; files: ChangedFile[]; d
 export interface OperationEvent { stage: string; message: string; progress?: number; status?: 'running' | 'complete' | 'failed'; updatedAt?: string }
 export interface AccountState { status: string; user?: GitHubUser; message?: string }
 export interface SourceState extends SourceCatalog {}
-export interface RepositoryPage { items: Repository[]; totalCount: number; endCursor?: string; hasNextPage: boolean; cached: boolean }
+export interface RepositoryPage { items: Repository[]; totalCount: number; endCursor?: string; hasNextPage: boolean; cached: boolean; refreshRequired?: boolean; lastSyncedAt?: string }
+export interface AccessibleRepositoryRefresh { syncId: string; processed: number; totalCount: number; endCursor?: string; hasNextPage: boolean; completedAt?: string }
 export interface SelectedRepositoryRefresh { repositories: Repository[]; archivedKeys: string[]; errors: Record<string, string> }
 export interface InboxResult { items: PullRequestSummary[]; errors?: Record<string, string>; partial?: boolean }
 export interface Operation { id: string; sessionId?: string; kind: string; stage: string; message: string; state: string; progress?: number; runId?: string; failure?: AnalysisFailure; updatedAt?: string }

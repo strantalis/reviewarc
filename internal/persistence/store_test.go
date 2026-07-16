@@ -45,7 +45,7 @@ func TestMigrationsAndReopen(t *testing.T) {
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&applied); err != nil {
 		t.Fatal(err)
 	}
-	if applied != 5 {
+	if applied != 6 {
 		t.Fatalf("applied migrations = %d", applied)
 	}
 }
@@ -705,6 +705,41 @@ func TestRemoveRepositorySelectionsIsScopedAndCaseInsensitive(t *testing.T) {
 	}
 	if len(got) != 2 || got[0].Kind != domain.SelectionOrganization || got[1].Key != "acme/active" {
 		t.Fatalf("selections=%+v", got)
+	}
+}
+
+func TestAccessibleRepositoryCatalogSearchAndCompletedSync(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	repository := func(owner, name, description string) domain.Repository {
+		return domain.Repository{Ref: domain.RepositoryRef{Host: "github.com", Owner: owner, Name: name}, Description: description}
+	}
+	if err := s.UpsertAccessibleRepositories(ctx, []domain.Repository{
+		repository("acme", "api", "Payments backend"),
+		repository("sean", "review_100%", "Desktop review client"),
+	}, "sean", "sync-one"); err != nil {
+		t.Fatal(err)
+	}
+	items, total, err := s.SearchAccessibleRepositories(ctx, "sean", "payments", 0, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(items) != 1 || items[0].Ref.Name != "api" {
+		t.Fatalf("items=%+v total=%d", items, total)
+	}
+	items, total, err = s.SearchAccessibleRepositories(ctx, "sean", "review_100%", 0, 50)
+	if err != nil || total != 1 || len(items) != 1 || items[0].Ref.Owner != "sean" {
+		t.Fatalf("literal wildcard search items=%+v total=%d err=%v", items, total, err)
+	}
+	if err := s.UpsertAccessibleRepositories(ctx, []domain.Repository{repository("acme", "api", "Payments backend")}, "sean", "sync-two"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CompleteAccessibleRepositorySync(ctx, "sean", "sync-two"); err != nil {
+		t.Fatal(err)
+	}
+	items, total, err = s.SearchAccessibleRepositories(ctx, "sean", "", 0, 50)
+	if err != nil || total != 1 || len(items) != 1 || items[0].Ref.Name != "api" {
+		t.Fatalf("completed catalog items=%+v total=%d err=%v", items, total, err)
 	}
 }
 

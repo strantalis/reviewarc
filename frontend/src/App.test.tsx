@@ -14,6 +14,10 @@ const dualHarnessConfiguration: AnalysisConfiguration = {
     {id: 'claude', label: 'Claude Code', availability: 'available', eligible: true, path: '/Users/sean/.local/bin/claude', version: '2.1.0', capabilities: {jsonSchema: true, readOnly: true, progress: true, contextTransport: ['reviewarcTools']}, models: [{id: 'sonnet', label: 'Sonnet', reasoningLevels: [{id: 'medium', label: 'Medium'}, {id: 'high', label: 'High'}]}]},
   ],
 }
+const accessibleSourceMethods = () => ({
+  ListAccessibleRepositories: vi.fn().mockResolvedValue({items: [], totalCount: 0, hasNextPage: false, cached: true, refreshRequired: false}),
+  RefreshAccessibleRepositories: vi.fn().mockResolvedValue({syncId: 'sync', processed: 0, totalCount: 0, hasNextPage: false, completedAt: '2026-07-16T12:00:00Z'}),
+})
 
 function reviewSession(): ReviewSession {
   const evidence = {id: 'evidence-1', path: 'src/limiter.ts', revision: 'head' as const, startLine: 10, endLine: 13, validationStatus: 'valid' as const}
@@ -517,10 +521,41 @@ describe('Settings', () => {
 })
 
 describe('Repository sources', () => {
+  it('searches all repositories available to the account before an owner is selected', async () => {
+    const state: BootstrapState = {dependencies: [], paths, account: {login: 'sean', name: 'Sean', avatarUrl: ''}, selections: [], inbox: []}
+    const repositories = [
+      {ref: {host: 'github.com', owner: 'acme', name: 'api', cloneUrl: '', databaseId: '1'}, description: 'Payments backend', isPrivate: true, isArchived: false, updatedAt: '2026-07-12T00:00:00Z'},
+      {ref: {host: 'github.com', owner: 'sean', name: 'reviewarc', cloneUrl: '', databaseId: '2'}, description: 'Desktop review client', isPrivate: true, isArchived: false, updatedAt: '2026-07-12T00:00:00Z'},
+    ]
+    const listAccessible = vi.fn().mockImplementation(({query}: {query: string}) => {
+      const items = query ? repositories.filter((repository) => `${repository.ref.owner}/${repository.ref.name} ${repository.description}`.toLowerCase().includes(query.toLowerCase())) : repositories
+      return Promise.resolve({items, totalCount: items.length, hasNextPage: false, cached: true, refreshRequired: false})
+    })
+    window.go = {main: {App: {
+      ListSources: vi.fn().mockResolvedValue({organizations: [], repositories: [], selections: []}),
+      RefreshSourceAccess: vi.fn().mockResolvedValue([]),
+      RefreshSelectedRepositories: vi.fn().mockResolvedValue({repositories: [], archivedKeys: [], errors: {}}),
+      ListAccessibleRepositories: listAccessible,
+      RefreshAccessibleRepositories: vi.fn(),
+    }}}
+    render(<SourceSelector state={state} onDone={vi.fn()}/>)
+    expect(await screen.findByRole('heading', {name: 'All accessible repositories'})).toBeInTheDocument()
+    expect(await screen.findByText('acme/api')).toBeInTheDocument()
+    expect(screen.getByText('sean/reviewarc')).toBeInTheDocument()
+    const input = screen.getByPlaceholderText('Search repositories you can access')
+    fireEvent.change(input, {target: {value: 'review'}})
+    await waitFor(() => expect(listAccessible).toHaveBeenLastCalledWith({account: 'sean', query: 'review', offset: 0}))
+    expect(await screen.findByText('sean/reviewarc')).toBeInTheDocument()
+    expect(screen.queryByText('acme/api')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('checkbox', {name: 'Include sean/reviewarc'}))
+    expect(screen.getByText('1 source included')).toBeInTheDocument()
+  })
+
   it('renders included source rules before GitHub owner discovery completes', () => {
     const state: BootstrapState = {dependencies: [], paths, account: {login: 'sean', name: 'Sean', avatarUrl: ''}, selections: [{kind: 'organization', key: 'acme', enabled: true}, {kind: 'repository', key: 'sean/reviewarc', enabled: true}], inbox: []}
-    window.go = {main: {App: {ListSources: vi.fn(() => new Promise(() => {}))}}}
+    window.go = {main: {App: {ListSources: vi.fn(() => new Promise(() => {})), ...accessibleSourceMethods()}}}
     render(<SourceSelector state={state} onDone={vi.fn()}/>)
+    fireEvent.click(screen.getByRole('button', {name: /Included sources/}))
     expect(screen.getByRole('heading', {name: 'Included sources'})).toBeInTheDocument()
     expect(screen.getByText('2 sources included')).toBeInTheDocument()
     expect(screen.getByText('Every active repository in this organization')).toBeInTheDocument()
@@ -539,8 +574,9 @@ describe('Repository sources', () => {
 
   it('keeps loaded included repositories removable instead of rendering selection checkboxes', async () => {
     const state: BootstrapState = {dependencies: [], paths, account: {login: 'sean', name: 'Sean', avatarUrl: ''}, selections: [{kind: 'repository', key: 'sean/reviewarc', enabled: true}], inbox: []}
-    window.go = {main: {App: {ListSources: vi.fn().mockResolvedValue({organizations: [], repositories: [{ref: {host: 'github.com', owner: 'sean', name: 'reviewarc', cloneUrl: '', databaseId: '1'}, description: 'Local-first pull request review', isPrivate: true, isArchived: false, updatedAt: '2026-07-12T00:00:00Z'}], selections: state.selections})}}}
+    window.go = {main: {App: {ListSources: vi.fn().mockResolvedValue({organizations: [], repositories: [{ref: {host: 'github.com', owner: 'sean', name: 'reviewarc', cloneUrl: '', databaseId: '1'}, description: 'Local-first pull request review', isPrivate: true, isArchived: false, updatedAt: '2026-07-12T00:00:00Z'}], selections: state.selections}), ...accessibleSourceMethods()}}}
     render(<SourceSelector state={state} onDone={vi.fn()}/>)
+    fireEvent.click(screen.getByRole('button', {name: /Included sources/}))
     const remove = await screen.findByRole('button', {name: 'Remove sean/reviewarc repository from included sources'})
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
     fireEvent.click(remove)
@@ -555,6 +591,7 @@ describe('Repository sources', () => {
     const search = vi.fn().mockResolvedValue({items: [repository('repo-50')], totalCount: 1, hasNextPage: false, cached: false})
     window.go = {main: {App: {
 	  ListSources: vi.fn().mockResolvedValue({organizations: [], repositories: [], selections: []}),
+	  ...accessibleSourceMethods(),
 	  RefreshSourceAccess: vi.fn().mockResolvedValue([]),
 	  RefreshSelectedRepositories: vi.fn().mockResolvedValue({repositories: [], archivedKeys: [], errors: {}}),
       ListCachedOwnerRepositories: vi.fn().mockResolvedValue({items: [], totalCount: 0, hasNextPage: false, cached: true}),
@@ -564,7 +601,7 @@ describe('Repository sources', () => {
     render(<SourceSelector state={state} onDone={vi.fn()}/>)
     fireEvent.click(screen.getByRole('button', {name: 'Show personal repositories from sean'}))
     expect(await screen.findByText('Showing 50 of 12000')).toBeInTheDocument()
-    fireEvent.change(screen.getByPlaceholderText('Search all repositories'), {target: {value: 'repo-50'}})
+    fireEvent.change(screen.getByPlaceholderText('Search sean repositories'), {target: {value: 'repo-50'}})
     expect(await screen.findByText('sean/repo-50')).toBeInTheDocument()
     expect(refresh).toHaveBeenCalledOnce()
     expect(search).toHaveBeenCalledOnce()
@@ -581,6 +618,7 @@ describe('Repository sources', () => {
     const search = vi.fn().mockImplementation(({query}: {query: string}) => query === 'old' ? oldResponse : newResponse)
     window.go = {main: {App: {
       ListSources: vi.fn().mockResolvedValue({organizations: [], repositories: [], selections: []}),
+      ...accessibleSourceMethods(),
       RefreshSourceAccess: vi.fn().mockResolvedValue([]),
       RefreshSelectedRepositories: vi.fn().mockResolvedValue({repositories: [], archivedKeys: [], errors: {}}),
       ListCachedOwnerRepositories: vi.fn().mockResolvedValue({items: [], totalCount: 0, hasNextPage: false, cached: true}),
@@ -590,7 +628,7 @@ describe('Repository sources', () => {
     render(<SourceSelector state={state} onDone={vi.fn()}/>)
     fireEvent.click(screen.getByRole('button', {name: 'Show personal repositories from sean'}))
     expect(await screen.findByText('sean/browse')).toBeInTheDocument()
-    const input = screen.getByPlaceholderText('Search all repositories')
+    const input = screen.getByPlaceholderText('Search sean repositories')
     fireEvent.change(input, {target: {value: 'old'}})
     await waitFor(() => expect(search).toHaveBeenCalledTimes(1))
     fireEvent.change(input, {target: {value: 'new'}})
@@ -620,6 +658,7 @@ describe('Repository sources', () => {
         repositories: [],
         selections: [],
       }),
+	  ...accessibleSourceMethods(),
 	  RefreshSourceAccess: vi.fn().mockResolvedValue(organizations),
 	  RefreshSelectedRepositories: vi.fn().mockResolvedValue({repositories: [], archivedKeys: [], errors: {}}),
       ListCachedOwnerRepositories: vi.fn().mockResolvedValue({items: [], totalCount: 0, hasNextPage: false, cached: true}),
@@ -660,6 +699,7 @@ describe('Repository sources', () => {
 	const state: BootstrapState = {dependencies: [], paths, account: {login: 'sean', name: 'Sean', avatarUrl: ''}, selections: [{kind: 'repository', key: 'acme/old', enabled: true}], inbox: []}
 	window.go = {main: {App: {
 	  ListSources: vi.fn().mockResolvedValue({organizations: [], repositories: [{ref: {host: 'github.com', owner: 'acme', name: 'old', cloneUrl: '', databaseId: '1'}, description: '', isPrivate: true, isArchived: false, updatedAt: '2026-07-12T00:00:00Z'}], selections: state.selections}),
+	  ...accessibleSourceMethods(),
 	  RefreshSourceAccess: vi.fn().mockResolvedValue([]),
 	  RefreshSelectedRepositories: vi.fn().mockResolvedValue({repositories: [], archivedKeys: ['acme/old'], errors: {}}),
 	}}}

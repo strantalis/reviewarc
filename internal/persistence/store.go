@@ -254,6 +254,85 @@ func (s *Store) UpsertRepositories(ctx context.Context, repositories []domain.Re
 	return wrap("save repositories", tx.Commit())
 }
 
+func (s *Store) UpsertAccessibleRepositories(ctx context.Context, repositories []domain.Repository, accountLogin, syncID string) error {
+	accountLogin = strings.ToLower(strings.TrimSpace(accountLogin))
+	if accountLogin == "" || strings.TrimSpace(syncID) == "" {
+		return errors.New("save accessible repositories: account and sync ID are required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return wrap("save accessible repositories", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	now := encodeTime(time.Now())
+	for _, repository := range repositories {
+		b, marshalErr := json.Marshal(repository)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		key := repoKey(repository.Ref)
+		if _, execErr := tx.ExecContext(ctx, `INSERT INTO repositories(repo_key,repository_json,updated_at) VALUES(?,?,?) ON CONFLICT(repo_key) DO UPDATE SET repository_json=excluded.repository_json,updated_at=excluded.updated_at`, key, b, now); execErr != nil {
+			return wrap("save accessible repositories", execErr)
+		}
+		if _, execErr := tx.ExecContext(ctx, `INSERT INTO accessible_repositories(account_login,repo_key,owner,name,description,sync_id,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(account_login,repo_key) DO UPDATE SET owner=excluded.owner,name=excluded.name,description=excluded.description,sync_id=excluded.sync_id,updated_at=excluded.updated_at`, accountLogin, key, repository.Ref.Owner, repository.Ref.Name, repository.Description, syncID, now); execErr != nil {
+			return wrap("save accessible repositories", execErr)
+		}
+	}
+	return wrap("save accessible repositories", tx.Commit())
+}
+
+func (s *Store) CompleteAccessibleRepositorySync(ctx context.Context, accountLogin, syncID string) error {
+	accountLogin = strings.ToLower(strings.TrimSpace(accountLogin))
+	if accountLogin == "" || strings.TrimSpace(syncID) == "" {
+		return errors.New("complete accessible repository sync: account and sync ID are required")
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM accessible_repositories WHERE account_login=? AND sync_id<>?`, accountLogin, syncID)
+	return wrap("complete accessible repository sync", err)
+}
+
+func (s *Store) SearchAccessibleRepositories(ctx context.Context, accountLogin, query string, offset, limit int) ([]domain.Repository, int, error) {
+	accountLogin = strings.ToLower(strings.TrimSpace(accountLogin))
+	query = strings.TrimSpace(query)
+	if accountLogin == "" || offset < 0 {
+		return nil, 0, errors.New("search accessible repositories: invalid offset")
+	}
+	if limit <= 0 || limit > 100 {
+		return nil, 0, errors.New("search accessible repositories: invalid limit")
+	}
+	pattern := "%" + escapeLike(strings.ToLower(query)) + "%"
+	where := `a.account_login=? AND (?='' OR lower(a.owner || '/' || a.name || ' ' || a.description) LIKE ? ESCAPE '\')`
+	var total int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM accessible_repositories a WHERE `+where, accountLogin, query, pattern).Scan(&total); err != nil {
+		return nil, 0, wrap("search accessible repositories", err)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT r.repository_json FROM accessible_repositories a JOIN repositories r ON r.repo_key=a.repo_key WHERE `+where+` ORDER BY lower(a.owner),lower(a.name) LIMIT ? OFFSET ?`, accountLogin, query, pattern, limit, offset)
+	if err != nil {
+		return nil, 0, wrap("search accessible repositories", err)
+	}
+	defer func() { _ = rows.Close() }()
+	items := []domain.Repository{}
+	for rows.Next() {
+		var b []byte
+		if err := rows.Scan(&b); err != nil {
+			return nil, 0, err
+		}
+		var repository domain.Repository
+		if err := json.Unmarshal(b, &repository); err != nil {
+			continue
+		}
+		if !repository.IsArchived {
+			items = append(items, repository)
+		}
+	}
+	return items, total, rows.Err()
+}
+
+func escapeLike(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `%`, `\%`)
+	return strings.ReplaceAll(value, `_`, `\_`)
+}
+
 func (s *Store) ListRepositories(ctx context.Context) ([]domain.Repository, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT repository_json FROM repositories ORDER BY repo_key`)
 	if err != nil {

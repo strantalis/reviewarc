@@ -39,7 +39,12 @@ func (r repositoryJSON) domain() domain.Repository {
 type repositoriesPageJSON struct {
 	Data struct {
 		Viewer struct {
-			Repositories struct{ Nodes []repositoryJSON }
+			Login        string
+			Repositories struct {
+				TotalCount int
+				Nodes      []repositoryJSON
+				PageInfo   pageInfoJSON
+			}
 		}
 	}
 }

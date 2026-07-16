@@ -1646,6 +1646,60 @@ export namespace domain {
 
 export namespace main {
 
+	export class AccessibleRepositoryRefresh {
+	    syncId: string;
+	    processed: number;
+	    totalCount: number;
+	    endCursor?: string;
+	    hasNextPage: boolean;
+	    completedAt?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new AccessibleRepositoryRefresh(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.syncId = source["syncId"];
+	        this.processed = source["processed"];
+	        this.totalCount = source["totalCount"];
+	        this.endCursor = source["endCursor"];
+	        this.hasNextPage = source["hasNextPage"];
+	        this.completedAt = source["completedAt"];
+	    }
+	}
+	export class AccessibleRepositoryRefreshInput {
+	    account: string;
+	    syncId: string;
+	    cursor: string;
+
+	    static createFrom(source: any = {}) {
+	        return new AccessibleRepositoryRefreshInput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.account = source["account"];
+	        this.syncId = source["syncId"];
+	        this.cursor = source["cursor"];
+	    }
+	}
+	export class AccessibleRepositorySearchInput {
+	    account: string;
+	    query: string;
+	    offset: number;
+
+	    static createFrom(source: any = {}) {
+	        return new AccessibleRepositorySearchInput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.account = source["account"];
+	        this.query = source["query"];
+	        this.offset = source["offset"];
+	    }
+	}
 	export class AccountState {
 	    status: string;
 	    user?: domain.GitHubUser;
@@ -2142,6 +2196,8 @@ export namespace main {
 	    endCursor?: string;
 	    hasNextPage: boolean;
 	    cached: boolean;
+	    refreshRequired?: boolean;
+	    lastSyncedAt?: string;
 
 	    static createFrom(source: any = {}) {
 	        return new RepositoryPage(source);
@@ -2154,6 +2210,8 @@ export namespace main {
 	        this.endCursor = source["endCursor"];
 	        this.hasNextPage = source["hasNextPage"];
 	        this.cached = source["cached"];
+	        this.refreshRequired = source["refreshRequired"];
+	        this.lastSyncedAt = source["lastSyncedAt"];
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

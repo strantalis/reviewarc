@@ -70,6 +70,10 @@ export function InstallUpdate() {
   return window['go']['main']['App']['InstallUpdate']();
 }
 
+export function ListAccessibleRepositories(arg1) {
+  return window['go']['main']['App']['ListAccessibleRepositories'](arg1);
+}
+
 export function ListCachedOwnerRepositories(arg1) {
   return window['go']['main']['App']['ListCachedOwnerRepositories'](arg1);
 }
@@ -100,6 +104,10 @@ export function PrepareThreadReply(arg1, arg2, arg3) {
 
 export function QueueInboxAnalysis(arg1) {
   return window['go']['main']['App']['QueueInboxAnalysis'](arg1);
+}
+
+export function RefreshAccessibleRepositories(arg1) {
+  return window['go']['main']['App']['RefreshAccessibleRepositories'](arg1);
 }
 
 export function RefreshAccount() {

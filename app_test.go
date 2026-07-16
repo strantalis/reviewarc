@@ -306,6 +306,48 @@ func TestRefreshSelectedRepositoriesDetectsArchiveTransition(t *testing.T) {
 	}
 }
 
+func TestAccessibleRepositoryRefreshIsIncrementalSearchableAndPrunesOnCompletion(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	old := domain.Repository{Ref: domain.RepositoryRef{Host: "github.com", Owner: "old", Name: "removed"}}
+	if err := store.UpsertAccessibleRepositories(ctx, []domain.Repository{old}, "sean", "previous-sync"); err != nil {
+		t.Fatal(err)
+	}
+	first := `{"data":{"viewer":{"login":"sean","repositories":{"totalCount":2,"nodes":[{"id":"R1","name":"api","nameWithOwner":"acme/api","description":"Payments backend","owner":{"login":"acme"}}],"pageInfo":{"hasNextPage":true,"endCursor":"page-two"}}}}}`
+	second := `{"data":{"viewer":{"login":"sean","repositories":{"totalCount":2,"nodes":[{"id":"R2","name":"reviewarc","nameWithOwner":"sean/reviewarc","description":"Review client","owner":{"login":"sean"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`
+	runner := &appFixtureRunner{results: []proc.Result{{Stdout: []byte(first)}, {Stdout: []byte(second)}}}
+	app := &App{ctx: ctx, github: githubclient.New(runner), store: store}
+
+	initial, err := app.ListAccessibleRepositories(AccessibleRepositorySearchInput{Account: "sean"})
+	if err != nil || !initial.RefreshRequired || initial.TotalCount != 1 {
+		t.Fatalf("initial=%+v err=%v", initial, err)
+	}
+	page, err := app.RefreshAccessibleRepositories(AccessibleRepositoryRefreshInput{Account: "sean"})
+	if err != nil || !page.HasNextPage || page.EndCursor != "page-two" || page.Processed != 1 || page.TotalCount != 2 {
+		t.Fatalf("first page=%+v err=%v", page, err)
+	}
+	matching, err := app.ListAccessibleRepositories(AccessibleRepositorySearchInput{Account: "sean", Query: "payments"})
+	if err != nil || matching.TotalCount != 1 || len(matching.Items) != 1 || matching.Items[0].Ref.Name != "api" {
+		t.Fatalf("matching=%+v err=%v", matching, err)
+	}
+	page, err = app.RefreshAccessibleRepositories(AccessibleRepositoryRefreshInput{Account: "sean", SyncID: page.SyncID, Cursor: page.EndCursor})
+	if err != nil || page.HasNextPage || page.CompletedAt == "" {
+		t.Fatalf("second page=%+v err=%v", page, err)
+	}
+	complete, err := app.ListAccessibleRepositories(AccessibleRepositorySearchInput{Account: "sean"})
+	if err != nil || complete.RefreshRequired || complete.TotalCount != 2 || len(complete.Items) != 2 || complete.LastSyncedAt == "" {
+		t.Fatalf("complete=%+v err=%v", complete, err)
+	}
+	removed, err := app.ListAccessibleRepositories(AccessibleRepositorySearchInput{Account: "sean", Query: "removed"})
+	if err != nil || removed.TotalCount != 0 {
+		t.Fatalf("removed=%+v err=%v", removed, err)
+	}
+}
+
 func TestExplicitRepositoryRefreshUsesBoundedConcurrency(t *testing.T) {
 	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
 	if err != nil {

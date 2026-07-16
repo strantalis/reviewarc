@@ -1,4 +1,4 @@
-import type { AccountState, AnalysisConfiguration, AnalysisProfile, AnalysisRequest, BootstrapState, ChapterStatus, ChangedFile, DiffFile, EnvironmentState, FileContent, InboxAnalysis, InboxResult, Operation, OperationSnapshot, PublishPreview, PullRequestRef, PullRequestReviewComment, RepositoryPage, ReviewComment, ReviewNote, ReviewSession, SelectedRepositoryRefresh, SoftwareUpdateStatus, SourceSelection, SourceState, ThreadReplyPreview, UpdateChannel, Organization } from './types'
+import type { AccessibleRepositoryRefresh, AccountState, AnalysisConfiguration, AnalysisProfile, AnalysisRequest, BootstrapState, ChapterStatus, ChangedFile, DiffFile, EnvironmentState, FileContent, InboxAnalysis, InboxResult, Operation, OperationSnapshot, PublishPreview, PullRequestRef, PullRequestReviewComment, RepositoryPage, ReviewComment, ReviewNote, ReviewSession, SelectedRepositoryRefresh, SoftwareUpdateStatus, SourceSelection, SourceState, ThreadReplyPreview, UpdateChannel, Organization } from './types'
 
 type WailsMethod = (...args: unknown[]) => Promise<unknown>
 type AppMethodName = keyof typeof import('../wailsjs/go/main/App')
@@ -40,6 +40,8 @@ export const backend = {
   listSources: () => call<SourceState>(['ListSources']),
   refreshSourceAccess: (organizations: Organization[]) => call<Organization[]>(['RefreshSourceAccess'], organizations),
   refreshSelectedRepositories: () => call<SelectedRepositoryRefresh>(['RefreshSelectedRepositories']),
+  listAccessibleRepositories: (account: string, query = '', offset = 0) => call<RepositoryPage>(['ListAccessibleRepositories'], {account, query, offset}),
+  refreshAccessibleRepositories: (account: string, syncId = '', cursor = '') => call<AccessibleRepositoryRefresh>(['RefreshAccessibleRepositories'], {account, syncId, cursor}),
   listCachedOwnerRepositories: (owner: string) => call<RepositoryPage>(['ListCachedOwnerRepositories'], owner),
   refreshOwnerRepositories: (owner: string, cursor = '') => call<RepositoryPage>(['RefreshOwnerRepositories'], {owner, cursor}),
   searchOwnerRepositories: (owner: string, query: string, cursor = '', organization = false) => call<RepositoryPage>(['SearchOwnerRepositories'], {owner, query, cursor, organization}),

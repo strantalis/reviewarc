@@ -37,6 +37,8 @@ export function GetUpdateStatus():Promise<main.SoftwareUpdateStatus>;
 
 export function InstallUpdate():Promise<void>;
 
+export function ListAccessibleRepositories(arg1:main.AccessibleRepositorySearchInput):Promise<main.RepositoryPage>;
+
 export function ListCachedOwnerRepositories(arg1:string):Promise<main.RepositoryPage>;
 
 export function ListSources():Promise<main.SourceState>;
@@ -52,6 +54,8 @@ export function PrepareReview(arg1:string,arg2:Array<string>,arg3:string):Promis
 export function PrepareThreadReply(arg1:string,arg2:number,arg3:string):Promise<main.ThreadReplyPreview>;
 
 export function QueueInboxAnalysis(arg1:domain.PullRequestRef):Promise<main.InboxAnalysis>;
+
+export function RefreshAccessibleRepositories(arg1:main.AccessibleRepositoryRefreshInput):Promise<main.AccessibleRepositoryRefresh>;
 
 export function RefreshAccount():Promise<main.AccountState>;
 
