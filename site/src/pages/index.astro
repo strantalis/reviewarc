@@ -4,9 +4,9 @@ import reviewArcMark from "../assets/reviewarc-mark.svg";
 import ThemeControl from "../components/ThemeControl.astro";
 import ThemeBootstrap from "../components/ThemeBootstrap.astro";
 
-const title = "ReviewArc — Agent review. Human judgment.";
+const title = "ReviewArc — Let the agent review. You make the call.";
 const description =
-  "ReviewArc reviews pull requests with a local AI agent, validates its evidence, and brings only consequential risks and unresolved uncertainty to you for judgment.";
+  "ReviewArc reads the pull request and surrounding code, checks the evidence, and shows you only the decisions that still need a human.";
 const canonical = new URL("/", Astro.site);
 const ogImage = new URL("/images/og/reviewarc-og.png", Astro.site);
 const structuredData = {
@@ -39,7 +39,7 @@ const structuredData = {
     <meta property="og:image" content={ogImage.href} />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="ReviewArc — Agent review. Human judgment." />
+    <meta property="og:image:alt" content="ReviewArc — Let the agent review. You make the call." />
     <meta name="twitter:card" content="summary_large_image" />
     <script type="application/ld+json" is:inline set:html={JSON.stringify(structuredData)} />
     <ThemeBootstrap />
@@ -67,9 +67,9 @@ const structuredData = {
         <div class="hero-panel">
           <div class="hero-copy">
             <div class="hero-message">
-              <p class="availability-line" data-state="loading"><span class="status-dot" aria-hidden="true"></span>Agent-led pull request review</p>
-              <h1 id="hero-title">Let the agent review the pull request. <span>You make the call.</span></h1>
-              <p class="lede">ReviewArc inspects the change and relevant surrounding code, validates its evidence, and brings only consequential risks and unresolved uncertainty to you for judgment.</p>
+              <p class="availability-line" data-state="loading"><span class="status-dot" aria-hidden="true"></span>AI code review that keeps you in control</p>
+              <h1 id="hero-title">Let the agent do the review. <span>You make the call.</span></h1>
+              <p class="lede">ReviewArc reads the pull request, follows the change into surrounding code, and gives you a recommendation. If something still needs your attention, it shows you why and where to look.</p>
 
               <div class="download-group">
                 <a class="download-button is-loading" id="download" data-release-action aria-disabled="true">
@@ -94,18 +94,18 @@ const structuredData = {
               </div>
             </div>
 
-            <aside class="evidence-specimen" aria-label="Example ReviewArc recommendation with supporting evidence">
+            <aside class="evidence-specimen" aria-label="Example ReviewArc recommendation with checked evidence">
               <div class="specimen-heading">
-                <span>Agent recommendation</span>
-                <strong><span aria-hidden="true">✓</span> Evidence validated</strong>
+                <span>Review complete</span>
+                <strong><span aria-hidden="true">✓</span> Evidence checked</strong>
               </div>
-              <p class="specimen-claim">Hold: an external callback runs inside the global limiter lock.</p>
+              <p class="specimen-claim">Hold: this callback may deadlock under load.</p>
               <dl>
-                <div><dt>Judgment</dt><dd>Resolve or explicitly accept</dd></div>
-                <div><dt>Evidence</dt><dd><code>quota/limiter.go · L39–62</code></dd></div>
-                <div><dt>Coverage</dt><dd>4 of 4 changed files inspected</dd></div>
+                <div><dt>Next step</dt><dd>Fix before approval</dd></div>
+                <div><dt>Why</dt><dd>The callback runs while the global lock is held</dd></div>
+                <div><dt>Look here</dt><dd><code>quota/limiter.go · L39–62</code></dd></div>
               </dl>
-              <p class="specimen-note">Challenge the recommendation by opening its cited code. ReviewArc keeps verified evidence and remaining blind spots visible before you approve.</p>
+              <p class="specimen-note">You do not have to retrace the whole review. Open the cited code when you want to challenge the agent's conclusion.</p>
             </aside>
           </div>
         </div>
@@ -113,31 +113,31 @@ const structuredData = {
         <figure class="product-visual hero-visual">
           <div class="visual-stage">
             <img
-              src="/images/reviewarc-agent-review.webp"
+              src="/images/reviewarc-agent-brief-concept.webp"
               data-theme-image
-              data-light-src="/images/reviewarc-agent-review.webp"
-              data-dark-src="/images/reviewarc-agent-review-dark.webp"
-              width="1586"
-              height="992"
-              alt="ReviewArc's agent review brief showing a hold recommendation, changes, judgments requiring attention, verified evidence, and blind spots"
+              data-light-src="/images/reviewarc-agent-brief-concept.webp"
+              data-dark-src="/images/reviewarc-agent-brief-concept.webp"
+              width="1536"
+              height="1024"
+              alt="Concept for a ReviewArc agent review brief with a hold recommendation, three decisions needing attention, checked evidence, and supporting code"
               fetchpriority="high"
             />
           </div>
-          <figcaption><strong>Start with the agent's recommendation, then inspect only what could change your decision.</strong></figcaption>
+          <figcaption><strong>Start with the recommendation. Open the code only when you need to challenge it.</strong></figcaption>
         </figure>
       </section>
 
       <section class="review-arc" id="review-arc" aria-labelledby="review-arc-title">
         <header class="section-intro">
           <p class="section-label">How a review works</p>
-          <h2 id="review-arc-title">The agent does the broad review. You decide what remains.</h2>
-          <p>ReviewArc organizes each pull request around the confidence you need to approve—not the order of files in the diff.</p>
+          <h2 id="review-arc-title">A code review, not another summary to review.</h2>
+          <p>ReviewArc does the first pass across the pull request and surrounding code. You step in only for decisions it cannot safely make for you.</p>
         </header>
         <div class="arc-flow">
-          <article><strong>Clear the gate</strong><p>Wait for CI before spending agent or reviewer attention on a change that is not ready.</p></article>
-          <article><strong>Read the recommendation</strong><p>See what changed, the agent's approval posture, and the evidence and coverage behind it.</p></article>
-          <article><strong>Judge the exceptions</strong><p>Focus on consequential risks and uncertainty that the repository evidence could not settle.</p></article>
-          <article><strong>Confirm the decision</strong><p>Inspect cited code, draft comments, and explicitly choose what reaches GitHub.</p></article>
+          <article><strong>Wait for green CI</strong><p>ReviewArc pauses while checks are failing or still running.</p></article>
+          <article><strong>Get the recommendation</strong><p>See whether the agent would approve, hold, or ask for more evidence—and why.</p></article>
+          <article><strong>Handle what is unresolved</strong><p>Review only the few risks or tradeoffs that still need your experience.</p></article>
+          <article><strong>Send your review</strong><p>Edit the comments and confirm exactly what GitHub receives.</p></article>
         </div>
       </section>
 
@@ -145,25 +145,25 @@ const structuredData = {
         <figure class="product-visual review-visual">
           <div class="visual-stage">
             <img
-              src="/images/reviewarc-judgment.webp"
+              src="/images/reviewarc-human-decision-concept.webp"
               data-theme-image
-              data-light-src="/images/reviewarc-judgment.webp"
-              data-dark-src="/images/reviewarc-judgment-dark.webp"
-              width="1586"
-              height="992"
-              alt="ReviewArc's focused judgment view showing why a risk matters, validated evidence, existing discussion, and the reviewer's decision"
+              data-light-src="/images/reviewarc-human-decision-concept.webp"
+              data-dark-src="/images/reviewarc-human-decision-concept.webp"
+              width="1536"
+              height="1024"
+              alt="Concept for a focused ReviewArc decision showing a deadlock risk, why it matters, checked evidence, cited code, and three response choices"
               loading="lazy"
             />
           </div>
-          <figcaption><strong>One consequential judgment, with the code and decision kept in reach.</strong></figcaption>
+          <figcaption><strong>One clear question, the code behind it, and a way forward.</strong></figcaption>
         </figure>
         <div class="story-copy">
-          <h2 id="product-story-title">Go deeper only when the decision needs it.</h2>
-          <p>Each judgment explains the tradeoff, cites the exact revision, and keeps surrounding code, existing discussion, and a draft response one step away.</p>
+          <h2 id="product-story-title">When it needs you, it gets specific.</h2>
+          <p>Each question explains what could go wrong, points to the exact code behind it, and offers a clear next step. You can challenge the agent without reopening the whole diff.</p>
           <ul class="proof-list">
-            <li><strong>Evidence</strong><span>Open the cited lines or surrounding code without losing the judgment.</span></li>
-            <li><strong>Context</strong><span>See existing discussion attached to the affected code.</span></li>
-            <li><strong>Decision</strong><span>Accept the tradeoff or turn it into an editable local draft.</span></li>
+            <li><strong>Question</strong><span>See what could go wrong and why it matters.</span></li>
+            <li><strong>Code</strong><span>Open the cited lines and surrounding context.</span></li>
+            <li><strong>Response</strong><span>Accept the risk, request a change, or ask for more context.</span></li>
           </ul>
         </div>
       </section>
@@ -171,18 +171,18 @@ const structuredData = {
       <section class="trust-section" aria-labelledby="trust-title">
         <div class="trust-statement">
           <p class="section-label">Local until you publish</p>
-          <h2 id="trust-title">Nothing reaches GitHub until you confirm it.</h2>
+          <h2 id="trust-title">The agent can investigate. It cannot publish for you.</h2>
         </div>
         <div class="trust-summary">
-          <p>ReviewArc works in its own copy of the repository. Your checkout stays untouched, and your notes and drafts stay local.</p>
+          <p>ReviewArc works in its own copy of the repository. Your checkout stays untouched, and every note, draft, and decision stays on your Mac until you confirm the review.</p>
           <a class="secondary-action" href="/docs/security-and-local-data/">Read about security and local data <span aria-hidden="true">→</span></a>
         </div>
       </section>
 
       <section class="final-cta" aria-labelledby="final-cta-title">
         <div>
-          <p class="section-label">For your next consequential pull request</p>
-          <h2 id="final-cta-title">Try ReviewArc on a change where confidence matters.</h2>
+          <p class="section-label">For the next pull request you cannot skim</p>
+          <h2 id="final-cta-title">Get a real first pass without another wall of text.</h2>
         </div>
         <div class="final-actions">
           <a class="download-button is-loading" data-release-action aria-disabled="true"><span data-release-title>Checking signed release</span><small data-release-detail>Latest signed desktop build</small></a>
@@ -196,7 +196,7 @@ const structuredData = {
         <img class="brand-mark" src={reviewArcMark.src} alt="" width="31" height="25" />
         <span>ReviewArc</span>
       </a>
-      <span>A focused pull request reviewer.</span>
+      <span>AI code review that leaves the call with you.</span>
       <nav aria-label="Footer navigation"><a href="/docs/">Docs</a><a href="/docs/security-and-local-data/">Security</a><a href="/legal/notices/">Legal</a><a class="is-loading" data-release-action aria-disabled="true">Checking…</a></nav>
     </footer>
 
