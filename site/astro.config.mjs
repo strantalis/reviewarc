@@ -81,7 +81,7 @@ export default defineConfig({
           label: "Review workflow",
           items: [
             { label: "Analysis and re-analysis", slug: "docs/analysis-and-reanalysis" },
-            { label: "Guided review", slug: "docs/guided-review" },
+            { label: "Agent review and judgment", slug: "docs/guided-review" },
             { label: "Publishing reviews", slug: "docs/publishing-reviews" }
           ]
         },

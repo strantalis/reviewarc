@@ -945,6 +945,84 @@ func TestStartAnalysisLoadsFullContextBeforePreparingSnapshot(t *testing.T) {
 	}
 }
 
+func TestAnalysisCheckFailureClassifiesCheckOutcomes(t *testing.T) {
+	tests := []struct {
+		name   string
+		checks []domain.CheckRun
+		code   domain.AnalysisFailureCode
+	}{
+		{name: "no configured checks", checks: nil},
+		{name: "passing and non-blocking conclusions", checks: []domain.CheckRun{{Name: "test", Conclusion: "success"}, {Name: "docs", Conclusion: "neutral"}, {Name: "preview", Conclusion: "skipped"}}},
+		{name: "queued check", checks: []domain.CheckRun{{Name: "test", Status: "queued"}}, code: domain.FailureChecksPending},
+		{name: "cancelled check needs a rerun", checks: []domain.CheckRun{{Name: "test", Status: "completed", Conclusion: "cancelled"}}, code: domain.FailureChecksPending},
+		{name: "failed check", checks: []domain.CheckRun{{Name: "test", Status: "completed", Conclusion: "failure"}}, code: domain.FailureChecksFailed},
+		{name: "failure takes precedence over pending", checks: []domain.CheckRun{{Name: "lint", Status: "in_progress"}, {Name: "test", Conclusion: "timed_out"}}, code: domain.FailureChecksFailed},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			failure := analysisCheckFailure(test.checks)
+			if test.code == "" {
+				if failure != nil {
+					t.Fatalf("failure=%+v, want nil", failure)
+				}
+				return
+			}
+			if failure == nil || failure.Code != test.code || !failure.Retryable || failure.Action != domain.RetrySamePlan {
+				t.Fatalf("failure=%+v, want retryable %q", failure, test.code)
+			}
+		})
+	}
+}
+
+func TestStartAnalysisStopsBeforePreparingContextWhenChecksFail(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	ref := domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}
+	headSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	pr := domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: ref, Number: 7}, HeadSHA: headSHA}}
+	session := domain.ReviewSession{ID: "analysis-check-failure", PullRequest: pr, BaseSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", HeadSHA: headSHA, Status: domain.SessionPreparing, AnalysisStatus: domain.AnalysisNotStarted}
+	if err := store.SaveSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveAnalysisProfile(ctx, domain.AnalysisProfile{Harness: domain.HarnessCodex, Model: "fixture", Reasoning: domain.ReasoningMedium}); err != nil {
+		t.Fatal(err)
+	}
+	runner := &pullRequestFixtureRunner{checks: []byte(`[{"check_runs":[{"id":21,"name":"test","status":"completed","conclusion":"failure","html_url":"https://github.com/acme/api/actions/runs/21"}]}]`)}
+	registry, err := agent.NewRegistry(appAnalysisAdapter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := &App{github: githubclient.New(runner), store: store, runner: runner, harnesses: registry, prepared: newPreparedReviewCache(0, 0, 0), active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}}
+
+	if _, err := app.StartAnalysis(session.ID); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		current, loadErr := store.GetSession(ctx, session.ID)
+		if loadErr != nil {
+			t.Fatal(loadErr)
+		}
+		if current.AnalysisStatus == domain.AnalysisFailed {
+			if current.LatestAnalysisRun == nil || current.LatestAnalysisRun.Failure == nil || current.LatestAnalysisRun.Failure.Code != domain.FailureChecksFailed {
+				t.Fatalf("run=%+v, want checks_failed", current.LatestAnalysisRun)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("analysis did not stop at the check gate")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(runner.commands) != 3 {
+		t.Fatalf("commands=%d, want only reviews, comments, and checks: %v", len(runner.commands), runner.commands)
+	}
+}
+
 func TestAnalysisSchedulerRunsTwoJobsAndLeavesAdditionalWorkQueued(t *testing.T) {
 	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
 	if err != nil {

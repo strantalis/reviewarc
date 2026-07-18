@@ -51,6 +51,8 @@ const (
 	FailureMalformedOutput       AnalysisFailureCode = "malformed_structured_output"
 	FailureEvidenceValidation    AnalysisFailureCode = "evidence_validation_failed"
 	FailureContextAccess         AnalysisFailureCode = "context_access_failed"
+	FailureChecksPending         AnalysisFailureCode = "checks_pending"
+	FailureChecksFailed          AnalysisFailureCode = "checks_failed"
 	FailurePolicyViolation       AnalysisFailureCode = "policy_violation"
 	FailureRetryRequiresReplan   AnalysisFailureCode = "retry_requires_replan"
 	FailureTimeout               AnalysisFailureCode = "timeout"

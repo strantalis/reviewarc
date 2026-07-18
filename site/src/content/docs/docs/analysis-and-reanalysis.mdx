@@ -5,17 +5,17 @@ description: How ReviewArc evaluates a pull request, validates evidence, and det
 
 ReviewArc makes the pull request's complete current diff available against its base revision. The harness reads relevant per-file pages through bounded local tools, and ReviewArc records full, partial, and unread diff coverage. Re-analysis is intentionally end to end: it evaluates the current pull request again rather than analyzing only commits added since the previous run.
 
-That choice keeps chapters, risks, test relationships, and cross-file behavior coherent after a revision changes. It also means re-analysis cost and time generally scale with the full pull request, not only its newest commit.
+That choice keeps the recommendation, judgments, evidence, blind spots, and cross-file behavior coherent after a revision changes. It also means re-analysis cost and time generally scale with the full pull request, not only its newest commit.
 
 ## Read-only execution
 
 ReviewArc invokes the selected compatible harness with a strict JSON output schema and controlled access to an immutable local analysis bundle. The initial prompt does not embed the full diff. The analysis process is read-only. ReviewArc does not run arbitrary project commands, package scripts, tests, hooks, or generated instructions from the repository.
 
-Progress is streamed into the app while the structured review model is built.
+Progress is streamed into the app while the structured agent review is built. The result includes an approval recommendation, explicit human judgments, the observations behind them, verified signals, and remaining blind spots. ReviewArc does not merge separate findings in the interface based on similar wording; any grouping must be explicit in the agent's structured result and explain the shared root cause.
 
 ## Evidence validation
 
-AI output is treated as a proposal, not ground truth. Before displaying evidence, ReviewArc validates that each referenced file belongs to the reviewed revision and that each line range exists in that file or diff.
+AI output is treated as a proposal, not ground truth. Before displaying evidence, ReviewArc validates that each referenced file belongs to the reviewed revision and that each line range exists in that file or diff. This validates the citation, not the agent's interpretation of it.
 
 Claims without valid supporting evidence remain explicitly unverified. ReviewArc preserves the distinction between:
 

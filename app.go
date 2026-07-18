@@ -116,7 +116,7 @@ type AnalysisRequest struct {
 	SaveAsDefault bool                    `json:"saveAsDefault"`
 }
 
-const analysisPromptVersion = 2
+const analysisPromptVersion = 3
 
 type AnalysisConfiguration struct {
 	DefaultProfile *domain.AnalysisProfile `json:"defaultProfile,omitempty"`
@@ -1397,6 +1397,14 @@ func (a *App) prepareAndRunAnalysis(ctx context.Context, op Operation, session d
 		return
 	}
 	session = refreshed
+	if failure := analysisCheckFailure(session.PullRequest.CheckRuns); failure != nil {
+		a.mu.Lock()
+		delete(a.active, op.ID)
+		delete(a.analysisBySession, sessionID)
+		a.mu.Unlock()
+		a.failAnalysisOperation(op, *failure, domain.AnalysisCoverage{})
+		return
+	}
 	op.Stage = "preparingContext"
 	op.Message = "Preparing bounded review context"
 	a.emitOperation(op)
@@ -1571,6 +1579,48 @@ func (r evidenceFileReader) ReadFile(ctx context.Context, revision domain.Revisi
 
 func contextFailure(err error) domain.AnalysisFailure {
 	return domain.AnalysisFailure{Code: domain.FailureContextAccess, Title: "Review context could not be prepared", Message: "ReviewArc could not prepare the bounded pull request context for analysis.", Action: domain.RetrySamePlan, Retryable: true, TechnicalDetails: safeMessage(err)}
+}
+
+func analysisCheckFailure(checks []domain.CheckRun) *domain.AnalysisFailure {
+	if len(checks) == 0 {
+		return nil
+	}
+	passing := map[string]bool{"success": true, "neutral": true, "skipped": true}
+	failing := map[string]bool{"failure": true, "timed_out": true, "action_required": true, "startup_failure": true}
+	failedNames := make([]string, 0)
+	waitingNames := make([]string, 0)
+	for _, check := range checks {
+		result := strings.ToLower(strings.TrimSpace(check.Conclusion))
+		if passing[result] {
+			continue
+		}
+		if failing[result] {
+			failedNames = append(failedNames, check.Name)
+			continue
+		}
+		waitingNames = append(waitingNames, check.Name)
+	}
+	if len(failedNames) > 0 {
+		return &domain.AnalysisFailure{
+			Code:             domain.FailureChecksFailed,
+			Title:            "Review paused while CI is failing",
+			Message:          "Fix or rerun the failing checks before ReviewArc spends model time while CI is failing.",
+			Action:           domain.RetrySamePlan,
+			Retryable:        true,
+			TechnicalDetails: "Failing checks: " + strings.Join(failedNames, ", "),
+		}
+	}
+	if len(waitingNames) > 0 {
+		return &domain.AnalysisFailure{
+			Code:             domain.FailureChecksPending,
+			Title:            "Review is waiting for CI",
+			Message:          "ReviewArc will start the deep review after the current checks are rerun or finish successfully.",
+			Action:           domain.RetrySamePlan,
+			Retryable:        true,
+			TechnicalDetails: "Waiting checks: " + strings.Join(waitingNames, ", "),
+		}
+	}
+	return nil
 }
 
 func providerStartFailure(err error) domain.AnalysisFailure {

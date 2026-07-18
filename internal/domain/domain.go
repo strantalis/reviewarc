@@ -317,6 +317,23 @@ type ReviewRisk struct {
 	ValidationMessage string              `json:"validationMessage,omitempty"`
 }
 
+type ReviewObservation struct {
+	ID          string              `json:"id"`
+	Title       string              `json:"title"`
+	Description string              `json:"description"`
+	Evidence    []EvidenceReference `json:"evidence"`
+}
+
+type ReviewJudgment struct {
+	ID                string              `json:"id"`
+	Title             string              `json:"title"`
+	Description       string              `json:"description"`
+	Kind              string              `json:"kind"`
+	Level             RiskLevel           `json:"level"`
+	GroupingRationale string              `json:"groupingRationale"`
+	Observations      []ReviewObservation `json:"observations"`
+}
+
 type FileReference struct {
 	Path              string           `json:"path"`
 	Description       string           `json:"description"`
@@ -391,6 +408,7 @@ type ReviewAnalysis struct {
 	Facts             []Claim             `json:"facts"`
 	Inferences        []Claim             `json:"inferences"`
 	Unknowns          []Claim             `json:"unknowns"`
+	Judgments         []ReviewJudgment    `json:"judgments,omitempty"`
 	CreatedAt         time.Time           `json:"createdAt"`
 	ValidationIssues  []ValidationIssue   `json:"validationIssues"`
 }

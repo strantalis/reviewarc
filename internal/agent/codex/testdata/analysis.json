@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "baseSha": "1111111111111111111111111111111111111111",
   "headSha": "2222222222222222222222222222222222222222",
   "summary": "Changes greeting behavior.",
@@ -23,5 +23,14 @@
     {"id":"fact-invalid","text":"A secret file changes.","evidence":[{"id":"ev-escape","path":"../secret.txt","revision":"head","startLine":1,"endLine":1,"symbol":""}]}
   ],
   "inferences": [{"id":"inference-1","text":"This may be intended for onboarding.","evidence":[]}],
-  "unknowns": [{"id":"unknown-1","text":"Expected empty-input behavior is unknown.","evidence":[]}]
+  "unknowns": [{"id":"unknown-1","text":"Expected empty-input behavior is unknown.","evidence":[]}],
+  "judgments": [{
+    "id":"judgment-1",
+    "title":"Decide whether empty input is acceptable",
+    "description":"The changed greeting path does not establish the intended empty-input behavior.",
+    "kind":"unknown",
+    "level":"unknown",
+    "groupingRationale":"",
+    "observations":[{"id":"observation-1","title":"Empty-input behavior is unspecified","description":"The implementation does not establish the expected behavior for an empty name.","evidence":[{"id":"ev-judgment","path":"src/greet.go","revision":"head","startLine":1,"endLine":2,"symbol":"Greet"}]}]
+  }]
 }

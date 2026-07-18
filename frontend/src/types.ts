@@ -44,6 +44,8 @@ export type EvidenceReference = Omit<domain.EvidenceReference, 'revision' | 'val
 export interface Claim { id: string; kind: ClaimKind; text: string; evidence: EvidenceReference[]; validationStatus: ValidationStatus; validationMessage?: string }
 export interface BehavioralChange { id: string; summary: string; before: string; after: string; evidence: EvidenceReference[] }
 export interface ReviewRisk { id: string; title: string; description: string; level: RiskLevel; evidence: EvidenceReference[] }
+export interface ReviewObservation { id: string; title: string; description: string; evidence: EvidenceReference[] }
+export interface ReviewJudgment { id: string; title: string; description: string; kind: 'risk' | 'unknown'; level: RiskLevel; groupingRationale: string; observations: ReviewObservation[] }
 export interface FileReference { path: string; description: string }
 export interface SymbolReference { path: string; name: string; evidence: EvidenceReference[] }
 export interface AffectedArea { name: string; description: string; evidence: EvidenceReference[] }
@@ -59,7 +61,7 @@ export interface ReviewAnalysis {
   schemaVersion: number; baseSha: string; headSha: string; summary: string; summaryEvidence: EvidenceReference[]
   summaryValidation: ValidationStatus; summaryMessage?: string; affectedAreas: AffectedArea[]
   chapters: ReviewChapter[]; behavioralChanges: BehavioralChange[]; risks: ReviewRisk[]; facts: Claim[]
-  inferences: Claim[]; unknowns: Claim[]; createdAt: string; validationIssues: {code: string; message: string; evidenceId?: string}[]
+  inferences: Claim[]; unknowns: Claim[]; judgments?: ReviewJudgment[]; createdAt: string; validationIssues: {code: string; message: string; evidenceId?: string}[]
 }
 export interface ReasoningLevel { id: string; label: string; recommended?: boolean }
 export interface HarnessModel { id: string; label: string; reasoningLevels: ReasoningLevel[]; recommended?: boolean }

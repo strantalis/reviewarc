@@ -1199,6 +1199,84 @@ export namespace domain {
 	        this.evidenceId = source["evidenceId"];
 	    }
 	}
+	export class ReviewObservation {
+	    id: string;
+	    title: string;
+	    description: string;
+	    evidence: EvidenceReference[];
+
+	    static createFrom(source: any = {}) {
+	        return new ReviewObservation(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.description = source["description"];
+	        this.evidence = this.convertValues(source["evidence"], EvidenceReference);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ReviewJudgment {
+	    id: string;
+	    title: string;
+	    description: string;
+	    kind: string;
+	    level: string;
+	    groupingRationale: string;
+	    observations: ReviewObservation[];
+
+	    static createFrom(source: any = {}) {
+	        return new ReviewJudgment(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.description = source["description"];
+	        this.kind = source["kind"];
+	        this.level = source["level"];
+	        this.groupingRationale = source["groupingRationale"];
+	        this.observations = this.convertValues(source["observations"], ReviewObservation);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class SuggestedQuestion {
 	    id: string;
 	    text: string;
@@ -1424,6 +1502,7 @@ export namespace domain {
 	    facts: Claim[];
 	    inferences: Claim[];
 	    unknowns: Claim[];
+	    judgments?: ReviewJudgment[];
 	    // Go type: time
 	    createdAt: any;
 	    validationIssues: ValidationIssue[];
@@ -1448,6 +1527,7 @@ export namespace domain {
 	        this.facts = this.convertValues(source["facts"], Claim);
 	        this.inferences = this.convertValues(source["inferences"], Claim);
 	        this.unknowns = this.convertValues(source["unknowns"], Claim);
+	        this.judgments = this.convertValues(source["judgments"], ReviewJudgment);
 	        this.createdAt = this.convertValues(source["createdAt"], null);
 	        this.validationIssues = this.convertValues(source["validationIssues"], ValidationIssue);
 	    }
@@ -1531,6 +1611,7 @@ export namespace domain {
 		    return a;
 		}
 	}
+
 	export class ReviewNote {
 	    id: string;
 	    sessionId: string;
@@ -1573,6 +1654,7 @@ export namespace domain {
 		    return a;
 		}
 	}
+
 
 
 	export class ReviewSession {
