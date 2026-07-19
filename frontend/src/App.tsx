@@ -10,6 +10,7 @@ import { AnalysisBadge, DependencyPills, ErrorBanner, Logo, Markdown, RiskBadge,
 import { useDialogFocus } from './dialog'
 import { errorText } from './errors'
 import { InboxScreen } from './features/inbox/InboxScreen'
+import { useSessionSync } from './features/inbox/useSessionSync'
 import {
   ChapterEvidenceIndex, ChapterReader, DiffView, DraftsPanel, FileContextView, NotesPanel, PublishConfirmation, ReviewSummary,
   SplitDiffView, SymbolNavigator, ThreadReplyConfirmation, draftTargetFor, type DraftTarget,
@@ -73,16 +74,7 @@ export function App() {
   const [analysisConfigurationBusy, setAnalysisConfigurationBusy] = useState(false)
   const [analysisConfigurationError, setAnalysisConfigurationError] = useState('')
   const [inboxRefreshErrors, setInboxRefreshErrors] = useState<Record<string, string>>({})
-  const updateInbox = useCallback((update: (items: PullRequestSummary[]) => PullRequestSummary[]) => setBootstrap((current) => current ? {...current, inbox: update(current.inbox)} : current), [])
-  const syncInboxSession = useCallback((next: ReviewSession) => {
-    updateInbox((current) => current.map((item) => item.sessionId === next.id || (repoName(item) === repoName(next.pullRequest) && item.ref.number === next.pullRequest.ref.number)
-      ? {...item, sessionId: next.id, analysisStatus: next.analysisStatus, progress: next.progress, riskLevel: next.pullRequest.riskLevel}
-      : item))
-  }, [updateInbox])
-  const syncSession = useCallback((next: ReviewSession) => {
-    setSession(next)
-    syncInboxSession(next)
-  }, [syncInboxSession])
+  const {updateInbox, syncSession} = useSessionSync(setBootstrap, setSession)
   const openRequest = useRef(0)
   const environmentRequest = useRef(0)
 
@@ -118,15 +110,6 @@ export function App() {
 
   useEffect(() => { void load() }, [])
   useEffect(() => backend.on('reviewarc:update:v1', (raw) => setSoftwareUpdate(raw as SoftwareUpdateStatus)), [])
-  useEffect(() => backend.on('reviewarc:operation:v1', (raw) => {
-    const operation = raw as Operation
-    if (!operation.sessionId) return
-    if (operation.state === 'queued' || operation.state === 'running') {
-      updateInbox((current) => current.map((item) => item.sessionId === operation.sessionId ? {...item, analysisStatus: operation.state as 'queued' | 'running'} : item))
-      return
-    }
-    if (['completed', 'complete', 'failed', 'cancelled'].includes(operation.state)) void backend.getSession(operation.sessionId).then(syncInboxSession).catch(() => {})
-  }), [syncInboxSession, updateInbox])
   useEffect(() => {
     if (!bootstrap || analysisConfiguration || typeof window.go?.main?.App?.GetAnalysisConfiguration !== 'function') return
     void (async () => {
@@ -436,7 +419,7 @@ export function OverviewScreen({session, analysisConfiguration = legacyOverviewA
       if (saveAsDefault && !legacyAnalysis) onAnalysisConfiguration({...analysisConfiguration, defaultProfile: selected})
       setProfileOpen(false)
     } catch (err) { setFailure(operationFailure(errorText(err), Boolean(analysis))) }
-  }, [analysis, analysisConfiguration, legacyAnalysis, onAnalysisConfiguration, profile, reviewPaused, session])
+  }, [analysis, analysisConfiguration, legacyAnalysis, onAnalysisConfiguration, onSession, profile, reviewPaused, session])
   const running = session.analysisStatus === 'queued' || session.analysisStatus === 'running' || Boolean(operation && !['complete', 'completed', 'failed', 'cancelled'].includes(operation.state))
   useEffect(() => {
     const previous = previousGateStatus.current

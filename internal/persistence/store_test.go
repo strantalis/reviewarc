@@ -45,7 +45,7 @@ func TestMigrationsAndReopen(t *testing.T) {
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&applied); err != nil {
 		t.Fatal(err)
 	}
-	if applied != 7 {
+	if applied != 8 {
 		t.Fatalf("applied migrations = %d", applied)
 	}
 }
@@ -67,7 +67,7 @@ func TestAccessibleRepositoryMigrationRepairsPreAccountCatalog(t *testing.T) {
 			sync_id TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		);
-		DELETE FROM schema_migrations WHERE version='007_rebuild_accessible_repositories.sql';
+		DELETE FROM schema_migrations WHERE version='008_rebuild_accessible_repositories.sql';
 		INSERT INTO repositories(repo_key,repository_json,updated_at) VALUES('github.com/acme/api','{}','2026-07-16T00:00:00Z');
 		INSERT INTO accessible_repositories(repo_key,owner,name,description,sync_id,updated_at) VALUES('github.com/acme/api','acme','api','','old-sync','2026-07-16T00:00:00Z');
 		INSERT INTO settings(key,value_json,updated_at) VALUES('accessible_repository_catalog:sean','{}','2026-07-16T00:00:00Z');
