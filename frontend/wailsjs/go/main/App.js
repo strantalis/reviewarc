@@ -58,6 +58,10 @@ export function GetFile(arg1, arg2, arg3) {
   return window['go']['main']['App']['GetFile'](arg1, arg2, arg3);
 }
 
+export function GetRevisionDelta(arg1) {
+  return window['go']['main']['App']['GetRevisionDelta'](arg1);
+}
+
 export function GetSession(arg1) {
   return window['go']['main']['App']['GetSession'](arg1);
 }
@@ -164,6 +168,10 @@ export function SearchOwnerRepositories(arg1) {
 
 export function SetChapterStatus(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetChapterStatus'](arg1, arg2, arg3);
+}
+
+export function SetJudgmentDecision(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['SetJudgmentDecision'](arg1, arg2, arg3, arg4);
 }
 
 export function SetUpdateChannel(arg1) {

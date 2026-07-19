@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import {
   AlertTriangle, ArrowLeft, ArrowRight, BookOpen, Check, ChevronRight, CircleHelp, Download,
-  Columns2, Command, ExternalLink, FileCode2, FileDiff, GitPullRequest, Inbox, ListFilter, LoaderCircle,
+  Columns2, Command, ExternalLink, FileDiff, GitPullRequest, Inbox, LoaderCircle,
   Maximize2, MessageSquare, Minimize2, Monitor, Moon, PanelRight, RefreshCw, Settings, ShieldCheck,
   SlidersHorizontal, Sparkles, Sun, X,
 } from 'lucide-react'
 import { backend } from './bridge'
-import { AnalysisBadge, DependencyPills, ErrorBanner, Logo, Markdown, RiskBadge, SelectControl, Skeleton, StatusDot, WindowControls } from './components'
+import { AnalysisBadge, DependencyPills, ErrorBanner, Logo, Markdown, RiskBadge, SelectControl, Skeleton, WindowControls } from './components'
 import { useDialogFocus } from './dialog'
 import { errorText } from './errors'
 import { InboxScreen } from './features/inbox/InboxScreen'
@@ -14,6 +14,9 @@ import {
   ChapterEvidenceIndex, ChapterReader, DiffView, DraftsPanel, FileContextView, NotesPanel, PublishConfirmation, ReviewSummary,
   SplitDiffView, SymbolNavigator, ThreadReplyConfirmation, draftTargetFor, type DraftTarget,
 } from './features/review/ReviewContent'
+import { AgentFindingDetail, AgentReviewBrief, ReviewGatePanel } from './features/review/DecisionMode'
+import { StaleRevisionDelta } from './features/review/StaleDelta'
+import { briefRiskLevel, buildAgentReviewBrief, decisionReviewMap, reviewGate, type DecisionReview, type DecisionReviewMap } from './features/review/decision'
 import { SourceSelector } from './features/sources/SourceSelector'
 import { WindowToggleMaximise } from '../wailsjs/runtime/runtime'
 import { relativeTime, repoName } from './lib'
@@ -24,7 +27,7 @@ import {
 } from './features/analysis/analysis'
 import type {
   AnalysisConfiguration, AnalysisFailure, AnalysisProfile, AnalysisRun, BootstrapState, ChangedFile, ChapterStatus, DependencyStatus, DiffFile, EnvironmentState, EvidenceReference, FileContent, Operation,
-  OperationEvent, PublishPreview, PullRequestReviewComment, PullRequestSummary, ReviewChapter, ReviewRisk,
+  OperationEvent, PublishPreview, PullRequestReviewComment, PullRequestSummary,
   ReviewComment, ReviewSession, SoftwareUpdateStatus, UpdateChannel,
   ThreadReplyPreview,
 } from './types'
@@ -49,6 +52,16 @@ export function App() {
   const [session, setSession] = useState<ReviewSession>()
   const [openingPR, setOpeningPR] = useState<PullRequestSummary>()
   const [reviewChapterId, setReviewChapterId] = useState('')
+  const [reviewFindingId, setReviewFindingId] = useState('')
+  const [decisionReview, setDecisionReview] = useState<DecisionReviewMap>({})
+  // Reload persisted finding decisions when a different session opens or a new
+  // analysis replaces the findings they judged.
+  const decisionScope = session ? `${session.id}:${session.analysis?.createdAt ?? ''}` : ''
+  const sessionDecisions = session?.decisions
+  useEffect(() => {
+    setDecisionReview(decisionReviewMap(sessionDecisions))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [decisionScope])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [commandOpen, setCommandOpen] = useState(false)
@@ -113,7 +126,7 @@ export function App() {
 
   const openPR = async (pr: PullRequestSummary) => {
 	const request = ++openRequest.current
-	setError(''); setSession(undefined); setOpeningPR(pr); setReviewChapterId(''); setScreen('overview')
+	setError(''); setSession(undefined); setOpeningPR(pr); setReviewChapterId(''); setReviewFindingId(''); setDecisionReview({}); setScreen('overview')
 	let value: ReviewSession
 	try { value = await backend.openPullRequest(pr.ref) }
 	catch (err) { if (openRequest.current === request) { setOpeningPR(undefined); setScreen('inbox'); setError(errorText(err)) }; return }
@@ -193,13 +206,13 @@ export function App() {
     {screen === 'inbox' && <InboxScreen state={bootstrap} onUpdate={updateInbox} onOpen={(pr) => void openPR(pr)}/>}
     {openingPR && screen === 'overview' && <OpeningPullRequest pr={openingPR} onBack={() => { openRequest.current++; setOpeningPR(undefined); setScreen('inbox') }}/>}
     {session && screen === 'overview' && !effectiveAnalysisConfiguration && (
-      <AnalysisConfigurationGate session={session} error={analysisConfigurationError} busy={analysisConfigurationBusy} onRetry={() => void refreshAnalysisHarnesses()} onBack={() => { openRequest.current++; setSession(undefined); setReviewChapterId(''); setScreen('inbox') }}/>
+      <AnalysisConfigurationGate session={session} error={analysisConfigurationError} busy={analysisConfigurationBusy} onRetry={() => void refreshAnalysisHarnesses()} onBack={() => { openRequest.current++; setSession(undefined); setReviewChapterId(''); setReviewFindingId(''); setDecisionReview({}); setScreen('inbox') }}/>
     )}
     {session && screen === 'overview' && effectiveAnalysisConfiguration && (
-      <OverviewScreen session={session} analysisConfiguration={effectiveAnalysisConfiguration} legacyAnalysis={!configurableAnalysisBackend} onAnalysisConfiguration={(configuration) => setAnalysisConfiguration(configuration)} onRefreshHarnesses={() => void refreshAnalysisHarnesses()} onOpenSettings={() => setScreen('settings')} onBack={() => { openRequest.current++; setSession(undefined); setReviewChapterId(''); setScreen('inbox') }} onSession={setSession} onReview={(chapterId) => { setReviewChapterId(chapterId ?? ''); setScreen('review') }}/>
+      <OverviewScreen session={session} analysisConfiguration={effectiveAnalysisConfiguration} legacyAnalysis={!configurableAnalysisBackend} decisionReview={decisionReview} onAnalysisConfiguration={(configuration) => setAnalysisConfiguration(configuration)} onRefreshHarnesses={() => void refreshAnalysisHarnesses()} onOpenSettings={() => setScreen('settings')} onBack={() => { openRequest.current++; setSession(undefined); setReviewChapterId(''); setReviewFindingId(''); setDecisionReview({}); setScreen('inbox') }} onSession={setSession} onReview={(chapterId, findingId) => { setReviewChapterId(chapterId ?? ''); setReviewFindingId(findingId ?? ''); setScreen('review') }}/>
     )}
     {session && screen === 'review' && (
-      <ReviewWorkspace session={session} initialChapterId={reviewChapterId} onSession={setSession} onBack={() => setScreen('overview')}/>
+      <ReviewWorkspace session={session} initialChapterId={reviewChapterId} initialFindingId={reviewFindingId} initialSummaryOpen={reviewFindingId === '__summary__'} decisionReview={decisionReview} onDecisionReview={(id, review) => setDecisionReview((current) => ({...current, [id]: review}))} onSession={setSession} onBack={() => setScreen('overview')}/>
     )}
     {commandOpen && <CommandPalette items={bootstrap.inbox} onClose={() => setCommandOpen(false)} onOpen={(pr) => { setCommandOpen(false); void openPR(pr) }}/>}
     {installUpdateOpen && softwareUpdate?.release && <UpdateInstallConfirmation update={softwareUpdate} busy={updateBusy} onCancel={() => setInstallUpdateOpen(false)} onConfirm={() => { setInstallUpdateOpen(false); void installUpdate() }}/>}
@@ -322,8 +335,13 @@ function mergeOperationEvents(history: Operation[], current: OperationEvent[]) {
   return [...history.map(eventForOperation), ...current].reduce<OperationEvent[]>((events, event) => appendOperationEvent(events, event), [])
 }
 
-export function OverviewScreen({session, analysisConfiguration = legacyOverviewAnalysisConfiguration, legacyAnalysis = true, onAnalysisConfiguration = () => {}, onRefreshHarnesses = () => {}, onOpenSettings = () => {}, onBack, onSession, onReview}: {session: ReviewSession; analysisConfiguration?: AnalysisConfiguration; legacyAnalysis?: boolean; onAnalysisConfiguration?: (configuration: AnalysisConfiguration) => void; onRefreshHarnesses?: () => void; onOpenSettings?: () => void; onBack: () => void; onSession: (session: ReviewSession) => void; onReview: (chapterId?: string) => void}) {
+export function OverviewScreen({session, analysisConfiguration = legacyOverviewAnalysisConfiguration, legacyAnalysis = true, decisionReview = {}, onAnalysisConfiguration = () => {}, onRefreshHarnesses = () => {}, onOpenSettings = () => {}, onBack, onSession, onReview}: {session: ReviewSession; analysisConfiguration?: AnalysisConfiguration; legacyAnalysis?: boolean; decisionReview?: DecisionReviewMap; onAnalysisConfiguration?: (configuration: AnalysisConfiguration) => void; onRefreshHarnesses?: () => void; onOpenSettings?: () => void; onBack: () => void; onSession: (session: ReviewSession) => void; onReview: (chapterId?: string, findingId?: string) => void}) {
   const pr = session.pullRequest; const analysis = session.analysis; const persistedFailure = session.latestAnalysisRun?.status === 'failed' ? session.latestAnalysisRun.failure : undefined; const [operation, setOperation] = useState<Operation>(); const [events, setEvents] = useState<OperationEvent[]>([]); const [failure, setFailure] = useState<AnalysisFailure | undefined>(persistedFailure); const [profile, setProfile] = useState<AnalysisProfile | undefined>(() => recommendedProfile(analysisConfiguration)); const [profileOpen, setProfileOpen] = useState(false); const [coverageOpen, setCoverageOpen] = useState(false); const [coverageFocus, setCoverageFocus] = useState<{kind: 'previewed' | 'unseen' | 'legacy'; request: number}>({kind: 'legacy', request: 0})
+  const [checksRefreshing, setChecksRefreshing] = useState(false)
+  const [checkRefreshError, setCheckRefreshError] = useState('')
+  const gate = useMemo(() => reviewGate(pr.checkRuns), [pr.checkRuns])
+  const previousGateStatus = useRef(gate.status)
+  const reviewPaused = gate.status === 'blocked' || gate.status === 'waiting'
   useEffect(() => { setProfile(recommendedProfile(analysisConfiguration)); setProfileOpen(false) }, [analysisConfiguration])
   useEffect(() => { setFailure(session.latestAnalysisRun?.status === 'failed' ? session.latestAnalysisRun.failure : undefined) }, [session.id, session.latestAnalysisRun?.id, session.latestAnalysisRun?.status, session.latestAnalysisRun?.failure])
   useEffect(() => { setOperation(undefined); setEvents([]) }, [session.id])
@@ -366,9 +384,22 @@ export function OverviewScreen({session, analysisConfiguration = legacyOverviewA
     }
     return () => { disposed = true; offOperation(); offSession() }
   }, [analysis, session.id, session.analysisStatus, onSession])
-  const analyze = async () => {
+  const refreshChecks = useCallback(async () => {
+    setChecksRefreshing(true); setCheckRefreshError('')
+    try {
+      const opened = await backend.openPullRequest(pr.ref)
+      onSession(await backend.refreshPullRequestContext(opened.id))
+    } catch (err) { setCheckRefreshError(errorText(err)) }
+    finally { setChecksRefreshing(false) }
+  }, [onSession, pr.ref])
+  useEffect(() => {
+    if (gate.status !== 'waiting' || checksRefreshing) return undefined
+    const timeout = window.setTimeout(() => void refreshChecks(), 15000)
+    return () => window.clearTimeout(timeout)
+  }, [checksRefreshing, gate.status, refreshChecks])
+  const analyze = useCallback(async () => {
     const selected = profile ?? recommendedProfile(analysisConfiguration)
-    if (!selected || !analysisProfileReady(analysisConfiguration, selected)) return
+    if (reviewPaused || !selected || !analysisProfileReady(analysisConfiguration, selected)) return
     setFailure(undefined); setEvents([])
     try {
       const saveAsDefault = !analysisConfiguration.defaultProfile
@@ -377,8 +408,13 @@ export function OverviewScreen({session, analysisConfiguration = legacyOverviewA
       if (saveAsDefault && !legacyAnalysis) onAnalysisConfiguration({...analysisConfiguration, defaultProfile: selected})
       setProfileOpen(false)
     } catch (err) { setFailure(operationFailure(errorText(err), Boolean(analysis))) }
-  }
+  }, [analysis, analysisConfiguration, legacyAnalysis, onAnalysisConfiguration, profile, reviewPaused, session])
   const running = session.analysisStatus === 'queued' || session.analysisStatus === 'running' || Boolean(operation && !['complete', 'completed', 'failed', 'cancelled'].includes(operation.state))
+  useEffect(() => {
+    const previous = previousGateStatus.current
+    previousGateStatus.current = gate.status
+    if ((previous === 'waiting' || previous === 'blocked') && gate.status === 'clear' && !analysis && !running) void analyze()
+  }, [analysis, analyze, gate.status, running])
   const profileReady = analysisProfileReady(analysisConfiguration, profile)
   const cancel = async () => { if (!operation) return; try { await backend.cancelOperation(operation.id) } catch (err) { setFailure(operationFailure(errorText(err), Boolean(analysis))) } }
   const configured = Boolean(analysisConfiguration.defaultProfile)
@@ -386,12 +422,25 @@ export function OverviewScreen({session, analysisConfiguration = legacyOverviewA
     setCoverageOpen(true)
     setCoverageFocus((current) => ({kind, request: current.request + 1}))
   }
-  const staleBanner = session.isStale ? <div className="stale-banner overview-stale-banner"><AlertTriangle size={18}/><div className="stale-banner-copy"><strong>Analysis covers an older revision</strong><p>{session.staleReason || `This guided review covers ${session.headSha.slice(0, 8)}; the pull request is now ${pr.headSha.slice(0, 8)}. Notes, drafts, and progress are preserved.`}</p></div><div className="stale-banner-actions"><button className="button secondary" disabled={!analysis || running} onClick={() => onReview()}>Continue stale review</button>{profile && <button className="button primary" disabled={running || !profileReady} onClick={() => void analyze()}>{!running && <RefreshCw size={15}/>} {running ? 'Reanalysis running' : 'Reanalyze current revision'}</button>}</div></div> : undefined
-  return <main className="detail-page overview-page"><div className="detail-top"><button className="button text" onClick={onBack}><ArrowLeft size={16}/>Inbox</button><div className="detail-actions">{analysis && profile && <AnalysisProfileSummary configuration={analysisConfiguration} profile={profile} expanded={profileOpen} onChange={running ? undefined : () => setProfileOpen((open) => !open)}/>} {analysis && !profile && <button className="button secondary" onClick={onOpenSettings}><Settings size={15}/>Configure AI analysis</button>} {!session.isStale && <>{analysis && profile && <button className="button secondary" disabled={running || !profileReady} onClick={() => void analyze()}>{!running && <RefreshCw size={15}/>} {running ? 'Reanalysis running' : 'Reanalyze'}</button>}<button className="button primary" disabled={!analysis || running} onClick={() => onReview()}>Start guided review<ArrowRight size={16}/></button></>}</div></div>
+  const staleBanner = session.isStale ? <section className="stale-banner overview-stale-banner" role="status" aria-labelledby="stale-analysis-title">
+    <AlertTriangle size={18} aria-hidden="true"/>
+    <div className="stale-banner-copy">
+      <strong id="stale-analysis-title">Analysis out of date</strong>
+      <p>New commits were added after this review. Reanalyze before approving.</p>
+    </div>
+    <div className="stale-banner-actions">
+      {profile
+        ? <button className="button primary" aria-label={running ? 'Reanalysis running' : 'Reanalyze latest revision'} disabled={running || !profileReady} onClick={() => void analyze()}>{!running && <RefreshCw size={15}/>} {running ? 'Running' : 'Reanalyze'}</button>
+        : <button className="button primary" aria-label="Configure reanalysis" onClick={onOpenSettings}><Settings size={15}/>Configure</button>}
+      <button className="button text" aria-label="Open previous review" disabled={!analysis || running} onClick={() => onReview()}>Previous</button>
+    </div>
+  </section> : undefined
+  return <main className="detail-page overview-page"><div className="detail-top"><button className="button text" onClick={onBack}><ArrowLeft size={16}/>Inbox</button><div className="detail-actions">{analysis && profile && <AnalysisProfileSummary configuration={analysisConfiguration} profile={profile} expanded={profileOpen} onChange={running ? undefined : () => setProfileOpen((open) => !open)}/>} {analysis && !profile && <button className="button secondary" onClick={onOpenSettings}><Settings size={15}/>Configure AI analysis</button>} {!session.isStale && <>{analysis && profile && <button className="button secondary" disabled={running || reviewPaused || !profileReady} onClick={() => void analyze()}>{!running && <RefreshCw size={15}/>} {running ? 'Reanalysis running' : 'Reanalyze'}</button>}<button className="button primary" disabled={!analysis || running || reviewPaused} title={reviewPaused ? 'Wait for the current checks before opening the review.' : ''} onClick={() => onReview()}>Open review<ArrowRight size={16}/></button></>}</div></div>
     {analysis && !running && profileOpen && profile && <div className="analysis-override" id="analysis-profile-override"><div><strong>For this run</strong><small>This changes the next analysis only. Your Settings default stays the same.</small></div><AnalysisProfilePicker configuration={analysisConfiguration} value={profile} onChange={setProfile}/><button className="button text small" onClick={() => { setProfile(recommendedProfile(analysisConfiguration)); setProfileOpen(false) }}>Use default</button></div>}
     {!analysis && staleBanner}
     {!analysis && <header className="pr-hero compact"><div><span className="repo-label">{repoName(pr)}</span><h1><span>#{pr.ref.number}</span> {pr.title}</h1><div className="hero-meta"><span>@{pr.author.login}</span><span>{pr.baseRef} ← {pr.headRef}</span><span>{pr.commits.length} commit{pr.commits.length === 1 ? '' : 's'}</span><span>{pr.changedFiles} files</span>{pr.requestedReviewers.length > 0 && <span>Review: {pr.requestedReviewers.map((reviewer) => `@${reviewer.login}`).join(', ')}</span>}{pr.reviewState && <span>{pr.reviewState.replaceAll('_', ' ').toLowerCase()}</span>}<span className="additions">+{pr.additions}</span><span className="deletions">−{pr.deletions}</span></div></div><div className="hero-status"><AnalysisBadge status={running ? 'running' : session.analysisStatus}/><small>Head {pr.headSha.slice(0, 8)}</small></div></header>}
-    {!analysis ? <AnalysisPanel running={running} reanalysis={false} configured={configured} configuration={analysisConfiguration} profile={profile} profileOpen={profileOpen} events={events} failure={failure} onProfileChange={setProfile} onToggleProfile={() => setProfileOpen((open) => !open)} onStart={() => void analyze()} onCancel={() => void cancel()} onRefresh={onRefreshHarnesses} onOpenSettings={onOpenSettings}/> : <>{(running || failure) && <AnalysisPanel running={running} reanalysis configured configuration={analysisConfiguration} profile={profile} profileOpen={profileOpen} events={events} failure={failure} onProfileChange={setProfile} onToggleProfile={() => setProfileOpen((open) => !open)} onStart={() => void analyze()} onCancel={() => void cancel()} onRefresh={onRefreshHarnesses} onOpenSettings={onOpenSettings}/>}<AnalysisCoverageBanner run={session.latestAnalysisRun} onViewCoverage={showCoverage}/>{analysis.summaryValidation !== 'valid' && <div className="warning-banner"><AlertTriangle size={16}/><span><strong>Summary is unverified.</strong> {analysis.summaryMessage || 'No valid code evidence supports this summary.'}</span></div>}<AnalysisOverview session={session} analysisConfiguration={analysisConfiguration} coverageOpen={coverageOpen} onCoverageOpenChange={setCoverageOpen} onReview={onReview} statusBanner={staleBanner}/></>}
+    {checkRefreshError && <ErrorBanner title="Checks could not be refreshed" message={checkRefreshError}/>}
+    {!analysis ? reviewPaused ? <ReviewGatePanel gate={gate} refreshing={checksRefreshing} onRefresh={() => void refreshChecks()} onOpenCheck={(check) => backend.openGitHubURL(check.detailsUrl || check.url)}/> : <AnalysisPanel running={running} reanalysis={false} configured={configured} configuration={analysisConfiguration} profile={profile} profileOpen={profileOpen} events={events} failure={failure} onProfileChange={setProfile} onToggleProfile={() => setProfileOpen((open) => !open)} onStart={() => void analyze()} onCancel={() => void cancel()} onRefresh={onRefreshHarnesses} onOpenSettings={onOpenSettings}/> : <>{(running || failure) && !reviewPaused && <AnalysisPanel running={running} reanalysis configured configuration={analysisConfiguration} profile={profile} profileOpen={profileOpen} events={events} failure={failure} onProfileChange={setProfile} onToggleProfile={() => setProfileOpen((open) => !open)} onStart={() => void analyze()} onCancel={() => void cancel()} onRefresh={onRefreshHarnesses} onOpenSettings={onOpenSettings}/>}<AnalysisCoverageBanner run={session.latestAnalysisRun} onViewCoverage={showCoverage}/>{analysis.summaryValidation !== 'valid' && <div className="warning-banner"><AlertTriangle size={16}/><span><strong>Summary is unverified.</strong> {analysis.summaryMessage || 'No valid code evidence supports this summary.'}</span></div>}<AnalysisOverview session={session} analysisConfiguration={analysisConfiguration} coverageOpen={coverageOpen} onCoverageOpenChange={setCoverageOpen} decisionReview={decisionReview} onReview={onReview} statusBanner={staleBanner} gate={gate} checksRefreshing={checksRefreshing} onRefreshChecks={() => void refreshChecks()} reviewDisabled={running}/></>}
   </main>
 }
 
@@ -412,93 +461,72 @@ function AnalysisCoverageBanner({run, onViewCoverage}: {run?: AnalysisRun; onVie
   </div>
 }
 
-function riskIsVerified(risk: ReviewRisk) {
-  return risk.evidence.some((reference) => reference.validationStatus === 'valid')
-}
-
-function sameReference(left: EvidenceReference, right: EvidenceReference) {
-  return left.path === right.path && left.revision === right.revision && left.startLine === right.startLine && left.endLine === right.endLine
-}
-
-function overlapsReference(left: EvidenceReference, right: EvidenceReference) {
-  return left.path === right.path && left.revision === right.revision && left.startLine <= right.endLine && right.startLine <= left.endLine
-}
-
-function AnalysisOverview({session, analysisConfiguration, coverageOpen, onCoverageOpenChange, onReview, statusBanner}: {session: ReviewSession; analysisConfiguration?: AnalysisConfiguration; coverageOpen: boolean; onCoverageOpenChange: (open: boolean) => void; onReview: (chapterId?: string) => void; statusBanner?: ReactNode}) {
+function AnalysisOverview({session, analysisConfiguration, coverageOpen, onCoverageOpenChange, onReview, statusBanner, gate, checksRefreshing, onRefreshChecks, reviewDisabled}: {session: ReviewSession; analysisConfiguration?: AnalysisConfiguration; coverageOpen: boolean; onCoverageOpenChange: (open: boolean) => void; decisionReview: DecisionReviewMap; onReview: (chapterId?: string, findingId?: string) => void; statusBanner?: ReactNode; gate: ReturnType<typeof reviewGate>; checksRefreshing: boolean; onRefreshChecks: () => void; reviewDisabled: boolean}) {
   const analysis = session.analysis!
   const pr = session.pullRequest
   const checks = pr.checkRuns ?? []
   const reviews = pr.reviews ?? []
   const comments = pr.reviewComments ?? []
-  const highestRisk = analysis.risks.find(riskIsVerified) ?? analysis.risks[0]
-  const highestRiskVerified = highestRisk ? riskIsVerified(highestRisk) : false
-  const blockingUnknown = analysis.unknowns[0]
-  const validChecks = checks.filter((check) => ['success', 'completed', 'neutral', 'skipped'].includes(check.conclusion || check.status)).length
-  const riskMatchScore = (candidate: ReviewRisk) => {
-    if (!highestRisk) return 0
-    if (candidate.id === highestRisk.id) return 10_000
-    if (candidate.title === highestRisk.title) return 9_000
-    const exactMatches = highestRisk.evidence.filter((reference) => candidate.evidence.some((other) => sameReference(reference, other))).length
-    const overlapMatches = highestRisk.evidence.filter((reference) => candidate.evidence.some((other) => overlapsReference(reference, other))).length
-    const exactEvidenceSet = highestRisk.evidence.length > 0 && exactMatches === highestRisk.evidence.length && exactMatches === candidate.evidence.length
-    return (exactEvidenceSet ? 5_000 : 0) + (exactMatches * 100) + (overlapMatches * 10) - Math.abs(candidate.evidence.length - highestRisk.evidence.length)
-  }
-  const focusMatch = highestRiskVerified ? analysis.chapters.reduce<{chapter: ReviewChapter; score: number} | undefined>((best, chapter) => {
-    const score = chapter.risks.reduce((highest, risk) => Math.max(highest, riskMatchScore(risk)), 0)
-    return !best || score > best.score ? {chapter, score} : best
-  }, undefined) : undefined
-  const focusChapter = focusMatch && focusMatch.score > 0 ? focusMatch.chapter : undefined
+  const brief = buildAgentReviewBrief(analysis, session.latestAnalysisRun?.coverage)
+  const analysisRisk = briefRiskLevel(brief)
   const discussionCount = reviews.length + comments.length
   const visibleDiscussionCount = Math.min(reviews.length, 3) + Math.min(comments.length, 3)
 
   return <div className="review-brief-layout">
     <section className="overview-document" aria-label="Pull request review overview">
-      <header className="overview-masthead"><div><span className="repo-label">{repoName(pr)}</span><h1><span>#{pr.ref.number}</span> {pr.title}</h1><div className="hero-meta"><span>@{pr.author.login}</span><span>{pr.baseRef} ← {pr.headRef}</span><span>{pr.commits.length} commit{pr.commits.length === 1 ? '' : 's'}</span><span>{pr.changedFiles} files</span><span className="additions">+{pr.additions}</span><span className="deletions">−{pr.deletions}</span></div></div><div className="hero-status">{!session.isStale && <AnalysisBadge status={session.analysisStatus}/>}<RiskBadge level={highestRisk?.level ?? pr.riskLevel}/><small>Head {pr.headSha.slice(0, 8)}</small></div></header>
+      <header className="overview-masthead"><div><span className="repo-label">{repoName(pr)}</span><h1><span>#{pr.ref.number}</span> {pr.title}</h1><div className="hero-meta"><span>@{pr.author.login}</span><span>{pr.baseRef} ← {pr.headRef}</span><span>{pr.commits.length} commit{pr.commits.length === 1 ? '' : 's'}</span><span>{pr.changedFiles} files</span><span className="additions">+{pr.additions}</span><span className="deletions">−{pr.deletions}</span></div></div><div className="hero-status">{!session.isStale && <AnalysisBadge status={session.analysisStatus}/>}{analysisRisk && <RiskBadge level={analysisRisk}/>}<small>Head {pr.headSha.slice(0, 8)}</small></div></header>
       {statusBanner}
-
-      <section className="overview-change" aria-labelledby="review-brief-title">
-        <h2 id="review-brief-title">What changed</h2>
-        <Markdown className="overview-summary">{analysis.summary}</Markdown>
-        {analysis.affectedAreas.length > 0 && <div className="overview-change-map"><span>Affected areas</span><ul aria-label="Affected areas">{analysis.affectedAreas.map((area) => <li key={area.name}>{area.name}</li>)}</ul><details className="overview-area-details"><summary>Area details</summary><div>{analysis.affectedAreas.map((area) => <article key={area.name}><strong>{area.name}</strong><p>{area.description}</p></article>)}</div></details></div>}
-      </section>
-
-      <section className={highestRisk ? `overview-focus priority-risk-${highestRisk.level}` : 'overview-focus clear'} aria-labelledby="review-focus-title">
-        <div className="overview-focus-copy"><div className="overview-focus-label"><span>{highestRiskVerified ? 'Critical attention' : highestRisk ? 'Concern to verify' : 'Review posture'}</span>{highestRiskVerified ? <RiskBadge level={highestRisk.level}/> : highestRisk ? <span className="badge neutral">Unverified</span> : <ShieldCheck size={18}/>}</div><h2 id="review-focus-title">{highestRisk?.title ?? 'No elevated risks identified'}</h2><p>{highestRisk?.description ?? 'ReviewArc produced a valid guided review without elevating a material risk. Verify the chapter evidence before deciding.'}</p></div>
-        <div className="overview-focus-action">{focusChapter && <small>Best starting point · {focusChapter.title}</small>}{focusChapter ? <button className="button primary" onClick={() => onReview(focusChapter.id)}>Start with chapter {focusChapter.order}<ArrowRight size={15}/></button> : <button className="button secondary" onClick={() => onReview()}>Open guided review<ArrowRight size={15}/></button>}</div>
-      </section>
-
-      <div className="overview-reading-layout">
-        <section className="review-path" aria-labelledby="review-path-title"><div className="section-title"><h2 id="review-path-title">Review path</h2><span>{analysis.chapters.length} chapter{analysis.chapters.length === 1 ? '' : 's'}</span></div><div className="overview-chapters">{analysis.chapters.map((chapter) => <button key={chapter.id} onClick={() => onReview(chapter.id)}><span>{chapter.order}</span><div><strong>{chapter.title}</strong><small>{chapter.files.length} file{chapter.files.length === 1 ? '' : 's'}{chapter.risks.length ? ` · ${chapter.risks.length} risk${chapter.risks.length === 1 ? '' : 's'}` : ''}</small></div><StatusDot status={chapter.status}/><ChevronRight size={16}/></button>)}</div></section>
-
-        <aside className="overview-context" aria-label="Review context">
-          <details className="overview-context-disclosure"><summary><span>Review context</span><small>{blockingUnknown ? '1 open question' : 'No open questions'} · {analysis.validationIssues.length ? `${analysis.validationIssues.length} unsupported` : 'Evidence checked'}</small></summary><div className="overview-context-content"><article className={blockingUnknown ? 'overview-note unknown' : 'overview-note clear'}><CircleHelp size={18}/><div><span>{blockingUnknown ? 'Open question' : 'Questions'}</span><strong>{blockingUnknown?.text ?? 'No blocking unknowns'}</strong></div></article><article className="overview-note evidence"><ShieldCheck size={18}/><div><span>Evidence</span><strong>{analysis.validationIssues.length ? `${analysis.validationIssues.length} unsupported reference${analysis.validationIssues.length === 1 ? '' : 's'}` : 'References checked'}</strong><small>{checks.length ? `${validChecks} of ${checks.length} GitHub checks are complete or passing.` : 'CI status was not available in this snapshot.'}</small></div></article></div></details>
-        </aside>
-        <section className="overview-support" aria-labelledby="overview-support-title">
+      {session.isStale && <StaleRevisionDelta sessionId={session.id}/>}
+      {gate.status === 'blocked' || gate.status === 'waiting'
+        ? <ReviewGatePanel gate={gate} refreshing={checksRefreshing} onRefresh={onRefreshChecks} onOpenCheck={(check) => backend.openGitHubURL(check.detailsUrl || check.url)}/>
+        : <AgentReviewBrief brief={brief} stale={session.isStale} disabled={reviewDisabled} onInspect={(finding) => onReview(finding.chapterId, finding.id)} onOpenReview={() => brief.findings.length ? onReview(brief.findings[0].chapterId, brief.findings[0].id) : onReview('', '__summary__')}/>
+      }
+      <section className="overview-support decision-support" aria-labelledby="overview-support-title" aria-label="Supporting context">
           <div className="section-title"><h2 id="overview-support-title">Supporting context</h2></div>
           {session.latestAnalysisRun && <AnalysisRunDetails run={session.latestAnalysisRun} configuration={analysisConfiguration} open={coverageOpen} onOpenChange={onCoverageOpenChange}/>}
+          <details className="support-disclosure"><summary><span><ShieldCheck size={16}/>Full generated analysis</span><small>{analysis.affectedAreas.length} affected area{analysis.affectedAreas.length === 1 ? '' : 's'}</small></summary><div className="support-content"><Markdown className="overview-summary">{analysis.summary}</Markdown>{analysis.affectedAreas.length > 0 && <div className="overview-change-map"><span>Affected areas</span><ul aria-label="Affected areas">{analysis.affectedAreas.map((area) => <li key={area.name}>{area.name}</li>)}</ul><details className="overview-area-details"><summary>Area details</summary><div>{analysis.affectedAreas.map((area) => <article key={area.name}><strong>{area.name}</strong><p>{area.description}</p></article>)}</div></details></div>}</div></details>
           <details className="support-disclosure"><summary><span><BookOpen size={16}/>Author context</span><small>{pr.body ? 'Pull request description' : 'No description supplied'}</small></summary><div className="support-content">{pr.body ? <Markdown className="pr-description">{pr.body}</Markdown> : <p>No pull request description was provided.</p>}</div></details>
-          {checks.length > 0 && <details className="support-disclosure"><summary><span><Check size={16}/>Checks</span><small>{validChecks} of {checks.length} complete or passing</small></summary><div className="support-content">{checks.map((check) => <div className="check-row" key={check.id}><span className={`check-state ${check.conclusion || check.status}`}/><div><strong>{check.name}</strong><small>{check.conclusion || check.status}{check.appName ? ` · ${check.appName}` : ''}</small></div></div>)}</div></details>}
+          {checks.length > 0 && <details className="support-disclosure"><summary><span><Check size={16}/>Checks</span><small>{gate.passing.length} of {checks.length} passing</small></summary><div className="support-content">{checks.map((check) => <div className="check-row" key={check.id}><span className={`check-state ${check.conclusion || check.status}`}/><div><strong>{check.name}</strong><small>{check.conclusion || check.status}{check.appName ? ` · ${check.appName}` : ''}</small></div></div>)}</div></details>}
           {discussionCount > 0 && <details className="support-disclosure"><summary><span><MessageSquare size={16}/>Existing discussion</span><small>{visibleDiscussionCount < discussionCount ? `Latest ${visibleDiscussionCount} of ${discussionCount}` : `${discussionCount} messages`}</small></summary><div className="support-content">{reviews.slice(-3).map((review) => <div className="discussion-row" key={`review-${review.id}`}><div className="discussion-row-heading"><strong>@{review.author.login} · {review.state.toLowerCase()}</strong>{review.url && <button className="discussion-link" type="button" aria-label={`Open review by @${review.author.login} on GitHub`} title="Open on GitHub" onClick={() => backend.openGitHubURL(review.url)}><ExternalLink size={13}/></button>}</div>{review.body && <p>{review.body}</p>}</div>)}{comments.slice(-3).map((comment) => <div className="discussion-row" key={`comment-${comment.id}`}><div className="discussion-row-heading"><strong>@{comment.author.login} on {comment.path}{comment.line ? `:${comment.line}` : ''}</strong>{comment.url && <button className="discussion-link" type="button" aria-label={`Open comment by @${comment.author.login} on GitHub`} title="Open on GitHub" onClick={() => backend.openGitHubURL(comment.url)}><ExternalLink size={13}/></button>}</div><p>{comment.body}</p></div>)}</div></details>}
           {analysis.validationIssues.length > 0 && <details className="support-disclosure"><summary><span><AlertTriangle size={16}/>Unsupported analysis</span><small>{analysis.validationIssues.length > 5 ? `Showing 5 of ${analysis.validationIssues.length}` : `${analysis.validationIssues.length} references`}</small></summary><div className="support-content">{analysis.validationIssues.slice(0, 5).map((issue) => <p className="context-copy" key={issue.code + issue.evidenceId}>{issue.message}</p>)}</div></details>}
-        </section>
-      </div>
+      </section>
     </section>
   </div>
 }
 
-export function ReviewWorkspace({session, initialChapterId = '', onSession, onBack}: {session: ReviewSession; initialChapterId?: string; onSession: (session: ReviewSession) => void; onBack: () => void}) {
+export function ReviewWorkspace({session, initialChapterId = '', initialFindingId = '', initialSummaryOpen = false, decisionReview: controlledDecisionReview, onDecisionReview, onSession, onBack}: {session: ReviewSession; initialChapterId?: string; initialFindingId?: string; initialSummaryOpen?: boolean; decisionReview?: DecisionReviewMap; onDecisionReview?: (findingId: string, review: DecisionReview) => void; onSession: (session: ReviewSession) => void; onBack: () => void}) {
   const analysis = session.analysis!
   const chapters = useMemo(() => analysis?.chapters ?? [], [analysis?.chapters])
-  const firstChapterId = chapters.some((chapter) => chapter.id === initialChapterId) ? initialChapterId : chapters[0]?.id ?? ''; const [chapterId, setChapterId] = useState(firstChapterId); const chapter = chapters.find((c) => c.id === chapterId) ?? chapters[0]; const [files, setFiles] = useState<ChangedFile[]>([]); const [filesLoading, setFilesLoading] = useState(true); const [path, setPath] = useState(chapter?.files[0]?.path ?? ''); const [diff, setDiff] = useState<DiffFile>(); const [diffError, setDiffError] = useState(''); const [panelTab, setPanelTab] = useState<'context'|'notes'|'drafts'>('context'); const [note, setNote] = useState(''); const [draft, setDraft] = useState(''); const [draftTarget, setDraftTarget] = useState<DraftTarget>(); const [busy, setBusy] = useState(false); const [publish, setPublish] = useState<PublishPreview>(); const [selectedDrafts, setSelectedDrafts] = useState<Set<string>>(new Set(session.comments.filter((c) => c.status === 'draft').map((c) => c.id)))
+  const brief = useMemo(() => analysis ? buildAgentReviewBrief(analysis, session.latestAnalysisRun?.coverage) : undefined, [analysis, session.latestAnalysisRun?.coverage])
+  const findings = brief?.findings ?? []
+  const [activeFindingId, setActiveFindingId] = useState(initialFindingId)
+  const finding = findings.find((item) => item.id === activeFindingId) ?? findings.find((item) => item.chapterId === initialChapterId) ?? findings[0]
+  const findingIndex = finding ? findings.findIndex((item) => item.id === finding.id) : -1
+  const previousFinding = findingIndex > 0 ? findings[findingIndex - 1] : undefined
+  const nextFinding = findingIndex >= 0 && findingIndex < findings.length - 1 ? findings[findingIndex + 1] : undefined
+  const chapter = chapters.find((item) => item.id === finding?.chapterId) ?? chapters.find((item) => item.id === initialChapterId) ?? chapters[0]
+  const suggestedPath = finding?.evidence[0]?.path ?? chapter?.files[0]?.path
+  const [localDecisionReview, setLocalDecisionReview] = useState<DecisionReviewMap>({})
+  const decisionReview = controlledDecisionReview ?? localDecisionReview
+  const [files, setFiles] = useState<ChangedFile[]>([])
+  const [path, setPath] = useState(finding?.evidence[0]?.path ?? chapter?.files[0]?.path ?? '')
+  const [diff, setDiff] = useState<DiffFile>()
+  const [diffError, setDiffError] = useState('')
+  const [panelTab, setPanelTab] = useState<'context'|'notes'|'drafts'>('context')
+  const [note, setNote] = useState('')
+  const [draft, setDraft] = useState('')
+  const [draftTarget, setDraftTarget] = useState<DraftTarget>()
+  const [busy, setBusy] = useState(false)
+  const [publish, setPublish] = useState<PublishPreview>()
+  const [selectedDrafts, setSelectedDrafts] = useState<Set<string>>(new Set(session.comments.filter((comment) => comment.status === 'draft').map((comment) => comment.id)))
   const [actionError, setActionError] = useState('')
   const [evidenceFocus, setEvidenceFocus] = useState<EvidenceReference>()
   const [fileContext, setFileContext] = useState<FileContent>()
-  const [workspaceView, setWorkspaceView] = useState<'chapter' | 'diff' | 'evidence'>('chapter')
+  const [workspaceView, setWorkspaceView] = useState<'finding' | 'analysis' | 'diff' | 'evidence'>('finding')
   const [focusMode, setFocusMode] = useState(false)
-  const [chapterPanelOpen, setChapterPanelOpen] = useState(false)
   const [toolsPanelOpen, setToolsPanelOpen] = useState(false)
   const [diffMode, setDiffMode] = useState<'unified' | 'split'>('unified')
-  const [summaryOpen, setSummaryOpen] = useState(false)
+  const [summaryOpen, setSummaryOpen] = useState(initialSummaryOpen)
   const [threadReply, setThreadReply] = useState<ThreadReplyPreview>()
   const [threadReplyReset, setThreadReplyReset] = useState<{rootId: number; version: number}>()
   const pendingPublishToken = useRef('')
@@ -509,17 +537,27 @@ export function ReviewWorkspace({session, initialChapterId = '', onSession, onBa
   const [editingDraftId, setEditingDraftId] = useState('')
   const evidenceRequest = useRef(0)
   const diffRequest = useRef(0)
-  const chapterTriggerRef = useRef<HTMLButtonElement>(null)
   const toolsTriggerRef = useRef<HTMLButtonElement>(null)
-  const chapterPanelRef = useRef<HTMLElement>(null)
   const toolsPanelRef = useRef<HTMLElement>(null)
-  const chapterPanelWasOpen = useRef(false)
   const toolsPanelWasOpen = useRef(false)
+  const updateDecisionReview = (findingId: string, review: DecisionReview) => {
+    if (onDecisionReview) onDecisionReview(findingId, review)
+    else setLocalDecisionReview((current) => ({...current, [findingId]: review}))
+    backend.saveJudgmentDecision(session.id, findingId, review.disposition, review.note ?? '')
+      .then(onSession)
+      .catch((err) => setActionError(`The decision could not be saved locally: ${errorText(err)}`))
+  }
+  const openFinding = (targetFinding: (typeof findings)[number]) => {
+    setActiveFindingId(targetFinding.id)
+    setSummaryOpen(false)
+    setWorkspaceView('finding')
+  }
+  useEffect(() => setActiveFindingId(initialFindingId), [initialFindingId])
   useEffect(() => () => {
     if (pendingPublishToken.current && !confirmingPublish.current) void backend.discardPublishPreview(pendingPublishToken.current).catch(() => {})
     if (pendingThreadReplyToken.current && !confirmingThreadReply.current) void backend.discardThreadReplyPreview(pendingThreadReplyToken.current).catch(() => {})
   }, [])
-  useEffect(() => { setFilesLoading(true); backend.getChangedFiles(session.id).then((value) => { setFiles(value ?? []); setPath((current) => current || value?.[0]?.path || '') }).catch((err) => setDiffError(errorText(err))).finally(() => setFilesLoading(false)) }, [session.id])
+  useEffect(() => { backend.getChangedFiles(session.id).then((value) => { setFiles(value ?? []); setPath((current) => current || value?.[0]?.path || '') }).catch((err) => setDiffError(errorText(err))) }, [session.id])
   useEffect(() => {
     const request = ++diffRequest.current
     let active = true
@@ -530,25 +568,18 @@ export function ReviewWorkspace({session, initialChapterId = '', onSession, onBa
       .catch((err) => { if (active && request === diffRequest.current) setDiffError(errorText(err)) })
     return () => { active = false }
   }, [session.id, path, workspaceView])
-  const suggestedChapterPath = chapter?.files[0]?.path
-  useEffect(() => { evidenceRequest.current++; setFileContext(undefined); setEvidenceFocus(undefined); setWorkspaceView('chapter'); if (suggestedChapterPath) setPath(suggestedChapterPath) }, [chapterId, suggestedChapterPath])
   useEffect(() => {
-    if (chapterPanelOpen) chapterPanelRef.current?.querySelector<HTMLElement>('button:not([disabled])')?.focus()
-    else if (chapterPanelWasOpen.current) chapterTriggerRef.current?.focus()
-    chapterPanelWasOpen.current = chapterPanelOpen
-  }, [chapterPanelOpen])
+    evidenceRequest.current++
+    setFileContext(undefined)
+    setEvidenceFocus(undefined)
+    setWorkspaceView('finding')
+    if (suggestedPath) setPath(suggestedPath)
+  }, [chapter?.id, finding?.id, suggestedPath])
   useEffect(() => {
     if (toolsPanelOpen) toolsPanelRef.current?.querySelector<HTMLElement>('button:not([disabled])')?.focus()
     else if (toolsPanelWasOpen.current) toolsTriggerRef.current?.focus()
     toolsPanelWasOpen.current = toolsPanelOpen
   }, [toolsPanelOpen])
-  useEffect(() => {
-    const panel = chapterPanelRef.current
-    if (!chapterPanelOpen || !panel) return undefined
-    const onKeyDown = (event: KeyboardEvent) => trapPanelFocus(event, panel)
-    panel.addEventListener('keydown', onKeyDown)
-    return () => panel.removeEventListener('keydown', onKeyDown)
-  }, [chapterPanelOpen])
   useEffect(() => {
     const panel = toolsPanelRef.current
     if (!toolsPanelOpen || !panel) return undefined
@@ -559,21 +590,19 @@ export function ReviewWorkspace({session, initialChapterId = '', onSession, onBa
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement) return
-      const index = chapters.findIndex((item) => item.id === chapterId)
-      if (event.key === ']') setChapterId(chapters[Math.min(chapters.length - 1, index + 1)]?.id ?? chapterId)
-      if (event.key === '[') setChapterId(chapters[Math.max(0, index - 1)]?.id ?? chapterId)
-      if (event.key.toLowerCase() === 'f') { setFocusMode((value) => !value); setChapterPanelOpen(false); setToolsPanelOpen(false) }
-      if (event.key === 'Escape') { setChapterPanelOpen(false); setToolsPanelOpen(false) }
+      if (event.key.toLowerCase() === 'f') { setFocusMode((value) => !value); setToolsPanelOpen(false) }
+      if (event.key === 'Escape') setToolsPanelOpen(false)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [chapterId, chapters])
-  if (!analysis || !chapter) return <main className="detail-page"><ErrorBanner title="Guided review unavailable" message="This session does not contain validated review chapters." onRetry={onBack} actionLabel="Back to overview"/></main>
-  const status = session.chapters.find((item) => item.chapterId === chapter.id)?.status ?? chapter.status
-  const setStatus = async (value: ChapterStatus) => { setBusy(true); setActionError(''); try { onSession(await backend.updateChapter(session.id, chapter.id, value)) } catch (err) { setActionError(errorText(err)) } finally { setBusy(false) } }
-  const addNote = async () => { if (!note.trim()) return; setBusy(true); setActionError(''); try { const saved = await backend.saveNote(session.id, chapter.id, note.trim(), editingNoteId); onSession({...session, notes: editingNoteId ? session.notes.map((item) => item.id === editingNoteId ? saved : item) : [...session.notes, saved]}); setNote(''); setEditingNoteId('') } catch (err) { setActionError(errorText(err)) } finally { setBusy(false) } }
+  }, [])
+  if (!analysis) return <main className="detail-page"><ErrorBanner title="Agent review unavailable" message="This session does not contain a generated review." onRetry={onBack} actionLabel="Back to overview"/></main>
+  const activeChapterId = chapter?.id ?? ''
+  const status = chapter ? session.chapters.find((item) => item.chapterId === chapter.id)?.status ?? chapter.status : 'notReviewed'
+  const setStatus = async (value: ChapterStatus) => { if (!chapter) return; setBusy(true); setActionError(''); try { onSession(await backend.updateChapter(session.id, chapter.id, value)) } catch (err) { setActionError(errorText(err)) } finally { setBusy(false) } }
+  const addNote = async () => { if (!note.trim()) return; setBusy(true); setActionError(''); try { const saved = await backend.saveNote(session.id, activeChapterId, note.trim(), editingNoteId); onSession({...session, notes: editingNoteId ? session.notes.map((item) => item.id === editingNoteId ? saved : item) : [...session.notes, saved]}); setNote(''); setEditingNoteId('') } catch (err) { setActionError(errorText(err)) } finally { setBusy(false) } }
   const deleteNote = async (id: string) => { setBusy(true); try { await backend.deleteNote(id); onSession({...session, notes: session.notes.filter((item) => item.id !== id)}); if (editingNoteId === id) { setEditingNoteId(''); setNote('') } } catch (err) { setActionError(errorText(err)) } finally { setBusy(false) } }
-  const addDraft = async () => { if (!draft.trim()) return; setBusy(true); setActionError(''); const target = draftTarget; try { const saved = await backend.saveDraft(session.id, chapter.id, draft.trim(), target?.path, target?.startLine, target?.startSide, target?.line, target?.side, editingDraftId); onSession({...session, comments: editingDraftId ? session.comments.map((item) => item.id === editingDraftId ? saved : item) : [...session.comments, saved]}); setSelectedDrafts((value) => new Set(value).add(saved.id)); setDraft(''); setDraftTarget(undefined); setEditingDraftId('') } catch (err) { setActionError(errorText(err)) } finally { setBusy(false) } }
+  const addDraft = async () => { if (!draft.trim()) return; setBusy(true); setActionError(''); const target = draftTarget; try { const saved = await backend.saveDraft(session.id, activeChapterId, draft.trim(), target?.path, target?.startLine, target?.startSide, target?.line, target?.side, editingDraftId); onSession({...session, comments: editingDraftId ? session.comments.map((item) => item.id === editingDraftId ? saved : item) : [...session.comments, saved]}); setSelectedDrafts((value) => new Set(value).add(saved.id)); setDraft(''); setDraftTarget(undefined); setEditingDraftId('') } catch (err) { setActionError(errorText(err)) } finally { setBusy(false) } }
   const deleteDraft = async (id: string) => { setBusy(true); try { await backend.deleteDraft(id); onSession({...session, comments: session.comments.filter((item) => item.id !== id)}); setSelectedDrafts((value) => { const next = new Set(value); next.delete(id); return next }); if (editingDraftId === id) { setEditingDraftId(''); setDraft('') } } catch (err) { setActionError(errorText(err)) } finally { setBusy(false) } }
   const preparePublish = async () => { setBusy(true); setActionError(''); try { const preview = await backend.preparePublish(session.id, [...selectedDrafts]); pendingPublishToken.current = preview.token; setPublish(preview) } catch (err) { setActionError(errorText(err)) } finally { setBusy(false) } }
   const prepareDecision = async (event: 'APPROVE' | 'REQUEST_CHANGES') => { setBusy(true); setActionError(''); try { const preview = await backend.prepareReview(session.id, [...selectedDrafts], event); pendingPublishToken.current = preview.token; setPublish(preview); setSummaryOpen(false) } catch (err) { setActionError(errorText(err)) } finally { setBusy(false) } }
@@ -650,15 +679,15 @@ export function ReviewWorkspace({session, initialChapterId = '', onSession, onBa
       if (request === evidenceRequest.current) setActionError(`Validated evidence could not be loaded: ${errorText(err)}`)
     }
   }
-  const openDiff = (nextPath = path || chapter.files[0]?.path || files[0]?.path || '') => {
+  const openDiff = (nextPath = path || chapter?.files[0]?.path || files[0]?.path || '') => {
     evidenceRequest.current++
     setFileContext(undefined)
     setEvidenceFocus(undefined)
     setPath(nextPath)
     setWorkspaceView('diff')
   }
-  const openTools = (tab: 'context' | 'notes' | 'drafts') => { setFocusMode(false); setPanelTab(tab); setChapterPanelOpen(false); setToolsPanelOpen(typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 1040px)').matches) }
-  const toggleFocusMode = () => { setFocusMode((value) => !value); setChapterPanelOpen(false); setToolsPanelOpen(false) }
+  const openTools = (tab: 'context' | 'notes' | 'drafts') => { setFocusMode(false); setPanelTab(tab); setToolsPanelOpen(typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 1040px)').matches) }
+  const toggleFocusMode = () => { setFocusMode((value) => !value); setToolsPanelOpen(false) }
   const moveToolTab = (event: ReactKeyboardEvent<HTMLButtonElement>, current: 'context' | 'notes' | 'drafts') => {
     const tabs = ['context', 'notes', 'drafts'] as const
     const index = tabs.indexOf(current)
@@ -668,27 +697,36 @@ export function ReviewWorkspace({session, initialChapterId = '', onSession, onBa
     setPanelTab(next)
     document.getElementById(`review-tool-tab-${next}`)?.focus()
   }
-  const chapterIndex = chapters.indexOf(chapter)
-  const chapterPaths = new Set(chapter.files.map((file) => file.path))
-  const chapterFiles = files.filter((file) => chapterPaths.has(file.path))
-  const visibleFiles = chapterFiles.length ? chapterFiles : files
+  const chapterIndex = chapter ? chapters.indexOf(chapter) : 0
+  const draftFinding = () => {
+    if (!finding) return
+    if (!draft.trim()) {
+      const observations = finding.observations.length > 1
+        ? `\n\nSupporting observations:\n${finding.observations.map((observation) => `- ${observation.title}: ${observation.detail}`).join('\n')}`
+        : ''
+      setDraft(`Please address this review judgment:\n\n${finding.title}\n\n${finding.detail}${observations}`)
+    }
+    openTools('drafts')
+  }
   return <main className={`review-shell${focusMode ? ' focus-mode' : ''}`}>
-    <header className="review-header"><button className="button text" onClick={onBack}><ArrowLeft size={16}/>Overview</button><div><strong>#{session.pullRequest.ref.number} {session.pullRequest.title}</strong><span>{repoName(session.pullRequest)}</span></div>{session.isStale && <span className="badge analysis-stale"><AlertTriangle size={12}/>Stale analysis</span>}<div className="review-progress"><span><i style={{width: `${session.progress.percent}%`}}/></span><small>{session.progress.reviewed} of {session.progress.total} chapters reviewed</small></div><button className="button text small full-diff-button" aria-label="Open full diff" title="Open full diff" onClick={() => openDiff()}><FileDiff size={15}/><span>Full diff</span></button><button className="icon-button" title="Focus chapter (F)" aria-label="Focus chapter" aria-pressed={focusMode} onClick={toggleFocusMode}>{focusMode ? <Minimize2 size={16}/> : <Maximize2 size={16}/>}</button><button ref={chapterTriggerRef} className="button secondary small review-panel-trigger chapter-trigger" aria-controls="review-chapters-panel" aria-expanded={chapterPanelOpen} onClick={() => {setToolsPanelOpen(false); setChapterPanelOpen((value) => !value)}}><ListFilter size={14}/>Chapters</button><button ref={toolsTriggerRef} className="button secondary small review-panel-trigger tools-trigger" aria-controls="review-tools-panel" aria-expanded={toolsPanelOpen} onClick={() => {setChapterPanelOpen(false); setToolsPanelOpen((value) => !value)}}><PanelRight size={14}/>Review tools</button><button className="button secondary small desktop-drafts-button" onClick={() => openTools('drafts')}><MessageSquare size={14}/>{session.comments.filter((c) => c.status === 'draft').length} drafts</button></header>
-    <div className="review-grid"><aside ref={chapterPanelRef} id="review-chapters-panel" className={`chapter-panel${chapterPanelOpen ? ' panel-open' : ''}`} role={chapterPanelOpen ? 'dialog' : undefined} aria-modal={chapterPanelOpen || undefined} aria-label={chapterPanelOpen ? 'Review chapters' : undefined} tabIndex={chapterPanelOpen ? -1 : undefined}><div className="panel-heading"><div><h2>Review chapters</h2><span>{chapterIndex + 1} of {chapters.length}</span></div></div><div className="chapter-list">{chapters.map((item) => { const state = session.chapters.find((entry) => entry.chapterId === item.id)?.status ?? item.status; return <button className={item.id === chapter.id ? 'active' : ''} key={item.id} onClick={() => {setChapterId(item.id); setChapterPanelOpen(false)}}><StatusDot status={state}/><span><strong>{item.order}. {item.title}</strong><small>{item.files.length} file{item.files.length === 1 ? '' : 's'}{item.risks.length ? ` · ${item.risks.length} risk${item.risks.length === 1 ? '' : 's'}` : ''}</small></span><ChevronRight size={14}/></button>})}</div><div className="file-section"><h3>Chapter files <span>{filesLoading ? '…' : visibleFiles.length}</span></h3>{filesLoading ? <p className="panel-loading">Loading changed files…</p> : visibleFiles.map((file) => <button className={workspaceView !== 'chapter' && file.path === path ? 'active' : ''} key={file.path} onClick={() => {openDiff(file.path); setChapterPanelOpen(false)}}><FileCode2 size={14}/><span title={file.path}>{file.path}</span><em className="additions">+{file.additions}</em><em className="deletions">−{file.deletions}</em></button>)}</div></aside>
-      {workspaceView === 'chapter' ? <section className="reader-panel"><ChapterReader sessionId={session.id} chapter={chapter} chapterIndex={chapterIndex} chapterCount={chapters.length} onOpenDiff={openDiff} onEvidence={(evidence) => void navigateEvidence(evidence)} onDraft={(text) => {setDraft(text); openTools('drafts')}}/></section> : <section className="code-panel"><div className="code-toolbar narrative-code-toolbar"><div><button className="button text small" onClick={() => setWorkspaceView('chapter')}><ArrowLeft size={14}/>Back to chapter</button><span className="toolbar-separator"/><FileDiff size={15}/><strong title={path}>{path || 'Select a changed file'}</strong></div><div><span className="range-hint"><MessageSquare size={12}/>Drag line numbers to comment</span>{fileContext ? <span className="revision head">{fileContext.revision} evidence</span> : <><button className={`view-toggle${diffMode === 'unified' ? ' active' : ''}`} title="Unified diff" aria-label="Unified diff" aria-pressed={diffMode === 'unified'} onClick={() => setDiffMode('unified')}><FileDiff size={14}/></button><button className={`view-toggle${diffMode === 'split' ? ' active' : ''}`} title="Split diff" aria-label="Split diff" aria-pressed={diffMode === 'split'} onClick={() => setDiffMode('split')}><Columns2 size={14}/></button><span className="revision">{session.pullRequest.baseRef}</span><ArrowRight size={13}/><span className="revision head">{session.pullRequest.headRef}</span></>}</div></div>{fileContext && evidenceFocus ? <FileContextView file={fileContext} focus={evidenceFocus} comments={session.pullRequest.reviewComments} onReply={prepareThreadReply} replyReset={threadReplyReset} onCommentRange={(range) => {setDraftTarget(draftTargetFor(fileContext.path, range)); openTools('drafts')}}/> : diffError ? <ErrorBanner title="Diff unavailable" message={diffError}/> : !diff ? <div className="diff-loading"><Skeleton rows={9}/><span>Loading diff for {path}…</span></div> : diffMode === 'split' ? <SplitDiffView diff={diff} comments={session.pullRequest.reviewComments} onReply={prepareThreadReply} replyReset={threadReplyReset} onCommentRange={(range) => {setDraftTarget(draftTargetFor(diff.file.path, range)); openTools('drafts')}}/> : <DiffView diff={diff} focus={evidenceFocus} comments={session.pullRequest.reviewComments} onReply={prepareThreadReply} replyReset={threadReplyReset} onCommentRange={(range) => {setDraftTarget(draftTargetFor(diff.file.path, range)); openTools('drafts')}}/>}</section>}
+    <header className="review-header"><button className="button text" onClick={onBack}><ArrowLeft size={16}/>Review brief</button><div><strong>#{session.pullRequest.ref.number} {session.pullRequest.title}</strong><span>{repoName(session.pullRequest)}</span></div>{session.isStale && <span className="badge analysis-stale"><AlertTriangle size={12}/>Stale analysis</span>}<div className="review-header-spacer"/><button className="button text small full-diff-button" aria-label="Open full diff" title="Open full diff" onClick={() => openDiff()}><FileDiff size={15}/><span>Full diff</span></button><button className="icon-button" title="Focus finding (F)" aria-label="Focus finding" aria-pressed={focusMode} onClick={toggleFocusMode}>{focusMode ? <Minimize2 size={16}/> : <Maximize2 size={16}/>}</button><button ref={toolsTriggerRef} className="button secondary small review-panel-trigger tools-trigger" aria-controls="review-tools-panel" aria-expanded={toolsPanelOpen} onClick={() => setToolsPanelOpen((value) => !value)}><PanelRight size={14}/>Review tools</button><button className="button secondary small decision-brief-trigger" aria-label="Open review decision" onClick={() => setSummaryOpen(true)}><ShieldCheck size={14}/>Review decision</button><button className="button secondary small desktop-drafts-button" onClick={() => openTools('drafts')}><MessageSquare size={14}/>{session.comments.filter((c) => c.status === 'draft').length} drafts</button></header>
+    <div className="review-grid finding-review-grid">
+      {workspaceView === 'finding' ? <section className="reader-panel finding-reader-panel">{finding && chapter ? <AgentFindingDetail key={finding.id} finding={finding} chapterTitle={chapter.title} review={decisionReview[finding.id]} reviews={session.pullRequest.reviews} comments={session.pullRequest.reviewComments} onReview={(review) => updateDecisionReview(finding.id, review)} onEvidence={(evidence) => void navigateEvidence(evidence)} onOpenDiff={openDiff} onDraft={draftFinding} onAnalysis={() => setWorkspaceView('analysis')} onOpenDiscussion={(url) => backend.openGitHubURL(url)}/> : <div className="finding-review-empty"><Check size={24}/><h1>No findings need inspection</h1><p>The agent reported no decision-critical findings for this revision. Review the final decision when you are ready.</p><button className="button primary" onClick={() => setSummaryOpen(true)}>Review approval</button></div>}</section> : workspaceView === 'analysis' && chapter ? <section className="reader-panel"><div className="decision-story-return"><div><strong>{finding?.title ?? chapter.title}</strong></div><button className="button secondary small" onClick={() => setWorkspaceView('finding')}><ArrowLeft size={14}/>Back to finding</button></div><ChapterReader sessionId={session.id} chapter={chapter} chapterIndex={chapterIndex} chapterCount={chapters.length} onOpenDiff={openDiff} onEvidence={(evidence) => void navigateEvidence(evidence)} onDraft={(text) => {setDraft(text); openTools('drafts')}}/></section> : <section className="code-panel"><div className="decision-code-context"><div><strong>{finding?.title ?? 'Agent review'}</strong></div><button className="button secondary small" onClick={() => setWorkspaceView('finding')}><ArrowLeft size={14}/>Back to finding</button></div><div className="code-toolbar narrative-code-toolbar"><div><FileDiff size={15}/><strong title={path}>{path || 'Select a changed file'}</strong></div><div><span className="range-hint"><MessageSquare size={12}/>Drag line numbers to comment</span>{fileContext ? <span className="revision head">{fileContext.revision} evidence</span> : <><button className={`view-toggle${diffMode === 'unified' ? ' active' : ''}`} title="Unified diff" aria-label="Unified diff" aria-pressed={diffMode === 'unified'} onClick={() => setDiffMode('unified')}><FileDiff size={14}/></button><button className={`view-toggle${diffMode === 'split' ? ' active' : ''}`} title="Split diff" aria-label="Split diff" aria-pressed={diffMode === 'split'} onClick={() => setDiffMode('split')}><Columns2 size={14}/></button><span className="revision">{session.pullRequest.baseRef}</span><ArrowRight size={13}/><span className="revision head">{session.pullRequest.headRef}</span></>}</div></div>{fileContext && evidenceFocus ? <FileContextView file={fileContext} focus={evidenceFocus} comments={session.pullRequest.reviewComments} onReply={prepareThreadReply} replyReset={threadReplyReset} onCommentRange={(range) => {setDraftTarget(draftTargetFor(fileContext.path, range)); openTools('drafts')}}/> : diffError ? <ErrorBanner title="Diff unavailable" message={diffError}/> : !diff ? <div className="diff-loading"><Skeleton rows={9}/><span>Loading diff for {path}…</span></div> : diffMode === 'split' ? <SplitDiffView diff={diff} comments={session.pullRequest.reviewComments} onReply={prepareThreadReply} replyReset={threadReplyReset} onCommentRange={(range) => {setDraftTarget(draftTargetFor(diff.file.path, range)); openTools('drafts')}}/> : <DiffView diff={diff} focus={evidenceFocus} comments={session.pullRequest.reviewComments} onReply={prepareThreadReply} replyReset={threadReplyReset} onCommentRange={(range) => {setDraftTarget(draftTargetFor(diff.file.path, range)); openTools('drafts')}}/>}</section>}
       <aside ref={toolsPanelRef} id="review-tools-panel" className={`context-panel${toolsPanelOpen ? ' panel-open' : ''}`} role={toolsPanelOpen ? 'dialog' : undefined} aria-modal={toolsPanelOpen || undefined} aria-label={toolsPanelOpen ? 'Review tools' : undefined} tabIndex={toolsPanelOpen ? -1 : undefined}><div className="context-tabs" role="tablist" aria-label="Review tools"><button id="review-tool-tab-context" role="tab" aria-controls="review-tool-panel-context" aria-selected={panelTab === 'context'} tabIndex={panelTab === 'context' ? 0 : -1} className={panelTab === 'context' ? 'active' : ''} onKeyDown={(event) => moveToolTab(event, 'context')} onClick={() => setPanelTab('context')}><PanelRight size={14}/>Evidence</button><button id="review-tool-tab-notes" role="tab" aria-controls="review-tool-panel-notes" aria-selected={panelTab === 'notes'} tabIndex={panelTab === 'notes' ? 0 : -1} className={panelTab === 'notes' ? 'active' : ''} onKeyDown={(event) => moveToolTab(event, 'notes')} onClick={() => setPanelTab('notes')}>Notes</button><button id="review-tool-tab-drafts" role="tab" aria-controls="review-tool-panel-drafts" aria-selected={panelTab === 'drafts'} tabIndex={panelTab === 'drafts' ? 0 : -1} className={panelTab === 'drafts' ? 'active' : ''} onKeyDown={(event) => moveToolTab(event, 'drafts')} onClick={() => setPanelTab('drafts')}>Drafts</button></div>
-        {panelTab === 'context' && <div className="context-tab-panel" id="review-tool-panel-context" role="tabpanel" aria-labelledby="review-tool-tab-context">{chapter.symbols.length > 0 && <SymbolNavigator symbols={chapter.symbols} onEvidence={(evidence) => void navigateEvidence(evidence)}/>}<ChapterEvidenceIndex chapter={chapter} onEvidence={(evidence) => void navigateEvidence(evidence)}/></div>}
-        {panelTab === 'notes' && <div className="context-tab-panel" id="review-tool-panel-notes" role="tabpanel" aria-labelledby="review-tool-tab-notes"><NotesPanel notes={session.notes.filter((n) => !n.chapterId || n.chapterId === chapter.id)} value={note} onChange={setNote} onSave={() => void addNote()} onEdit={(item) => {setEditingNoteId(item.id); setNote(item.body)}} onDelete={(id) => void deleteNote(id)} editing={Boolean(editingNoteId)} busy={busy}/></div>}
+        {panelTab === 'context' && <div className="context-tab-panel" id="review-tool-panel-context" role="tabpanel" aria-labelledby="review-tool-tab-context">{chapter ? <>{chapter.symbols.length > 0 && <SymbolNavigator symbols={chapter.symbols} onEvidence={(evidence) => void navigateEvidence(evidence)}/>}<ChapterEvidenceIndex chapter={chapter} onEvidence={(evidence) => void navigateEvidence(evidence)}/></> : <p className="panel-loading">No finding context is required.</p>}</div>}
+        {panelTab === 'notes' && <div className="context-tab-panel" id="review-tool-panel-notes" role="tabpanel" aria-labelledby="review-tool-tab-notes"><NotesPanel notes={session.notes.filter((n) => !n.chapterId || n.chapterId === activeChapterId)} value={note} onChange={setNote} onSave={() => void addNote()} onEdit={(item) => {setEditingNoteId(item.id); setNote(item.body)}} onDelete={(id) => void deleteNote(id)} editing={Boolean(editingNoteId)} busy={busy}/></div>}
         {panelTab === 'drafts' && <div className="context-tab-panel" id="review-tool-panel-drafts" role="tabpanel" aria-labelledby="review-tool-tab-drafts"><DraftsPanel drafts={session.comments.filter((c) => c.status === 'draft')} published={session.comments.filter((c) => c.status === 'published')} selected={selectedDrafts} onSelected={setSelectedDrafts} value={draft} onChange={setDraft} onSave={() => void addDraft()} onPublish={() => void preparePublish()} onEdit={(item) => {setEditingDraftId(item.id); setDraft(item.body); setDraftTarget(item.path && item.line && item.side ? {path: item.path, startLine: item.startLine, startSide: item.startSide, line: item.line, side: item.side} : undefined)}} onDelete={(id) => void deleteDraft(id)} editing={Boolean(editingDraftId)} target={draftTarget} onClearTarget={() => setDraftTarget(undefined)} busy={busy}/></div>}
       </aside>
-      {(chapterPanelOpen || toolsPanelOpen) && <button className="review-panel-backdrop" aria-label="Close review panels" onClick={() => {setChapterPanelOpen(false); setToolsPanelOpen(false)}}/>}
-    </div><footer className="review-footer"><div className="chapter-progress-control"><span>Chapter progress</span><SelectControl className="chapter-progress-select" label="Chapter progress" help="Saved privately in ReviewArc; this does not update GitHub." value={status} disabled={busy} onChange={(value) => void setStatus(value as ChapterStatus)} options={([
+      {toolsPanelOpen && (
+        <button className="review-panel-backdrop" aria-label="Close review panels" onClick={() => setToolsPanelOpen(false)}/>
+      )}
+    </div><footer className="review-footer">{workspaceView === 'analysis' && chapter && <><div className="chapter-progress-control"><span>Analysis state</span><SelectControl className="chapter-progress-select" label="Analysis progress" help="Saved privately in ReviewArc; this does not update GitHub." value={status} disabled={busy} onChange={(value) => void setStatus(value as ChapterStatus)} options={([
       ['notReviewed', 'Not reviewed'],
       ['inProgress', 'In progress'],
       ['reviewed', 'Reviewed'],
       ['needsClarification', 'Needs clarification'],
       ['blocked', 'Blocked'],
-    ] as const).map(([value, label]) => ({value, label}))}/></div><span className="chapter-progress-note">Saved privately</span><span className="shortcut-hint">[ previous · ] next · F focus · ⌘K open</span><div className="footer-spacer"/><button className="button secondary small" disabled={chapterIndex === 0} onClick={() => setChapterId(chapters[chapterIndex - 1].id)}><ArrowLeft size={14}/>Previous</button>{chapterIndex === chapters.length - 1 ? <button className="button primary small" onClick={() => setSummaryOpen(true)}>Review summary<ShieldCheck size={14}/></button> : <button className="button primary small" onClick={() => setChapterId(chapters[chapterIndex + 1].id)}>Next chapter<ArrowRight size={14}/></button>}</footer>
+    ] as const).map(([value, label]) => ({value, label}))}/></div><span className="chapter-progress-note">Saved privately</span></>}<span className="shortcut-hint">F focus · ⌘K open</span><div className="footer-spacer"/>{finding && <nav className="judgment-navigation" aria-label="Review judgments"><span className="judgment-position"><strong>{findingIndex + 1}</strong> of {findings.length}</span><button className="button secondary small" disabled={!previousFinding} aria-label="Previous judgment" onClick={() => previousFinding && openFinding(previousFinding)}><ArrowLeft size={14}/>Previous</button>{nextFinding ? <button className="button primary small" aria-label="Next judgment" onClick={() => openFinding(nextFinding)}>Next<ArrowRight size={14}/></button> : <button className="button primary small" aria-label="Open final review decision" onClick={() => setSummaryOpen(true)}>Decision<ShieldCheck size={14}/></button>}</nav>}</footer>
     {actionError && <div className="global-error"><ErrorBanner title="Review action failed" message={actionError} onRetry={() => setActionError('')} actionLabel="Dismiss"/></div>}
     {publish && <PublishConfirmation preview={publish} busy={busy} onCancel={() => void cancelPublish()} onConfirm={() => void confirmPublish()}/>}
     {threadReply && <ThreadReplyConfirmation preview={threadReply} busy={busy} onCancel={() => void cancelThreadReply()} onConfirm={() => void confirmThreadReply()}/>}
@@ -697,11 +735,14 @@ export function ReviewWorkspace({session, initialChapterId = '', onSession, onBa
         session={session}
         busy={busy}
         selectedDrafts={selectedDrafts.size}
+        findings={findings}
+        decisionReview={decisionReview}
         onClose={() => setSummaryOpen(false)}
         onDrafts={() => {
           setSummaryOpen(false)
           openTools('drafts')
         }}
+        onOpenFinding={openFinding}
         onReanalyze={() => void startReanalysis()}
         onDecision={(event) => void prepareDecision(event)}
       />
@@ -741,7 +782,7 @@ function SoftwareUpdateSettings({update, busy, onCheck, onSetChannel, onInstall}
   const copy = updateStatusCopy(update)
   const showSuccess = update.state === 'idle' && update.lastCheckedAt
   const installable = update.state === 'available' || update.state === 'ready'
-  return <section className="software-update-settings"><div className="settings-section-heading"><h2>Software updates</h2><p>Choose which signed releases ReviewArc should offer.</p><code>v{update.currentVersion} · build {update.currentBuild}</code></div><div className="settings-section-body"><div className="update-channel-control"><div><strong>Release channel</strong><small>{update.channel === 'beta' ? 'Beta includes early builds and all newer GA releases.' : 'Stable receives generally available releases only.'}</small></div><div role="group" aria-label="Release channel"><button type="button" aria-pressed={update.channel === 'stable'} disabled={busy || unavailable} onClick={() => onSetChannel('stable')}>Stable</button><button type="button" aria-pressed={update.channel === 'beta'} disabled={busy || unavailable} onClick={() => onSetChannel('beta')}>Beta</button></div></div>{update.channel === 'beta' && <p className="beta-channel-note"><AlertTriangle size={14}/>Beta builds may be less stable. Returning to Stable does not downgrade the installed app.</p>}<div className={`update-status-row state-${update.state}${showSuccess ? ' success' : ''}`} role="status"><span>{update.state === 'checking' || update.state === 'downloading' || update.state === 'installing' ? <LoaderCircle className="spin" size={15}/> : update.state === 'failed' ? <AlertTriangle size={15}/> : installable || showSuccess ? <Check size={15}/> : <RefreshCw size={15}/>}</span><div><strong>{copy.headline}</strong>{copy.detail && <small>{copy.detail}</small>}{progress !== undefined && <div className="update-download-progress" aria-label={`Download ${progress}% complete`}><i style={{width: `${progress}%`}}/></div>}</div><div className="update-actions">{update.release?.releaseNotesUrl && <button className="button text small" onClick={() => backend.openReleaseNotesURL(update.release!.releaseNotesUrl!)}>Release notes<ExternalLink size={12}/></button>}{installable ? <button className="button primary small" disabled={busy} onClick={onInstall}>{update.state === 'ready' ? 'Install and restart…' : 'Install update…'}</button> : <button className="button secondary small" disabled={busy || unavailable} onClick={onCheck}>{busy || update.state === 'checking' ? <LoaderCircle className="spin" size={13}/> : <RefreshCw size={13}/>} {update.state === 'failed' ? 'Try again' : 'Check now'}</button>}</div></div></div></section>
+  return <section className="software-update-settings"><div className="settings-section-heading"><h2>Software updates</h2><p>Choose which signed releases ReviewArc should offer.</p><code>v{update.currentVersion} · build {update.currentBuild}</code></div><div className="settings-section-body"><div className="update-channel-control"><div><strong>Release channel</strong><small>{update.channel === 'beta' ? 'Beta includes early builds and all newer GA releases.' : 'Stable receives generally available releases only.'}</small></div><div role="group" aria-label="Release channel"><button type="button" aria-pressed={update.channel === 'stable'} disabled={busy || unavailable} onClick={() => onSetChannel('stable')}>Stable</button><button type="button" aria-pressed={update.channel === 'beta'} disabled={busy || unavailable} onClick={() => onSetChannel('beta')}>Beta</button></div></div>{update.channel === 'beta' && <p className="beta-channel-note"><AlertTriangle size={14}/>Beta builds may be less stable. Returning to Stable does not downgrade the installed app.</p>}<div className={`update-status-row state-${update.state}${showSuccess ? ' success' : ''}`} role="status"><span>{update.state === 'checking' || update.state === 'downloading' || update.state === 'installing' ? <LoaderCircle className="spin" size={15}/> : update.state === 'failed' ? <AlertTriangle size={15}/> : installable || showSuccess ? <Check size={15}/> : <RefreshCw size={15}/>}</span><div><strong>{copy.headline}</strong>{copy.detail && <small>{copy.detail}</small>}{progress !== undefined && <div className="update-download-progress" aria-label={`Download ${progress}% complete`}><i style={{transform: `scaleX(${progress / 100})`}}/></div>}</div><div className="update-actions">{update.release?.releaseNotesUrl && <button className="button text small" onClick={() => backend.openReleaseNotesURL(update.release!.releaseNotesUrl!)}>Release notes<ExternalLink size={12}/></button>}{installable ? <button className="button primary small" disabled={busy} onClick={onInstall}>{update.state === 'ready' ? 'Install and restart…' : 'Install update…'}</button> : <button className="button secondary small" disabled={busy || unavailable} onClick={onCheck}>{busy || update.state === 'checking' ? <LoaderCircle className="spin" size={13}/> : <RefreshCw size={13}/>} {update.state === 'failed' ? 'Try again' : 'Check now'}</button>}</div></div></div></section>
 }
 
 function UpdateInstallConfirmation({update, busy, onCancel, onConfirm}: {update: SoftwareUpdateStatus; busy: boolean; onCancel: () => void; onConfirm: () => void}) {

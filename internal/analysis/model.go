@@ -17,6 +17,14 @@ type rawRisk struct {
 	ID, Title, Description, Level string
 	Evidence                      []rawEvidence
 }
+type rawObservation struct {
+	ID, Title, Description string
+	Evidence               []rawEvidence
+}
+type rawJudgment struct {
+	ID, Title, Description, Kind, Level, GroupingRationale string
+	Observations                                           []rawObservation
+}
 type rawAffectedArea struct {
 	Name, Description string
 	Evidence          []rawEvidence
@@ -60,4 +68,5 @@ type rawAnalysis struct {
 	Facts             []rawClaim        `json:"facts"`
 	Inferences        []rawClaim        `json:"inferences"`
 	Unknowns          []rawClaim        `json:"unknowns"`
+	Judgments         []rawJudgment     `json:"judgments"`
 }

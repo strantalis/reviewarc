@@ -21,7 +21,7 @@ var (
 	resolveSchemaOnce    sync.Once
 )
 
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 type Document struct{ raw rawAnalysis }
 

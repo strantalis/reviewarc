@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-07-16T14:58:11Z",
+  "generatedAt": "2026-07-18T21:38:43Z",
   "title": "Design System: ReviewArc",
   "extensions": {
     "colorMeta": {
@@ -8,65 +8,232 @@
         "role": "primary",
         "displayName": "Review Indigo",
         "canonical": "oklch(0.55 0.19 265)",
-        "tonalRamp": ["oklch(0.15 0.08 265)", "oklch(0.25 0.12 265)", "oklch(0.35 0.16 265)", "oklch(0.45 0.19 265)", "oklch(0.55 0.19 265)", "oklch(0.68 0.15 265)", "oklch(0.82 0.09 265)", "oklch(0.95 0.03 265)"]
+        "tonalRamp": [
+          "oklch(0.15 0.08 265)",
+          "oklch(0.25 0.12 265)",
+          "oklch(0.35 0.16 265)",
+          "oklch(0.45 0.19 265)",
+          "oklch(0.55 0.19 265)",
+          "oklch(0.68 0.15 265)",
+          "oklch(0.82 0.09 265)",
+          "oklch(0.95 0.03 265)"
+        ]
       },
       "cyan": {
         "role": "secondary",
         "displayName": "Arc Cyan",
         "canonical": "oklch(0.67 0.13 215)",
-        "tonalRamp": ["oklch(0.15 0.05 215)", "oklch(0.25 0.08 215)", "oklch(0.35 0.1 215)", "oklch(0.48 0.12 215)", "oklch(0.67 0.13 215)", "oklch(0.76 0.1 215)", "oklch(0.86 0.07 215)", "oklch(0.95 0.03 215)"]
+        "tonalRamp": [
+          "oklch(0.15 0.05 215)",
+          "oklch(0.25 0.08 215)",
+          "oklch(0.35 0.1 215)",
+          "oklch(0.48 0.12 215)",
+          "oklch(0.67 0.13 215)",
+          "oklch(0.76 0.1 215)",
+          "oklch(0.86 0.07 215)",
+          "oklch(0.95 0.03 215)"
+        ]
       },
       "canvas": {
         "role": "neutral",
         "displayName": "Paper Canvas",
         "canonical": "oklch(0.975 0.006 260)",
-        "tonalRamp": ["oklch(0.15 0.02 260)", "oklch(0.25 0.02 260)", "oklch(0.35 0.018 260)", "oklch(0.48 0.015 260)", "oklch(0.62 0.012 260)", "oklch(0.75 0.01 260)", "oklch(0.87 0.008 260)", "oklch(0.975 0.006 260)"]
+        "tonalRamp": [
+          "oklch(0.15 0.02 260)",
+          "oklch(0.25 0.02 260)",
+          "oklch(0.35 0.018 260)",
+          "oklch(0.48 0.015 260)",
+          "oklch(0.62 0.012 260)",
+          "oklch(0.75 0.01 260)",
+          "oklch(0.87 0.008 260)",
+          "oklch(0.975 0.006 260)"
+        ]
       },
       "green": {
         "role": "tertiary",
         "displayName": "Verified Green",
         "canonical": "oklch(0.55 0.15 158)",
-        "tonalRamp": ["oklch(0.15 0.05 158)", "oklch(0.25 0.08 158)", "oklch(0.35 0.11 158)", "oklch(0.45 0.14 158)", "oklch(0.55 0.15 158)", "oklch(0.7 0.12 158)", "oklch(0.83 0.08 158)", "oklch(0.95 0.035 158)"]
+        "tonalRamp": [
+          "oklch(0.15 0.05 158)",
+          "oklch(0.25 0.08 158)",
+          "oklch(0.35 0.11 158)",
+          "oklch(0.45 0.14 158)",
+          "oklch(0.55 0.15 158)",
+          "oklch(0.7 0.12 158)",
+          "oklch(0.83 0.08 158)",
+          "oklch(0.95 0.035 158)"
+        ]
       },
       "amber": {
         "role": "tertiary",
         "displayName": "Caution Amber",
         "canonical": "oklch(0.65 0.15 78)",
-        "tonalRamp": ["oklch(0.15 0.05 78)", "oklch(0.25 0.08 78)", "oklch(0.35 0.11 78)", "oklch(0.48 0.14 78)", "oklch(0.65 0.15 78)", "oklch(0.75 0.12 78)", "oklch(0.85 0.08 78)", "oklch(0.95 0.04 78)"]
+        "tonalRamp": [
+          "oklch(0.15 0.05 78)",
+          "oklch(0.25 0.08 78)",
+          "oklch(0.35 0.11 78)",
+          "oklch(0.48 0.14 78)",
+          "oklch(0.65 0.15 78)",
+          "oklch(0.75 0.12 78)",
+          "oklch(0.85 0.08 78)",
+          "oklch(0.95 0.04 78)"
+        ]
       },
       "red": {
         "role": "tertiary",
         "displayName": "Decision Red",
         "canonical": "oklch(0.56 0.2 28)",
-        "tonalRamp": ["oklch(0.15 0.07 28)", "oklch(0.25 0.11 28)", "oklch(0.35 0.15 28)", "oklch(0.46 0.18 28)", "oklch(0.56 0.2 28)", "oklch(0.7 0.16 28)", "oklch(0.84 0.09 28)", "oklch(0.95 0.04 28)"]
+        "tonalRamp": [
+          "oklch(0.15 0.07 28)",
+          "oklch(0.25 0.11 28)",
+          "oklch(0.35 0.15 28)",
+          "oklch(0.46 0.18 28)",
+          "oklch(0.56 0.2 28)",
+          "oklch(0.7 0.16 28)",
+          "oklch(0.84 0.09 28)",
+          "oklch(0.95 0.04 28)"
+        ]
       }
     },
     "typographyMeta": {
-      "marketing-display": {"displayName": "Marketing Display", "purpose": "Public-site hero statements only."},
-      "desktop-display": {"displayName": "Desktop Display", "purpose": "Onboarding and rare empty-workspace orientation."},
-      "heading": {"displayName": "Heading", "purpose": "Pull-request identity and major page headings."},
-      "subheading": {"displayName": "Subheading", "purpose": "Dialogs, panels, and section titles."},
-      "body": {"displayName": "Body", "purpose": "Explanations and sustained reading."},
-      "ui": {"displayName": "UI", "purpose": "Controls and compact application copy."},
-      "caption": {"displayName": "Caption", "purpose": "Passive metadata and compact labels."},
-      "code": {"displayName": "Code", "purpose": "Code, paths, revisions, and provenance."}
+      "marketing-display": {
+        "displayName": "Marketing Display",
+        "purpose": "Public-site hero statements only."
+      },
+      "desktop-display": {
+        "displayName": "Desktop Display",
+        "purpose": "Onboarding and rare empty-workspace orientation."
+      },
+      "heading": {
+        "displayName": "Heading",
+        "purpose": "Pull-request identity and major page headings."
+      },
+      "subheading": {
+        "displayName": "Subheading",
+        "purpose": "Dialogs, panels, and section titles."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Explanations and sustained reading."
+      },
+      "ui": {
+        "displayName": "UI",
+        "purpose": "Controls and compact application copy."
+      },
+      "caption": {
+        "displayName": "Caption",
+        "purpose": "Passive metadata and compact labels."
+      },
+      "code": {
+        "displayName": "Code",
+        "purpose": "Code, paths, revisions, and provenance."
+      }
     },
     "shadows": [
-      {"name": "control-lift", "value": "0 1px 2px var(--shadow)", "purpose": "Rare low elevation for compact floating controls."},
-      {"name": "menu-lift", "value": "0 6px 8px var(--shadow)", "purpose": "Select menus and short-lived dropdowns."},
-      {"name": "panel-edge", "value": "0 0 8px var(--shadow)", "purpose": "Open side panels overlapping the review workspace."},
-      {"name": "modal-lift", "value": "0 24px 70px var(--shadow-strong)", "purpose": "Confirmation dialogs, command palette, and review summary."}
+      {
+        "name": "control-lift",
+        "value": "0 1px 2px var(--shadow)",
+        "purpose": "Rare low elevation for compact floating controls."
+      },
+      {
+        "name": "menu-lift",
+        "value": "0 6px 8px var(--shadow)",
+        "purpose": "Select menus and short-lived dropdowns."
+      },
+      {
+        "name": "panel-edge",
+        "value": "0 0 8px var(--shadow)",
+        "purpose": "Open side panels overlapping the review workspace."
+      },
+      {
+        "name": "modal-lift",
+        "value": "0 24px 70px var(--shadow-strong)",
+        "purpose": "Confirmation dialogs, command palette, and review summary."
+      }
     ],
     "motion": [
-      {"name": "state-transition", "value": "160ms ease", "purpose": "Compact hover, color, and control feedback."},
-      {"name": "site-ease-out", "value": "cubic-bezier(.22, 1, .36, 1)", "purpose": "Public-site button and control movement."},
-      {"name": "reduced-motion", "value": ".01ms", "purpose": "Collapses animation and transition duration when reduced motion is requested."}
+      {
+        "name": "state-transition",
+        "value": "160ms ease",
+        "purpose": "Compact hover, color, and control feedback."
+      },
+      {
+        "name": "site-ease-out",
+        "value": "cubic-bezier(.22, 1, .36, 1)",
+        "purpose": "Public-site button and control movement."
+      },
+      {
+        "name": "reduced-motion",
+        "value": ".01ms",
+        "purpose": "Collapses animation and transition duration when reduced motion is requested."
+      }
     ],
     "breakpoints": [
-      {"name": "compact", "value": "520px"},
-      {"name": "narrow", "value": "760px"},
-      {"name": "stacked", "value": "1040px"},
-      {"name": "workspace", "value": "1180px"}
+      {
+        "name": "compact",
+        "value": "520px"
+      },
+      {
+        "name": "narrow",
+        "value": "760px"
+      },
+      {
+        "name": "stacked",
+        "value": "1040px"
+      },
+      {
+        "name": "workspace",
+        "value": "1180px"
+      }
+    ],
+    "radii": [
+      {
+        "name": "control",
+        "value": "7px",
+        "purpose": "Buttons, inputs, and compact interactive controls."
+      },
+      {
+        "name": "compact",
+        "value": "5px",
+        "purpose": "Compact chips, badges, code fragments, and small inline elements (--radius-compact)."
+      },
+      {
+        "name": "panel",
+        "value": "8-12px",
+        "purpose": "Bounded panels, dialogs, and the public site's evidence specimen."
+      },
+      {
+        "name": "pill",
+        "value": "999px",
+        "purpose": "Fully rounded status, dependency, and risk labels."
+      }
+    ],
+    "platformColors": [
+      {
+        "name": "window-close",
+        "value": "oklch(0.66 0.23 27)",
+        "purpose": "macOS traffic-light close control; identical in both themes, not part of the semantic palette."
+      },
+      {
+        "name": "window-minimize",
+        "value": "oklch(0.79 0.16 83)",
+        "purpose": "macOS traffic-light minimize control."
+      },
+      {
+        "name": "window-zoom",
+        "value": "oklch(0.68 0.17 145)",
+        "purpose": "macOS traffic-light zoom control."
+      },
+      {
+        "name": "window-control-ink",
+        "value": "oklch(0.2 0.02 260 / .72)",
+        "purpose": "Glyph ink over traffic-light controls."
+      },
+      {
+        "name": "window-control-line",
+        "value": "oklch(0.2 0.02 260 / .13)",
+        "purpose": "Inset hairline on traffic-light controls."
+      }
     ]
   },
   "components": [
@@ -115,7 +282,7 @@
       "kind": "card",
       "refersTo": "evidence-surface",
       "description": "A claim kept visually connected to its source path and validation state.",
-      "html": "<article class=\"ds-evidence\"><header><code>internal/github/client.go</code><strong>Validated</strong></header><p>The response is checked against the pinned head revision.</p><footer><span>HEAD · L118–132</span><button>Open code</button></footer></article>",
+      "html": "<article class=\"ds-evidence\"><header><code>internal/github/client.go</code><strong>Validated</strong></header><p>The response is checked against the pinned head revision.</p><footer><span>HEAD \u00b7 L118\u2013132</span><button>Open code</button></footer></article>",
       "css": ".ds-evidence{width:min(420px,100%);overflow:hidden;color:var(--ink,oklch(.23 .035 265));background:var(--code-surface,oklch(.965 .009 265));border:1px solid var(--line,oklch(.88 .018 260));border-radius:8px;font:400 .875rem/1.6 ui-sans-serif,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif}.ds-evidence header,.ds-evidence footer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;background:var(--panel,oklch(.955 .012 260))}.ds-evidence header{border-bottom:1px solid var(--line,oklch(.88 .018 260))}.ds-evidence footer{border-top:1px solid var(--line,oklch(.88 .018 260));color:var(--muted,oklch(.43 .03 265));font-size:.75rem}.ds-evidence code{font:400 .8125rem/1.55 \"SFMono-Regular\",Menlo,Consolas,monospace}.ds-evidence strong{color:var(--green-ink,oklch(.4 .12 158));font-size:.75rem}.ds-evidence p{margin:0;padding:16px}.ds-evidence button{padding:4px 8px;border:0;border-radius:5px;color:var(--accent-dark,oklch(.42 .17 265));background:transparent;font:600 .75rem/1.4 ui-sans-serif,-apple-system,sans-serif;cursor:pointer}.ds-evidence button:hover{background:var(--accent-soft,oklch(.94 .035 265))}.ds-evidence button:focus-visible{outline:2px solid var(--accent,oklch(.55 .19 265));outline-offset:2px}"
     },
     {
@@ -147,12 +314,36 @@
       "Compact, purposeful motion with a complete reduced-motion fallback."
     ],
     "rules": [
-      {"name": "The Semantic Scarcity Rule", "body": "Green, amber, and red are state, not decoration. If a semantic color does not clarify risk, validity, warning, failure, or consequence, use a neutral.", "section": "colors"},
-      {"name": "The One Primary Voice Rule", "body": "Indigo owns primary action and active orientation. Cyan supports the arc identity; it must not create a second competing call to action.", "section": "colors"},
-      {"name": "The Reading Floor Rule", "body": "Do not compress essential body copy below the UI size or essential controls below the caption size. Dense means less repetition and better hierarchy, not smaller text.", "section": "typography"},
-      {"name": "The Evidence Type Rule", "body": "Monospace identifies code, paths, revisions, and machine-derived provenance. It is not a decorative substitute for hierarchy.", "section": "typography"},
-      {"name": "The Flat-by-Default Rule", "body": "Permanent content surfaces use tone and one-pixel rules. If a resting page needs a large shadow to make its hierarchy legible, the hierarchy is wrong.", "section": "elevation"},
-      {"name": "The Consequence Lift Rule", "body": "Strong elevation is reserved for a temporary choice or external consequence. It must never make routine cards look equally urgent.", "section": "elevation"}
+      {
+        "name": "The Semantic Scarcity Rule",
+        "body": "Green, amber, and red are state, not decoration. If a semantic color does not clarify risk, validity, warning, failure, or consequence, use a neutral.",
+        "section": "colors"
+      },
+      {
+        "name": "The One Primary Voice Rule",
+        "body": "Indigo owns primary action and active orientation. Cyan supports the arc identity; it must not create a second competing call to action.",
+        "section": "colors"
+      },
+      {
+        "name": "The Reading Floor Rule",
+        "body": "Do not compress essential body copy below the UI size or essential controls below the caption size. Dense means less repetition and better hierarchy, not smaller text.",
+        "section": "typography"
+      },
+      {
+        "name": "The Evidence Type Rule",
+        "body": "Monospace identifies code, paths, revisions, and machine-derived provenance. It is not a decorative substitute for hierarchy.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat-by-Default Rule",
+        "body": "Permanent content surfaces use tone and one-pixel rules. If a resting page needs a large shadow to make its hierarchy legible, the hierarchy is wrong.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Consequence Lift Rule",
+        "body": "Strong elevation is reserved for a temporary choice or external consequence. It must never make routine cards look equally urgent.",
+        "section": "elevation"
+      }
     ],
     "dos": [
       "Do lead from a claim to its real path, revision, and line range.",

@@ -1,7 +1,9 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { useState } from 'react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { App, appendOperationEvent, DiffView, FileContextView, OverviewScreen, ReviewWorkspace, SettingsScreen, SourceSelector, SplitDiffView } from './App'
 import { AnalysisBadge, Markdown, WindowControls } from './components'
+import type { DecisionReviewMap } from './features/review/decision'
 import type { AnalysisConfiguration, BootstrapState, EnvironmentState, InboxAnalysis, OperationEvent, PullRequestRef, RepositoryPage, ReviewSession, SoftwareUpdateStatus } from './types'
 
 const paths = {root: '/tmp/reviewarc', repositories: '/tmp/reviewarc/repos', worktrees: '/tmp/reviewarc/worktrees', database: '/tmp/reviewarc/db.sqlite', logs: '/tmp/reviewarc/logs', cache: '/tmp/reviewarc/cache'}
@@ -861,13 +863,17 @@ describe('Reanalysis state', () => {
     window.runtime = {EventsOn: vi.fn(() => () => {})}
     render(<OverviewScreen session={session} onBack={vi.fn()} onSession={vi.fn()} onReview={onReview}/>)
 
-    const banner = screen.getByText('Analysis covers an older revision').closest('.stale-banner')!
+    const banner = screen.getByText('Analysis out of date').closest('.stale-banner')!
     const masthead = screen.getByRole('heading', {name: '#1 Record quota decisions'}).closest('.overview-masthead')!
     expect(masthead.compareDocumentPosition(banner) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(screen.getByText(/old-head.*new-head/)).toBeInTheDocument()
+    expect(screen.getByText('New commits were added after this review. Reanalyze before approving.')).toBeInTheDocument()
+    expect(screen.getByText('Previous agent review')).toBeInTheDocument()
+    expect(banner).toHaveAttribute('role', 'status')
     expect(screen.queryByRole('button', {name: 'Run again'})).not.toBeInTheDocument()
-    const continueReview = screen.getByRole('button', {name: 'Continue stale review'})
-    const reanalyze = screen.getByRole('button', {name: 'Reanalyze current revision'})
+    const continueReview = screen.getByRole('button', {name: 'Open previous review'})
+    const reanalyze = screen.getByRole('button', {name: 'Reanalyze latest revision'})
+    expect(continueReview).toHaveTextContent('Previous')
+    expect(reanalyze).toHaveTextContent('Reanalyze')
     expect(banner).toContainElement(continueReview)
     expect(banner).toContainElement(reanalyze)
     fireEvent.click(continueReview)
@@ -891,8 +897,8 @@ describe('Reanalysis state', () => {
     window.go = {main: {App: {StartAnalysis: start, GetSession: getSession}}}
     window.runtime = {EventsOn: vi.fn((name: string, handler: (value: unknown) => void) => { handlers[name] = handler; return () => {} })}
     render(<OverviewScreen session={session} onBack={vi.fn()} onSession={onSession} onReview={onReview}/>)
-    fireEvent.click(screen.getByRole('button', {name: /Existing chapter/}))
-    expect(onReview).toHaveBeenCalledWith('chapter-1')
+    fireEvent.click(screen.getByRole('button', {name: 'Review approval readiness'}))
+    expect(onReview).toHaveBeenCalledWith('', '__summary__')
     fireEvent.click(screen.getByRole('button', {name: 'Change'}))
     expect(screen.getByRole('combobox', {name: 'Analysis model'})).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', {name: 'Reanalyze'}))
@@ -903,8 +909,8 @@ describe('Reanalysis state', () => {
     expect(screen.queryByRole('button', {name: 'Done'})).not.toBeInTheDocument()
     expect(screen.queryByRole('combobox', {name: 'Analysis model'})).not.toBeInTheDocument()
     expect(screen.getByText('Reanalysis progress')).toBeInTheDocument()
-    expect(screen.getByText('Previous validated walkthrough')).toBeInTheDocument()
-    expect(screen.getByRole('button', {name: /Start guided review/})).toBeDisabled()
+    expect(screen.getAllByText('Previous validated walkthrough')).not.toHaveLength(0)
+    expect(screen.getByRole('button', {name: 'Review approval readiness'})).toBeDisabled()
     handlers['reviewarc:operation:v1']({id: 'operation-1', sessionId: session.id, kind: 'analysis', stage: 'cancelled', message: 'Analysis cancelled', state: 'cancelled'})
     await waitFor(() => expect(getSession).toHaveBeenCalledWith(session.id))
     expect(onSession).toHaveBeenCalledWith(session)
@@ -944,7 +950,7 @@ describe('Reanalysis state', () => {
     window.runtime = {EventsOn: vi.fn(() => () => {})}
     render(<OverviewScreen session={session} onBack={vi.fn()} onSession={vi.fn()} onReview={vi.fn()}/>)
 
-    const banner = screen.getByText('2 changed files were not inspected.').closest('.warning-banner')
+    const banner = screen.getAllByText('2 changed files were not inspected.')[0].closest('.warning-banner')
     expect(banner).toHaveTextContent('15 fully read · 1 partially read · 3 previewed · 2 unseen')
     expect(banner).toHaveTextContent('Findings may not cover the unseen changes')
     const scrollIntoView = vi.spyOn(HTMLElement.prototype, 'scrollIntoView')
@@ -957,6 +963,79 @@ describe('Reanalysis state', () => {
 })
 
 describe('Review brief and chapter reader', () => {
+  it('pauses the review on failing CI and links directly to the failed check', () => {
+    const base = reviewSession()
+    const session: ReviewSession = {...base, pullRequest: {...base.pullRequest, checkRuns: [{id: 21, name: 'test', status: 'completed', conclusion: 'failure', appName: 'GitHub Actions', url: 'https://github.com/acme/api/actions/runs/21', detailsUrl: 'https://github.com/acme/api/actions/runs/21', startedAt: '', completedAt: ''}]}}
+    const openURL = vi.fn()
+    window.runtime = {EventsOn: vi.fn(() => () => {}), BrowserOpenURL: openURL}
+    render(<OverviewScreen session={session} onBack={vi.fn()} onSession={vi.fn()} onReview={vi.fn()}/>)
+
+    expect(screen.getByRole('heading', {name: 'Review paused — CI is failing'})).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: 'Open review'})).toBeDisabled()
+    expect(screen.queryByText('Agent review complete')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Open check'}))
+    expect(openURL).toHaveBeenCalledWith('https://github.com/acme/api/actions/runs/21')
+  })
+
+  it('polls pending checks and exposes the agent review when CI passes', async () => {
+    vi.useFakeTimers()
+    try {
+      const base = reviewSession()
+      const pending: ReviewSession = {...base, pullRequest: {...base.pullRequest, checkRuns: [{id: 21, name: 'test', status: 'in_progress', url: 'https://github.com/acme/api/actions/runs/21', detailsUrl: '', startedAt: '', completedAt: ''}]}}
+      const passing: ReviewSession = {...base, pullRequest: {...base.pullRequest, checkRuns: [{id: 21, name: 'test', status: 'completed', conclusion: 'success', url: 'https://github.com/acme/api/actions/runs/21', detailsUrl: '', startedAt: '', completedAt: ''}]}}
+      const openPullRequest = vi.fn().mockResolvedValue({...pending, id: 'refreshed-session'})
+      const refreshPullRequestContext = vi.fn().mockResolvedValue(passing)
+      window.go = {main: {App: {OpenPullRequest: openPullRequest, RefreshPullRequestContext: refreshPullRequestContext}}}
+      window.runtime = {EventsOn: vi.fn(() => () => {})}
+      function ControlledOverview() {
+        const [current, setCurrent] = useState(pending)
+        return <OverviewScreen session={current} onBack={vi.fn()} onSession={setCurrent} onReview={vi.fn()}/>
+      }
+      render(<ControlledOverview/>)
+
+      expect(screen.getByRole('heading', {name: 'Waiting for CI before deep review'})).toBeInTheDocument()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15000)
+      })
+      expect(openPullRequest).toHaveBeenCalledWith(pending.pullRequest.ref)
+      expect(refreshPullRequestContext).toHaveBeenCalledWith('refreshed-session')
+      expect(screen.getByText('Agent review complete')).toBeInTheDocument()
+      expect(screen.queryByRole('heading', {name: 'Waiting for CI before deep review'})).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('starts the deferred agent review automatically after checks turn green', async () => {
+    vi.useFakeTimers()
+    try {
+      const base = reviewSession()
+      const withoutAnalysis: ReviewSession = {...base, analysis: undefined, analysisStatus: 'notStarted'}
+      const pending: ReviewSession = {...withoutAnalysis, pullRequest: {...withoutAnalysis.pullRequest, analysisStatus: 'notStarted', checkRuns: [{id: 21, name: 'test', status: 'in_progress', url: 'https://github.com/acme/api/actions/runs/21', detailsUrl: '', startedAt: '', completedAt: ''}]}}
+      const passing: ReviewSession = {...withoutAnalysis, pullRequest: {...withoutAnalysis.pullRequest, analysisStatus: 'notStarted', checkRuns: [{id: 21, name: 'test', status: 'completed', conclusion: 'success', url: 'https://github.com/acme/api/actions/runs/21', detailsUrl: '', startedAt: '', completedAt: ''}]}}
+      const startAnalysis = vi.fn().mockResolvedValue({id: 'deferred-analysis', sessionId: passing.id, kind: 'analysis', stage: 'loadingPullRequestContext', state: 'running', message: 'Loading context'})
+      window.go = {main: {App: {
+        OpenPullRequest: vi.fn().mockResolvedValue({...pending, id: 'refreshed-session'}),
+        RefreshPullRequestContext: vi.fn().mockResolvedValue(passing),
+        StartAnalysis: startAnalysis,
+      }}}
+      window.runtime = {EventsOn: vi.fn(() => () => {})}
+      function ControlledOverview() {
+        const [current, setCurrent] = useState(pending)
+        return <OverviewScreen session={current} onBack={vi.fn()} onSession={setCurrent} onReview={vi.fn()}/>
+      }
+      render(<ControlledOverview/>)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15000)
+      })
+      expect(startAnalysis).toHaveBeenCalledWith(passing.id)
+      expect(screen.getByRole('heading', {name: 'Building the review arc'})).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('puts the ReviewArc brief before collapsed author context', () => {
     const session = reviewSession()
     window.runtime = {EventsOn: vi.fn(() => () => {})}
@@ -964,6 +1043,7 @@ describe('Review brief and chapter reader', () => {
 
     const brief = screen.getByRole('region', {name: 'Pull request review overview'})
     expect(brief).toHaveTextContent('Adds an optional quota-decision recorder')
+    fireEvent.click(screen.getByText('Full generated analysis'))
     const areaDetails = screen.getByText('Area details').closest('details')!
     expect(areaDetails).not.toHaveAttribute('open')
     fireEvent.click(screen.getByText('Area details'))
@@ -971,12 +1051,13 @@ describe('Review brief and chapter reader', () => {
     expect(areaDetails).toHaveTextContent('Changes the decision path.')
     expect(brief).toHaveTextContent('Callback runs while locked')
     expect(brief).toHaveTextContent('Whether reentrant recorders are supported is unspecified')
-    const reviewContext = screen.getByRole('complementary', {name: 'Review context'})
+    const agentReview = screen.getByRole('region', {name: 'Hold'})
     const supportingContext = screen.getByRole('region', {name: 'Supporting context'})
     const disclosure = screen.getByText('Author context').closest('details')!
-    expect(reviewContext).not.toContainElement(disclosure)
-    expect(reviewContext.parentElement).toContainElement(supportingContext)
-    expect(reviewContext.compareDocumentPosition(supportingContext) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(agentReview).not.toContainElement(disclosure)
+    expect(brief).toContainElement(agentReview)
+    expect(brief).toContainElement(supportingContext)
+    expect(agentReview.compareDocumentPosition(supportingContext) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(disclosure).not.toHaveAttribute('open')
     expect(brief.compareDocumentPosition(disclosure) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     fireEvent.click(screen.getByText('Author context'))
@@ -1011,12 +1092,32 @@ describe('Review brief and chapter reader', () => {
     expect(openURL).toHaveBeenNthCalledWith(2, 'https://github.com/acme/api/pull/1#discussion_r101')
   })
 
-  it('turns the highest risk into a concrete starting chapter inside the unified brief', () => {
+  it('turns the highest risks into concrete findings inside the agent brief', () => {
     const base = reviewSession()
     const originalChapter = base.analysis!.chapters[0]
     const chapterRisk = originalChapter.risks[0]
     const extraEvidence = {...chapterRisk.evidence[0], id: 'secondary-evidence', startLine: 1, endLine: 2}
-    const session: ReviewSession = {...base, analysis: {...base.analysis!, risks: [{...base.analysis!.risks[0], id: 'overview-risk'}], chapters: [
+    const session: ReviewSession = {...base, analysis: {...base.analysis!, risks: [{...base.analysis!.risks[0], id: 'overview-risk'}], judgments: [{
+      id: 'callback-lock',
+      title: 'Callback runs while locked',
+      description: 'A slow or reentrant recorder can block callers.',
+      kind: 'risk',
+      level: 'high',
+      groupingRationale: 'All three observations are caused by invoking the recorder before the same limiter mutex is released.',
+      observations: [
+        {id: 'overview', title: 'Callback runs while locked', description: 'The callback runs before unlock.', evidence: chapterRisk.evidence},
+        {id: 'broad', title: 'Broad lock concern', description: 'The critical section includes caller code.', evidence: [...chapterRisk.evidence, extraEvidence]},
+        {id: 'specific', title: 'Specific callback concern', description: 'A reentrant callback can deadlock.', evidence: chapterRisk.evidence},
+      ],
+    }, {
+      id: 'reentrant-contract',
+      title: 'Whether reentrant recorders are supported is unspecified.',
+      description: 'The available repository evidence does not define the callback contract.',
+      kind: 'unknown',
+      level: 'unknown',
+      groupingRationale: '',
+      observations: [{id: 'contract', title: 'Recorder reentrancy is unspecified', description: 'No contract establishes whether a recorder may call the limiter.', evidence: chapterRisk.evidence}],
+    }], chapters: [
       {...originalChapter, id: 'chapter-1', title: 'Recorder setup', risks: [{...chapterRisk, id: 'broad-chapter-risk', title: 'Broad lock concern', evidence: [...chapterRisk.evidence, extraEvidence]}]},
       {...originalChapter, id: 'chapter-2', order: 2, title: 'Decision path', risks: [{...chapterRisk, id: 'chapter-risk', title: 'Specific callback concern'}]},
     ]}}
@@ -1027,26 +1128,84 @@ describe('Review brief and chapter reader', () => {
     const brief = screen.getByRole('region', {name: 'Pull request review overview'})
     expect(brief).toHaveTextContent('#1 Record quota decisions')
     expect(brief).toHaveTextContent('Callback runs while locked')
-    expect(brief).toHaveTextContent('Review path')
-    fireEvent.click(screen.getByRole('button', {name: 'Start with chapter 2'}))
-    expect(onReview).toHaveBeenCalledWith('chapter-2')
+    expect(brief).toHaveTextContent('3 observations')
+    expect(brief).not.toHaveTextContent('Broad lock concern')
+    expect(brief).not.toHaveTextContent('Specific callback concern')
+    expect(brief).not.toHaveTextContent('Decision map')
+    expect(screen.getByRole('heading', {name: 'Needs your judgment 2'})).toBeInTheDocument()
+    expect(screen.getAllByText('High risk')).not.toHaveLength(0)
+    expect(screen.getAllByText(/validated reference/)).not.toHaveLength(0)
+    expect(screen.getAllByText('Resolve or accept with rationale')).not.toHaveLength(0)
+    expect(screen.getByRole('heading', {name: 'What was verified'}).closest('details')).toBeNull()
+    expect(screen.getByRole('heading', {name: 'What remains unknown'}).closest('details')).toBeNull()
+    expect(screen.queryByText('Blind spots')).not.toBeInTheDocument()
+    const groupedJudgment = screen.getByText('Callback runs while locked').closest('.agent-finding')!
+    fireEvent.click(groupedJudgment.querySelector('button')!)
+    expect(onReview).toHaveBeenCalledWith('chapter-1', 'judgment:callback-lock')
   })
 
-  it('does not turn an unsupported risk into an authoritative starting chapter', () => {
+  it('keeps consequential findings visible and progressively reveals a long judgment list', () => {
+    const session = reviewSession()
+    const chapter = session.analysis!.chapters[0]
+    const sourceRisk = chapter.risks[0]
+    const risks = Array.from({length: 8}, (_, index) => ({
+      ...sourceRisk,
+      id: `risk-${index + 1}`,
+      title: `Independent finding ${index + 1}`,
+      description: `Independent failure mode ${index + 1} affects a separate code path.`,
+      evidence: [{...sourceRisk.evidence[0], id: `risk-evidence-${index + 1}`, path: `src/finding-${index + 1}.ts`}],
+      level: index === 0 ? 'critical' as const : index < 4 ? 'high' as const : 'medium' as const,
+    }))
+    session.analysis = {...session.analysis!, risks: [], unknowns: [], chapters: [{...chapter, risks, unknowns: []}]}
+    window.runtime = {EventsOn: vi.fn(() => () => {})}
+    render(<OverviewScreen session={session} onBack={vi.fn()} onSession={vi.fn()} onReview={vi.fn()}/>)
+
+    expect(screen.getByRole('heading', {name: 'Needs your judgment 8'})).toBeInTheDocument()
+    expect(screen.getByText('Independent finding 1')).toBeInTheDocument()
+    expect(screen.getByText('Independent finding 2')).toBeInTheDocument()
+    expect(screen.queryByText('Independent finding 8')).not.toBeInTheDocument()
+
+    expect(screen.queryByText('Independent finding 4')).not.toBeInTheDocument()
+    const disclosure = screen.getByRole('button', {name: 'Show 5 more · 1 high risk'})
+    expect(disclosure).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(disclosure)
+
+    expect(screen.getByText('Independent finding 8')).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: 'Show fewer judgments'})).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('does not turn an unsupported overview risk into an authoritative finding', () => {
     const base = reviewSession()
     const session: ReviewSession = {...base, analysis: {...base.analysis!, risks: [{...base.analysis!.risks[0], evidence: []}], chapters: base.analysis!.chapters.map((chapter) => ({...chapter, risks: []}))}}
     const onReview = vi.fn()
     window.runtime = {EventsOn: vi.fn(() => () => {})}
     render(<OverviewScreen session={session} onBack={vi.fn()} onSession={vi.fn()} onReview={onReview}/>)
 
-    expect(screen.getByText('Concern to verify')).toBeInTheDocument()
-    expect(screen.getByText('Unverified')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', {name: 'Open guided review'}))
-    expect(onReview).toHaveBeenCalledWith()
+    const attention = screen.getByRole('heading', {name: /Needs your judgment/}).closest('section')!
+    expect(attention).not.toHaveTextContent('Callback runs while locked')
+    expect(screen.getByText('The risk “Callback runs while locked” was not backed by a validated code reference.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Open judgment: Whether reentrant recorders are supported is unspecified.'}))
+    expect(onReview).toHaveBeenCalledWith('chapter-1', 'unknown:unknown-1')
   })
 
-  it('opens chapters as a narrative and keeps the full diff one click away', async () => {
+  it('does not combine legacy findings even when their text and evidence overlap', () => {
     const session = reviewSession()
+    const chapter = session.analysis!.chapters[0]
+    session.analysis = {
+      ...session.analysis!,
+      risks: [{...session.analysis!.risks[0], id: 'overview-risk'}],
+      chapters: [{...chapter, risks: [{...chapter.risks[0], id: 'chapter-risk', title: ' Callback runs while locked! '}]}],
+    }
+    window.runtime = {EventsOn: vi.fn(() => () => {})}
+    render(<OverviewScreen session={session} onBack={vi.fn()} onSession={vi.fn()} onReview={vi.fn()}/>)
+
+    expect(screen.getByRole('heading', {name: 'Needs your judgment 3'})).toBeInTheDocument()
+    expect(screen.getAllByText(/Callback runs while locked!?/)).toHaveLength(2)
+  })
+
+  it('opens one focused agent finding while keeping analysis and full diff optional', async () => {
+    const session = reviewSession()
+    session.pullRequest.reviewComments = [{id: 101, reviewId: 11, author: {login: 'bob', name: 'Bob', avatarUrl: ''}, body: 'Can this race?', path: 'src/limiter.ts', line: 13, side: 'RIGHT', commitSha: 'head', createdAt: '2026-07-12T01:01:00Z', updatedAt: '2026-07-12T01:01:00Z', url: 'https://github.com/acme/api/pull/1#discussion_r101'}]
     const getDiff = vi.fn().mockResolvedValue({file: {path: 'src/limiter.ts', previousPath: '', status: 'modified', additions: 1, deletions: 0, isBinary: false}, patch: '', hunks: []})
     window.go = {main: {App: {
       GetChangedFiles: vi.fn().mockResolvedValue([{path: 'src/limiter.ts', previousPath: '', status: 'modified', additions: 1, deletions: 0, isBinary: false}]),
@@ -1054,6 +1213,17 @@ describe('Review brief and chapter reader', () => {
     }}}
     render(<ReviewWorkspace session={session} onSession={vi.fn()} onBack={vi.fn()}/>)
 
+    const workbench = screen.getByRole('region', {name: 'Agent judgment: Callback runs while locked'})
+    expect(workbench).toHaveTextContent('From Decision recording')
+    expect(workbench).toHaveTextContent('Why this matters')
+    expect(workbench).toHaveTextContent('Evidence')
+    expect(workbench).toHaveTextContent('Existing discussion')
+    expect(workbench).toHaveTextContent('Can this race?')
+    expect(workbench).toHaveTextContent('Your decision')
+    expect(workbench).not.toHaveTextContent('What would need to be true')
+    expect(screen.queryByText(/questions judged/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', {name: /Next question/})).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Read full generated analysis'}))
     const reader = screen.getByRole('region', {name: 'Chapter 1: Decision recording'})
     expect(reader).toHaveTextContent('Behavioral change')
     expect(reader).toHaveTextContent('Allow returned a result without retaining an event.')
@@ -1065,7 +1235,7 @@ describe('Review brief and chapter reader', () => {
     expect(screen.getByText('1 unique reference in this chapter')).toBeInTheDocument()
     expect(screen.queryByRole('region', {name: /diff for/i})).not.toBeInTheDocument()
     expect(getDiff).not.toHaveBeenCalled()
-    const chapterProgress = screen.getByRole('combobox', {name: 'Chapter progress'})
+    const chapterProgress = screen.getByRole('combobox', {name: 'Analysis progress'})
     expect(chapterProgress).toHaveTextContent('In progress')
     fireEvent.click(chapterProgress)
     expect(await screen.findByRole('option', {name: 'Not reviewed'})).toBeInTheDocument()
@@ -1078,7 +1248,7 @@ describe('Review brief and chapter reader', () => {
     expect(reader).not.toContainElement(fullDiff)
     fireEvent.click(fullDiff)
     await waitFor(() => expect(getDiff).toHaveBeenCalledWith(session.id, 'src/limiter.ts'))
-    expect(await screen.findByRole('button', {name: 'Back to chapter'})).toBeInTheDocument()
+    expect(await screen.findByRole('button', {name: 'Back to finding'})).toBeInTheDocument()
     const unified = screen.getByRole('button', {name: 'Unified diff'})
     const split = screen.getByRole('button', {name: 'Split diff'})
     expect(unified).toHaveAttribute('aria-pressed', 'true')
@@ -1086,9 +1256,79 @@ describe('Review brief and chapter reader', () => {
     fireEvent.click(split)
     expect(split).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('heading', {name: 'No textual changes'})).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', {name: 'Back to chapter'}))
-    expect(screen.getByRole('region', {name: 'Chapter 1: Decision recording'})).toBeInTheDocument()
-    expect(screen.getByRole('combobox', {name: 'Chapter progress'})).toHaveTextContent('In progress')
+    fireEvent.click(screen.getByRole('button', {name: 'Back to finding'}))
+    expect(screen.getByRole('region', {name: 'Agent judgment: Callback runs while locked'})).toBeInTheDocument()
+    expect(screen.queryByRole('combobox', {name: 'Analysis progress'})).not.toBeInTheDocument()
+  })
+
+  it('moves directly between judgments and ends at the review decision', () => {
+    const session = reviewSession()
+    window.go = {main: {App: {GetChangedFiles: vi.fn().mockResolvedValue([])}}}
+    render(<ReviewWorkspace session={session} onSession={vi.fn()} onBack={vi.fn()}/> )
+
+    expect(screen.getByRole('region', {name: 'Agent judgment: Callback runs while locked'})).toBeInTheDocument()
+    expect(document.querySelector('.judgment-position')).toHaveTextContent('1 of 2')
+    expect(screen.getByRole('button', {name: 'Previous judgment'})).toBeDisabled()
+
+    fireEvent.click(screen.getByRole('button', {name: 'Next judgment'}))
+    expect(screen.getByRole('region', {name: 'Agent judgment: Whether reentrant recorders are supported is unspecified.'})).toBeInTheDocument()
+    expect(document.querySelector('.judgment-position')).toHaveTextContent('2 of 2')
+    expect(screen.queryByRole('button', {name: 'Next judgment'})).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', {name: 'Previous judgment'}))
+    expect(screen.getByRole('region', {name: 'Agent judgment: Callback runs while locked'})).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', {name: 'Next judgment'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Open final review decision'}))
+    expect(screen.getByRole('heading', {name: 'Can this PR be approved?'})).toBeInTheDocument()
+  })
+
+  it('enables approval after the agent findings are explicitly accepted', async () => {
+    const session = reviewSession()
+    window.go = {main: {App: {GetChangedFiles: vi.fn().mockResolvedValue([])}}}
+    function ControlledReview() {
+      const [reviews, setReviews] = useState<DecisionReviewMap>({'unknown:unknown-1': {disposition: 'accepted', note: 'The unsupported behavior is outside the public contract.'}})
+      return <ReviewWorkspace session={session} decisionReview={reviews} onDecisionReview={(id, review) => setReviews((current) => ({...current, [id]: review}))} onSession={vi.fn()} onBack={vi.fn()}/>
+    }
+    render(<ControlledReview/>)
+
+    fireEvent.click(screen.getByRole('button', {name: 'Accept with rationale'}))
+    const rationale = screen.getByRole('textbox', {name: 'Why can this be approved?'})
+    expect(screen.getByRole('button', {name: 'Confirm acceptance'})).toBeDisabled()
+    fireEvent.change(rationale, {target: {value: 'The recorder is internal and guaranteed to be non-reentrant.'}})
+    fireEvent.click(screen.getByRole('button', {name: 'Confirm acceptance'}))
+    expect(screen.getByRole('button', {name: 'Undo accepted tradeoff'})).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.queryByText(/questions judged/)).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Open review decision'}))
+    expect(screen.getByRole('heading', {name: 'Can this PR be approved?'})).toBeInTheDocument()
+    expect(screen.getByText('2/2')).toBeInTheDocument()
+    expect(screen.getAllByText('The recorder is internal and guaranteed to be non-reentrant.')).toHaveLength(2)
+    expect(screen.getByText('No unresolved agent judgments.')).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: 'Approve'})).toBeEnabled()
+  })
+
+  it('can open a clean agent review directly at the human approval decision', () => {
+    const base = reviewSession()
+    const session: ReviewSession = {...base, analysis: {...base.analysis!, risks: [], unknowns: [], chapters: base.analysis!.chapters.map((chapter) => ({...chapter, risks: [], unknowns: []}))}}
+    window.go = {main: {App: {GetChangedFiles: vi.fn().mockResolvedValue([])}}}
+    render(<ReviewWorkspace session={session} initialSummaryOpen onSession={vi.fn()} onBack={vi.fn()}/>)
+
+    expect(screen.getByRole('heading', {name: 'Can this PR be approved?'})).toBeInTheDocument()
+    expect(screen.getByText('The agent reported no decision-critical findings.')).toBeInTheDocument()
+    expect(screen.getByText('No checks configured')).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: 'Approve'})).toBeEnabled()
+  })
+
+  it('returns directly from the final decision to the selected unresolved finding', () => {
+    const session = reviewSession()
+    window.go = {main: {App: {GetChangedFiles: vi.fn().mockResolvedValue([])}}}
+    render(<ReviewWorkspace session={session} onSession={vi.fn()} onBack={vi.fn()}/>)
+
+    fireEvent.click(screen.getByRole('button', {name: 'Open review decision'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Open judgment: Whether reentrant recorders are supported is unspecified.'}))
+
+    expect(screen.queryByRole('heading', {name: 'Can this PR be approved?'})).not.toBeInTheDocument()
+    expect(screen.getByRole('region', {name: 'Agent judgment: Whether reentrant recorders are supported is unspecified.'})).toBeInTheDocument()
   })
 
   it('explains stale decision blockers and starts reanalysis from the review summary', async () => {
@@ -1103,9 +1343,10 @@ describe('Review brief and chapter reader', () => {
     }}}
     render(<ReviewWorkspace session={session} onSession={onSession} onBack={onBack}/>)
 
-    fireEvent.click(screen.getByRole('button', {name: 'Review summary'}))
+    fireEvent.click(screen.getByRole('button', {name: 'Open review decision'}))
     expect(screen.getByText('This PR changed since it was analyzed.')).toBeInTheDocument()
-    expect(screen.getByRole('button', {name: 'Approve'})).toHaveAttribute('title', 'Reanalyze the latest revision and review 1 remaining chapter before approving.')
+    expect(screen.getByRole('button', {name: 'Continue review'})).toBeEnabled()
+    expect(screen.queryByRole('button', {name: 'Approve'})).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', {name: 'Reanalyze latest revision'}))
     await waitFor(() => expect(startAnalysis).toHaveBeenCalledWith(session.id))
@@ -1150,7 +1391,7 @@ describe('Review brief and chapter reader', () => {
     await waitFor(() => expect(discard).toHaveBeenCalledWith('unmount-token'))
   })
 
-  it('expands validated code evidence inline before offering deeper context', async () => {
+  it('opens validated surrounding code from the finding without loading the full diff', async () => {
     const session = reviewSession()
     const getFile = vi.fn().mockResolvedValue({path: 'src/limiter.ts', revision: 'head', sha: 'head', content: Array.from({length: 15}, (_, index) => index === 9 ? 'const answer = 42' : `line ${index + 1}`).join('\n'), isBinary: false, lineCount: 15})
     const getDiff = vi.fn()
@@ -1161,40 +1402,36 @@ describe('Review brief and chapter reader', () => {
     }}}
     render(<ReviewWorkspace session={session} onSession={vi.fn()} onBack={vi.fn()}/>)
 
-    fireEvent.click(screen.getAllByRole('button', {name: 'Show code for src/limiter.ts L10–13'})[0])
+    expect(screen.getByRole('region', {name: 'Agent judgment: Callback runs while locked'})).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Open surrounding code'}))
     await waitFor(() => expect(getFile).toHaveBeenCalledWith(session.id, 'src/limiter.ts', 'head'))
-    const excerpt = await screen.findByLabelText('Code excerpt from src/limiter.ts')
-    expect(excerpt).toHaveTextContent('const answer = 42')
-    expect(excerpt).toHaveTextContent('line 13')
-    await waitFor(() => expect(excerpt.querySelector('[style*="color"]')).toBeTruthy(), {timeout: 5_000})
-    expect(screen.getByRole('region', {name: 'Chapter 1: Decision recording'})).toBeInTheDocument()
-    expect(screen.queryByRole('button', {name: 'Back to chapter'})).not.toBeInTheDocument()
-    expect(getDiff).not.toHaveBeenCalled()
-
-    fireEvent.click(screen.getByRole('button', {name: 'Full context'}))
     expect(await screen.findByRole('region', {name: 'head file context for src/limiter.ts'})).toBeInTheDocument()
+    await waitFor(() => expect(document.querySelector('.evidence-file-renderer')).toHaveTextContent('const answer = 42'))
     expect(getDiff).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', {name: 'Back to chapter'}))
-    expect(screen.getByRole('region', {name: 'Chapter 1: Decision recording'})).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Back to finding'}))
+    expect(screen.getByRole('region', {name: 'Agent judgment: Callback runs while locked'})).toBeInTheDocument()
   })
 
-  it('keeps chapters, evidence, notes, and drafts reachable through responsive panel triggers', async () => {
+  it('turns an agent finding into an editable local author draft', () => {
     const session = reviewSession()
     window.go = {main: {App: {GetChangedFiles: vi.fn().mockResolvedValue([])}}}
     render(<ReviewWorkspace session={session} onSession={vi.fn()} onBack={vi.fn()}/>)
 
-    const chapters = screen.getByRole('button', {name: 'Chapters'})
-    const tools = screen.getByRole('button', {name: 'Review tools'})
-    expect(chapters).toHaveAttribute('aria-expanded', 'false')
-    expect(tools).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(screen.getByRole('button', {name: 'Draft comment'}))
 
-    fireEvent.click(chapters)
-    expect(chapters).toHaveAttribute('aria-expanded', 'true')
-    expect(document.getElementById('review-chapters-panel')).toHaveClass('panel-open')
-    expect(screen.getByRole('dialog', {name: 'Review chapters'})).toContainElement(document.activeElement as HTMLElement)
-    fireEvent.click(screen.getByRole('button', {name: 'Close review panels'}))
-    expect(chapters).toHaveAttribute('aria-expanded', 'false')
-    expect(chapters).toHaveFocus()
+    expect(screen.getByText('Review drafts')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Write a clear, actionable review comment…')).toHaveValue('Please address this review judgment:\n\nCallback runs while locked\n\nA slow or reentrant recorder can block callers.')
+  })
+
+  it('keeps evidence, notes, and drafts reachable without restoring a finding queue', async () => {
+    const session = reviewSession()
+    window.go = {main: {App: {GetChangedFiles: vi.fn().mockResolvedValue([])}}}
+    render(<ReviewWorkspace session={session} onSession={vi.fn()} onBack={vi.fn()}/>)
+
+    const tools = screen.getByRole('button', {name: 'Review tools'})
+    expect(tools).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('button', {name: 'Questions'})).not.toBeInTheDocument()
+    expect(document.getElementById('review-chapters-panel')).not.toBeInTheDocument()
 
     fireEvent.click(tools)
     expect(tools).toHaveAttribute('aria-expanded', 'true')
@@ -1349,12 +1586,9 @@ describe('Diff review interactions', () => {
 	  GetFile: vi.fn((...args: unknown[]) => args[1] === 'src/first.ts' ? first : second),
 	}}}
 	render(<ReviewWorkspace session={session} onSession={vi.fn()} onBack={vi.fn()}/>)
-	expect(screen.getByRole('combobox', {name: 'Chapter progress'})).toHaveTextContent('Not reviewed')
-	expect(screen.getByText('Saved privately')).toBeInTheDocument()
+	expect(screen.queryByRole('combobox', {name: 'Analysis progress'})).not.toBeInTheDocument()
 	fireEvent.click(screen.getByRole('button', {name: 'Show 1 more'}))
 	expect(screen.getByRole('button', {name: 'Symbol 7'})).toBeInTheDocument()
-	await waitFor(() => expect(document.querySelector('.file-section span[title="src/second.ts"]')).toBeTruthy())
-	const secondFileButton = document.querySelector('.file-section span[title="src/second.ts"]')!.closest('button')!
 	fireEvent.click(screen.getAllByRole('button', {name: /src\/first\.tsL1/})[0])
 	fireEvent.click(screen.getAllByRole('button', {name: /src\/second\.tsL1/})[0])
 	resolveSecond({path: 'src/second.ts', revision: 'head', sha: 'head', content: 'second file wins\n', isBinary: false, lineCount: 1})
@@ -1364,7 +1598,7 @@ describe('Diff review interactions', () => {
 	expect(document.querySelector('.evidence-file-renderer [data-line="1"]')).toHaveTextContent('second file wins')
 	resolveSecondDiff({file: {path: 'src/second.ts', previousPath: '', status: 'modified', additions: 0, deletions: 0, isBinary: true}, patch: '', hunks: []})
 	resolveFirstDiff({file: {path: 'src/first.ts', previousPath: '', status: 'modified', additions: 1, deletions: 0, isBinary: false}, patch: 'diff --git a/src/first.ts b/src/first.ts\n--- a/src/first.ts\n+++ b/src/first.ts\n@@ -0,0 +1 @@\n+stale\n', hunks: []})
-	fireEvent.click(secondFileButton)
+	fireEvent.click(screen.getByRole('button', {name: 'Open full diff'}))
 	expect(await screen.findByRole('heading', {name: 'Binary file'})).toBeInTheDocument()
   })
 

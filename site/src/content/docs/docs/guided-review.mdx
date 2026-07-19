@@ -1,24 +1,40 @@
 ---
-title: Guided review
-description: Move through chapters, code, evidence, risks, tests, and private notes.
+title: Agent review and human judgment
+description: Understand the agent's recommendation, inspect consequential findings, and make the final review decision.
 ---
 
-The review workspace has three coordinated panels:
+ReviewArc does not ask you to repeat the agent's broad review. It starts with a recommendation and then narrows your attention to the risks and uncertainty that still require human judgment.
 
-1. **Chapters and progress** organize the pull request into reviewable concerns and record where you are.
-2. **Code and diffs** show the real changed files and surrounding source for the exact revision.
-3. **Evidence and decisions** collect facts, inferences, risks, related tests, unknowns, suggested questions, and your notes.
+## Before the review starts
 
-Selecting an evidence reference navigates to its validated file and line range. This keeps the analysis beside the code that supports—or fails to support—it.
+ReviewArc checks the pull request's CI state before beginning deep review. If checks are failing or still running, the review is paused so neither the agent nor the reviewer spends attention on a revision that is not ready. Refresh the checks after they pass.
 
-## Chapter status
+## The review brief
 
-Update each chapter as you work. ReviewArc persists review progress across restarts, so you can leave a large review and resume without reconstructing your place.
+The agent review brief begins with one of three recommendations:
+
+- **Ready for human approval** means no decision-critical blocker was found in the analyzed change.
+- **Hold** means a consequential risk should be resolved or explicitly accepted.
+- **Insufficient evidence** means the agent completed its review, but important uncertainty remains.
+
+The brief also shows what changed, what was verified, and any blind spots in the agent's coverage or evidence. A recommendation is not an automatic approval; it is the agent's evidence-backed assessment for you to challenge and confirm.
+
+## Needs your judgment
+
+ReviewArc surfaces the findings that could change the approval decision. High-risk judgments appear first. The agent may group multiple observations only when its structured result identifies a shared root cause; otherwise they remain separate decisions.
+
+Open a judgment to see why it matters, its validated evidence, existing discussion on the affected code, and the action required before approval. Use **Previous** and **Next** to move directly between judgments. On the final judgment, continue to the review decision.
+
+## Inspecting evidence
+
+Selecting an evidence reference opens the exact pinned file and line range. From there you can read surrounding code, view the changed diff, inspect existing comments, and draft a line-level comment without losing the judgment you were evaluating.
+
+Validated paths and line ranges prove that the cited code exists at the reviewed revision. They do not make the agent infallible. Use the evidence to challenge whether its interpretation and recommendation are sound.
+
+## Your decision
+
+Accept a judgment only when the tradeoff is understood. High-risk findings and unresolved uncertainty require a rationale. If the author needs to act, turn the judgment into an editable local draft instead.
 
 ## Private notes
 
-Notes are local and private. They are not GitHub comments and are never published automatically. Use them to capture questions, decisions, or follow-up context while moving through the review.
-
-## Tests and questions
-
-Related tests are references discovered in the reviewed change, not proof that the test suite passed. ReviewArc does not execute project tests. Suggested reviewer questions are prompts for investigation; they are not findings by themselves.
+Notes, accepted tradeoffs, and draft comments are local and private. Nothing is published automatically. ReviewArc keeps your judgment progress across restarts and requires a separate preview and confirmation before anything reaches GitHub.

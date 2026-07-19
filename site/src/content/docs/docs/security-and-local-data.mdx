@@ -29,8 +29,8 @@ The initial model prompt does not contain that complete content. It contains onl
 
 Codex runs in its read-only sandbox with an ephemeral session and shell tools disabled. Claude Code runs with built-in tools disabled and only ReviewArc's context tools allowed. Both must return ReviewArc's structured JSON schema; ReviewArc validates every AI-provided path and line range against the reviewed revision before displaying it and labels unsupported claims as unverified.
 
-Nothing else is sent anywhere. Your notes, drafts, chapter progress, and the rest of the analysis stay in local storage until you explicitly publish a review to GitHub.
+Nothing else is sent anywhere. Your notes, drafts, judgment progress, and the rest of the agent review stay in local storage until you explicitly publish a review to GitHub.
 
 ## Publishing boundary
 
-Analysis, chapter progress, notes, and draft comments remain local. Only the explicitly previewed and confirmed review payload is sent to GitHub.
+Analysis, judgment progress, accepted tradeoffs, notes, and draft comments remain local. Only the explicitly previewed and confirmed review payload is sent to GitHub.

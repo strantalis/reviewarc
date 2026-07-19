@@ -53,6 +53,19 @@ func validateModelIdentity(raw rawAnalysis) error {
 			return fmt.Errorf("analysis returned an empty title or purpose for chapter %q", chapter.ID)
 		}
 	}
+	for _, judgment := range raw.Judgments {
+		if strings.TrimSpace(judgment.Title) == "" || strings.TrimSpace(judgment.Description) == "" || len(judgment.Observations) == 0 {
+			return fmt.Errorf("analysis returned an incomplete judgment %q", judgment.ID)
+		}
+		for _, observation := range judgment.Observations {
+			if strings.TrimSpace(observation.Title) == "" || strings.TrimSpace(observation.Description) == "" {
+				return fmt.Errorf("analysis returned an incomplete observation %q for judgment %q", observation.ID, judgment.ID)
+			}
+		}
+		if len(judgment.Observations) > 1 && strings.TrimSpace(judgment.GroupingRationale) == "" {
+			return fmt.Errorf("analysis grouped observations without a rationale for judgment %q", judgment.ID)
+		}
+	}
 	return nil
 }
 
@@ -83,6 +96,15 @@ func normalizeModelPresentation(raw *rawAnalysis) {
 	normalizeClaims(raw.Unknowns, "unknown")
 	normalizeRisks(raw.Risks, "risk")
 	normalizeBehaviors(raw.BehavioralChanges, "behavior")
+	judgmentIDs := map[string]bool{}
+	for i := range raw.Judgments {
+		judgment := &raw.Judgments[i]
+		judgment.ID = normalizedID(judgment.ID, "judgment", i, judgmentIDs)
+		observationIDs := map[string]bool{}
+		for j := range judgment.Observations {
+			judgment.Observations[j].ID = normalizedID(judgment.Observations[j].ID, "observation", j, observationIDs)
+		}
+	}
 	chapterIDs := map[string]bool{}
 	for i := range raw.Chapters {
 		chapter := &raw.Chapters[i]
@@ -127,6 +149,11 @@ func normalizedID(value, prefix string, index int, seen map[string]bool) string 
 func validateAnalysisSubstance(result domain.ReviewAnalysis) error {
 	valid := func(values []domain.EvidenceReference) bool { return hasValid(values) }
 	hasFindings, hasValidatedFinding := false, false
+	for _, judgment := range result.Judgments {
+		for _, observation := range judgment.Observations {
+			hasFindings, hasValidatedFinding = true, hasValidatedFinding || valid(observation.Evidence)
+		}
+	}
 	for _, chapter := range result.Chapters {
 		for _, symbol := range chapter.Symbols {
 			hasFindings, hasValidatedFinding = true, hasValidatedFinding || valid(symbol.Evidence)
@@ -288,10 +315,23 @@ func (v *validator) convert(raw rawAnalysis) domain.ReviewAnalysis {
 	out.Facts = v.claims(raw.Facts, domain.ClaimFact)
 	out.Inferences = v.claims(raw.Inferences, domain.ClaimInference)
 	out.Unknowns = v.claims(raw.Unknowns, domain.ClaimUnknown)
+	out.Judgments = v.judgments(raw.Judgments)
 	for _, chapter := range raw.Chapters {
 		out.Chapters = append(out.Chapters, v.chapter(chapter))
 	}
 	out.ValidationIssues = v.issues
+	return out
+}
+
+func (v *validator) judgments(values []rawJudgment) []domain.ReviewJudgment {
+	out := make([]domain.ReviewJudgment, 0, len(values))
+	for _, raw := range values {
+		observations := make([]domain.ReviewObservation, 0, len(raw.Observations))
+		for _, observation := range raw.Observations {
+			observations = append(observations, domain.ReviewObservation{ID: observation.ID, Title: observation.Title, Description: observation.Description, Evidence: v.evidence(observation.Evidence)})
+		}
+		out = append(out, domain.ReviewJudgment{ID: raw.ID, Title: raw.Title, Description: raw.Description, Kind: strings.ToLower(strings.TrimSpace(raw.Kind)), Level: domain.RiskLevel(strings.ToLower(strings.TrimSpace(raw.Level))), GroupingRationale: raw.GroupingRationale, Observations: observations})
+	}
 	return out
 }
 

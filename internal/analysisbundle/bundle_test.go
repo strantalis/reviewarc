@@ -77,7 +77,7 @@ func TestOversizedProviderPromptBecomesPagedLocalArtifact(t *testing.T) {
 		t.Fatalf("artifact=%+v", artifact)
 	}
 	prompt := LaunchPrompt(lease.Reference)
-	if len(prompt) >= 16<<10 || strings.Contains(prompt, strings.Repeat("x", 128)) || !strings.Contains(prompt, "continue paging until hasMore is false") || !strings.Contains(prompt, "explain_diff_omissions") {
+	if len(prompt) >= 16<<10 || strings.Contains(prompt, strings.Repeat("x", 128)) || !strings.Contains(prompt, "paging until hasMore is false") || !strings.Contains(prompt, "approval decision support") || !strings.Contains(prompt, "search_snapshot and read_file") || !strings.Contains(prompt, "explain_diff_omissions") || !strings.Contains(prompt, "same root cause") || !strings.Contains(prompt, "Similar wording, nearby lines, or a shared file are not sufficient") {
 		t.Fatalf("launch prompt bytes=%d content=%q", len(prompt), prompt)
 	}
 }
@@ -176,7 +176,7 @@ func TestLargeMultiFileBundleKeepsLaunchPromptSmall(t *testing.T) {
 	if bytes <= 1_055_787 {
 		t.Fatalf("bundle diff bytes=%d, want screenshot-sized regression input", bytes)
 	}
-	if prompt := LaunchPrompt(lease.Reference); len(prompt) >= 2048 || strings.Contains(prompt, "large context line") {
+	if prompt := LaunchPrompt(lease.Reference); len(prompt) >= 4096 || strings.Contains(prompt, "large context line") {
 		t.Fatalf("launch prompt unexpectedly contains bundle payload: bytes=%d", len(prompt))
 	}
 }

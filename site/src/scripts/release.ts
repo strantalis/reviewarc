@@ -13,7 +13,6 @@ type ReleaseManifest = {
 };
 
 const releaseActions = Array.from(document.querySelectorAll<HTMLAnchorElement>("[data-release-action]"));
-const availabilityLine = document.querySelector<HTMLElement>(".availability-line");
 const releaseMeta = document.querySelector<HTMLElement>("#release-meta");
 const releaseStatus = document.querySelector<HTMLElement>("#release-status");
 const retryRelease = document.querySelector<HTMLButtonElement>("#retry-release");
@@ -66,7 +65,6 @@ const setStatus = (state: "loading" | "ready" | "empty" | "error", message: stri
     releaseStatus.dataset.state = state;
     releaseStatus.setAttribute("aria-busy", state === "loading" ? "true" : "false");
   }
-  if (availabilityLine) availabilityLine.dataset.state = state;
   if (releaseMeta) releaseMeta.textContent = message;
 };
 
@@ -74,11 +72,11 @@ const renderRelease = (release: ReleaseManifest) => {
   const artifact = release.macOS;
   updateReleaseActions({
     titleCopy: `Download ReviewArc ${release.version}`,
-    detailCopy: `Signed desktop build · ${formatBytes(artifact.sizeBytes)}`,
+    detailCopy: `Signed macOS build · ${formatBytes(artifact.sizeBytes)}`,
     compactCopy: "Download",
     state: "ready",
     href: artifact.downloadUrl,
-    accessibleLabel: `Download ReviewArc ${release.version}`,
+    accessibleLabel: `Download ReviewArc ${release.version} for macOS`,
   });
   setStatus("ready", `Signed and verified · SHA-256 ${artifact.sha256.slice(0, 12)}…`);
   if (releaseDetails) {
@@ -130,7 +128,7 @@ const loadRelease = async () => {
   activeRequest = new AbortController();
   updateReleaseActions({
     titleCopy: "Checking signed release",
-    detailCopy: "Latest signed desktop build",
+    detailCopy: "Signed macOS build",
     compactCopy: "Checking…",
     state: "loading",
     accessibleLabel: "Checking ReviewArc release availability",

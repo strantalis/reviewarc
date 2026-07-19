@@ -157,7 +157,11 @@ func (m *Manager) ChangedFiles(ctx context.Context, repo ManagedRepository) ([]d
 	l := m.lock(repo.ID)
 	l.RLock()
 	defer l.RUnlock()
-	statusResult, err := m.git(ctx, "--git-dir="+repo.CachePath, "diff", "--name-status", "-z", "--no-ext-diff", "--no-textconv", "--find-renames=50%", repo.MergeBaseSHA, repo.HeadSHA, "--")
+	return m.filesBetween(ctx, repo.CachePath, repo.MergeBaseSHA, repo.HeadSHA)
+}
+
+func (m *Manager) filesBetween(ctx context.Context, cache, from, to string) ([]domain.ChangedFile, error) {
+	statusResult, err := m.git(ctx, "--git-dir="+cache, "diff", "--name-status", "-z", "--no-ext-diff", "--no-textconv", "--find-renames=50%", from, to, "--")
 	if err != nil {
 		return nil, fmt.Errorf("list changed files: %w", err)
 	}
@@ -165,7 +169,7 @@ func (m *Manager) ChangedFiles(ctx context.Context, repo ManagedRepository) ([]d
 	if err != nil {
 		return nil, err
 	}
-	statsResult, err := m.git(ctx, "--git-dir="+repo.CachePath, "diff", "--numstat", "-z", "--no-ext-diff", "--no-textconv", "--find-renames=50%", repo.MergeBaseSHA, repo.HeadSHA, "--")
+	statsResult, err := m.git(ctx, "--git-dir="+cache, "diff", "--numstat", "-z", "--no-ext-diff", "--no-textconv", "--find-renames=50%", from, to, "--")
 	if err != nil {
 		return nil, fmt.Errorf("read diff statistics: %w", err)
 	}
@@ -184,6 +188,70 @@ func (m *Manager) ChangedFiles(ctx context.Context, repo ManagedRepository) ([]d
 		}
 	}
 	return files, nil
+}
+
+// DeltaFiles lists the files that differ between two revisions already pinned
+// in the managed cache. It performs no fetches: both revisions must exist
+// locally, and callers must treat a failure as "delta unavailable" rather than
+// an inconsistency in the pull request itself.
+func (m *Manager) DeltaFiles(ctx context.Context, repo ManagedRepository, fromSHA, toSHA string) ([]domain.ChangedFile, error) {
+	from, to := strings.ToLower(fromSHA), strings.ToLower(toSHA)
+	if !shaPattern.MatchString(from) || !shaPattern.MatchString(to) {
+		return nil, errors.New("invalid delta revisions")
+	}
+	l := m.lock(repo.ID)
+	l.RLock()
+	defer l.RUnlock()
+	if err := m.hasCommit(ctx, repo.CachePath, from); err != nil {
+		return nil, fmt.Errorf("previously analyzed revision unavailable: %w", err)
+	}
+	if err := m.hasCommit(ctx, repo.CachePath, to); err != nil {
+		return nil, fmt.Errorf("current revision unavailable: %w", err)
+	}
+	return m.filesBetween(ctx, repo.CachePath, from, to)
+}
+
+// DeltaCommits returns up to limit commits reachable from toSHA but not from
+// fromSHA, newest first, along with the total commit count for that range.
+func (m *Manager) DeltaCommits(ctx context.Context, repo ManagedRepository, fromSHA, toSHA string, limit int) ([]domain.Commit, int, error) {
+	from, to := strings.ToLower(fromSHA), strings.ToLower(toSHA)
+	if !shaPattern.MatchString(from) || !shaPattern.MatchString(to) {
+		return nil, 0, errors.New("invalid delta revisions")
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	l := m.lock(repo.ID)
+	l.RLock()
+	defer l.RUnlock()
+	if err := m.hasCommit(ctx, repo.CachePath, from); err != nil {
+		return nil, 0, fmt.Errorf("previously analyzed revision unavailable: %w", err)
+	}
+	if err := m.hasCommit(ctx, repo.CachePath, to); err != nil {
+		return nil, 0, fmt.Errorf("current revision unavailable: %w", err)
+	}
+	countResult, err := m.git(ctx, "--git-dir="+repo.CachePath, "rev-list", "--count", from+".."+to)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count delta commits: %w", err)
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(string(countResult.Stdout)))
+	if err != nil {
+		return nil, 0, fmt.Errorf("parse delta commit count: %w", err)
+	}
+	logResult, err := m.git(ctx, "--git-dir="+repo.CachePath, "log", "--format=%H%x1f%s%x1f%an%x1f%aI", "-n", strconv.Itoa(limit), from+".."+to)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list delta commits: %w", err)
+	}
+	var commits []domain.Commit
+	for line := range strings.SplitSeq(strings.TrimSpace(string(logResult.Stdout)), "\n") {
+		fields := strings.Split(line, "\x1f")
+		if len(fields) != 4 || !shaPattern.MatchString(fields[0]) {
+			continue
+		}
+		authoredAt, _ := time.Parse(time.RFC3339, fields[3])
+		commits = append(commits, domain.Commit{SHA: fields[0], Message: fields[1], Author: domain.GitHubUser{Name: fields[2]}, AuthoredAt: authoredAt})
+	}
+	return commits, count, nil
 }
 
 func (m *Manager) DiffFile(ctx context.Context, repo ManagedRepository, file domain.ChangedFile, contextLines int) (domain.DiffFile, error) {

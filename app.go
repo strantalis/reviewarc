@@ -116,7 +116,7 @@ type AnalysisRequest struct {
 	SaveAsDefault bool                    `json:"saveAsDefault"`
 }
 
-const analysisPromptVersion = 2
+const analysisPromptVersion = 3
 
 type AnalysisConfiguration struct {
 	DefaultProfile *domain.AnalysisProfile `json:"defaultProfile,omitempty"`
@@ -1287,6 +1287,27 @@ func (a *App) SetChapterStatus(sessionID, chapterID string, status domain.Chapte
 	}
 	return a.GetSession(sessionID)
 }
+
+// SetJudgmentDecision persists the reviewer's local disposition for one agent
+// finding so accepted tradeoffs and their rationales survive restarts.
+func (a *App) SetJudgmentDecision(sessionID, findingID, disposition, note string) (domain.ReviewSession, error) {
+	switch disposition {
+	case "unreviewed", "accepted", "concern", "needsEvidence":
+	default:
+		return domain.ReviewSession{}, errors.New("unknown judgment disposition")
+	}
+	if strings.TrimSpace(findingID) == "" || len(findingID) > 200 {
+		return domain.ReviewSession{}, errors.New("invalid finding identifier")
+	}
+	if len(note) > 20000 {
+		return domain.ReviewSession{}, errors.New("decision rationale must stay under 20,000 characters")
+	}
+	decision := domain.JudgmentDecision{SessionID: sessionID, FindingID: findingID, Disposition: disposition, Note: note, UpdatedAt: time.Now().UTC()}
+	if err := a.store.SaveJudgmentDecision(a.appContext(), decision); err != nil {
+		return domain.ReviewSession{}, err
+	}
+	return a.GetSession(sessionID)
+}
 func (a *App) SaveNote(input NoteInput) (domain.ReviewNote, error) {
 	if strings.TrimSpace(input.Body) == "" || len(input.Body) > 20000 {
 		return domain.ReviewNote{}, errors.New("note must contain 1 to 20,000 characters")
@@ -1397,6 +1418,14 @@ func (a *App) prepareAndRunAnalysis(ctx context.Context, op Operation, session d
 		return
 	}
 	session = refreshed
+	if failure := analysisCheckFailure(session.PullRequest.CheckRuns); failure != nil {
+		a.mu.Lock()
+		delete(a.active, op.ID)
+		delete(a.analysisBySession, sessionID)
+		a.mu.Unlock()
+		a.failAnalysisOperation(op, *failure, domain.AnalysisCoverage{})
+		return
+	}
 	op.Stage = "preparingContext"
 	op.Message = "Preparing bounded review context"
 	a.emitOperation(op)
@@ -1571,6 +1600,48 @@ func (r evidenceFileReader) ReadFile(ctx context.Context, revision domain.Revisi
 
 func contextFailure(err error) domain.AnalysisFailure {
 	return domain.AnalysisFailure{Code: domain.FailureContextAccess, Title: "Review context could not be prepared", Message: "ReviewArc could not prepare the bounded pull request context for analysis.", Action: domain.RetrySamePlan, Retryable: true, TechnicalDetails: safeMessage(err)}
+}
+
+func analysisCheckFailure(checks []domain.CheckRun) *domain.AnalysisFailure {
+	if len(checks) == 0 {
+		return nil
+	}
+	passing := map[string]bool{"success": true, "neutral": true, "skipped": true}
+	failing := map[string]bool{"failure": true, "timed_out": true, "action_required": true, "startup_failure": true}
+	failedNames := make([]string, 0)
+	waitingNames := make([]string, 0)
+	for _, check := range checks {
+		result := strings.ToLower(strings.TrimSpace(check.Conclusion))
+		if passing[result] {
+			continue
+		}
+		if failing[result] {
+			failedNames = append(failedNames, check.Name)
+			continue
+		}
+		waitingNames = append(waitingNames, check.Name)
+	}
+	if len(failedNames) > 0 {
+		return &domain.AnalysisFailure{
+			Code:             domain.FailureChecksFailed,
+			Title:            "Review paused while CI is failing",
+			Message:          "Fix or rerun the failing checks before ReviewArc spends model time while CI is failing.",
+			Action:           domain.RetrySamePlan,
+			Retryable:        true,
+			TechnicalDetails: "Failing checks: " + strings.Join(failedNames, ", "),
+		}
+	}
+	if len(waitingNames) > 0 {
+		return &domain.AnalysisFailure{
+			Code:             domain.FailureChecksPending,
+			Title:            "Review is waiting for CI",
+			Message:          "ReviewArc will start the deep review after the current checks are rerun or finish successfully.",
+			Action:           domain.RetrySamePlan,
+			Retryable:        true,
+			TechnicalDetails: "Waiting checks: " + strings.Join(waitingNames, ", "),
+		}
+	}
+	return nil
 }
 
 func providerStartFailure(err error) domain.AnalysisFailure {
@@ -1880,6 +1951,9 @@ func normalizeSession(session domain.ReviewSession) domain.ReviewSession {
 	}
 	if session.Comments == nil {
 		session.Comments = []domain.ReviewComment{}
+	}
+	if session.Decisions == nil {
+		session.Decisions = []domain.JudgmentDecision{}
 	}
 	if session.Analysis == nil {
 		return session

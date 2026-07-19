@@ -178,6 +178,8 @@ The palette uses cool neutrals for sustained reading, indigo for navigation and 
 
 Dark mode reassigns the same semantic custom properties in `frontend/src/styles.css`; components must consume the semantic variables rather than hard-coding light values. The site maintains aligned, surface-specific mappings in `site/src/styles/landing.css` and Starlight mappings in `site/src/styles/starlight.css`.
 
+The desktop window controls use fixed macOS traffic-light colors (`--window-close`, `--window-minimize`, `--window-zoom`, with `--window-control-ink` and `--window-control-line` overlays). They mimic the platform and are identical in both themes; they are not part of the semantic palette and must not be reused elsewhere.
+
 **The Semantic Scarcity Rule.** Green, amber, and red are state, not decoration. If a semantic color does not clarify risk, validity, warning, failure, or consequence, use a neutral.
 
 **The One Primary Voice Rule.** Indigo owns primary action and active orientation. Cyan supports the arc identity; it must not create a second competing call to action.
@@ -242,7 +244,7 @@ ReviewArc is flat by default. Background tone, one-pixel rules, and stable geome
 
 ### Cards / Containers
 
-- **Corner Style:** Use `8–12px` only for bounded panels, dialogs, or the public site's evidence specimen.
+- **Corner Style:** Use `8–12px` only for bounded panels, dialogs, or the public site's evidence specimen. Compact chips, badges, code fragments, and other small inline elements use the `5px` compact radius (`--radius-compact`).
 - **Background:** Reading Surface for primary work and Context Panel for subordinate context.
 - **Shadow Strategy:** Flat at rest; reference the elevation vocabulary for overlays.
 - **Border:** One-pixel semantic rules divide durable regions.

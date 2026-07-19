@@ -103,7 +103,7 @@ func TestDecodeEnforcesRequiredSchemaFieldsLocally(t *testing.T) {
 	if err := json.Unmarshal(data, &root); err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{"summaryEvidence", "affectedAreas", "behavioralChanges", "risks", "facts", "inferences", "unknowns"} {
+	for _, field := range []string{"summaryEvidence", "affectedAreas", "behavioralChanges", "risks", "facts", "inferences", "unknowns", "judgments"} {
 		t.Run(field, func(t *testing.T) {
 			cloned := make(map[string]any, len(root))
 			for key, value := range root {
@@ -120,6 +120,17 @@ func TestDecodeEnforcesRequiredSchemaFieldsLocally(t *testing.T) {
 	payload, _ := json.Marshal(root)
 	if _, err := Decode(payload); err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("null required array error=%v", err)
+	}
+}
+
+func TestValidateRequiresRationaleWhenModelGroupsObservations(t *testing.T) {
+	raw := rawAnalysis{Chapters: []rawChapter{{ID: "chapter", Title: "Title", Purpose: "Purpose"}}, Judgments: []rawJudgment{{ID: "judgment", Title: "One decision", Description: "One root cause", Observations: []rawObservation{{ID: "first", Title: "First symptom", Description: "First impact"}, {ID: "second", Title: "Second symptom", Description: "Second impact"}}}}}
+	if err := validateModelIdentity(raw); err == nil || !strings.Contains(err.Error(), "without a rationale") {
+		t.Fatalf("grouped judgment error=%v", err)
+	}
+	raw.Judgments[0].GroupingRationale = "Both observations are caused by the same lock scope and are resolved by moving the callback."
+	if err := validateModelIdentity(raw); err != nil {
+		t.Fatalf("evidence-based grouping rejected: %v", err)
 	}
 }
 

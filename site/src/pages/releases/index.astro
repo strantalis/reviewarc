@@ -40,7 +40,7 @@ const releases = releaseNoteVersions()
 
 const description = "Release notes and signed macOS downloads for every published ReviewArc build.";
 const canonical = new URL("/releases/", Astro.site);
-const ogImage = new URL("/images/og/reviewarc-og.png", Astro.site);
+const ogImage = new URL("/images/og/reviewarc-og.jpg", Astro.site);
 ---
 
 <!doctype html>
@@ -117,7 +117,7 @@ const ogImage = new URL("/images/og/reviewarc-og.png", Astro.site);
         <img class="brand-mark" src={reviewArcMark.src} alt="" width="31" height="25" />
         <span>ReviewArc</span>
       </a>
-      <span>A focused pull request reviewer.</span>
+      <span>A pull request review client for macOS.</span>
       <nav aria-label="Footer navigation"><a href="/docs/">Docs</a><a href="/docs/security-and-local-data/">Security</a><a href="/legal/notices/">Legal</a><a href="/#download">Download</a></nav>
     </footer>
   </body>

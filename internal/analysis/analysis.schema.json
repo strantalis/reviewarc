@@ -1,12 +1,12 @@
 {
-	"$id": "https://reviewarc.dev/schemas/analysis-v1.json",
+	"$id": "https://reviewarc.dev/schemas/analysis-v2.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "A complete ReviewArc guided review. Use repository-relative canonical paths, direct base/head evidence, and non-empty human-readable text. Opaque IDs are local labels; ReviewArc repairs empty or repeated labels.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "baseSha", "headSha", "summary", "summaryEvidence", "affectedAreas", "chapters", "behavioralChanges", "risks", "facts", "inferences", "unknowns"],
+  "required": ["schemaVersion", "baseSha", "headSha", "summary", "summaryEvidence", "affectedAreas", "chapters", "behavioralChanges", "risks", "facts", "inferences", "unknowns", "judgments"],
   "properties": {
-    "schemaVersion": {"type": "integer", "const": 1},
+    "schemaVersion": {"type": "integer", "const": 2},
     "baseSha": {"type": "string"},
     "headSha": {"type": "string"},
     "summary": {"type": "string", "description": "A non-empty concise summary of the reviewed change."},
@@ -14,10 +14,11 @@
     "affectedAreas": {"type": "array", "items": {"$ref": "#/$defs/affectedArea"}},
     "chapters": {"type": "array", "description": "At least one review chapter. ReviewArc verifies this after generation.", "items": {"$ref": "#/$defs/chapter"}},
     "behavioralChanges": {"type": "array", "items": {"$ref": "#/$defs/behavior"}},
-    "risks": {"type": "array", "items": {"$ref": "#/$defs/risk"}},
+    "risks": {"type": "array", "description": "Independent, consequential risks that could change the approval decision. Do not duplicate chapter risks or list style and cleanup concerns.", "items": {"$ref": "#/$defs/risk"}},
     "facts": {"type": "array", "items": {"$ref": "#/$defs/claim"}},
     "inferences": {"type": "array", "items": {"$ref": "#/$defs/claim"}},
-    "unknowns": {"type": "array", "items": {"$ref": "#/$defs/claim"}}
+    "unknowns": {"type": "array", "description": "Material approval uncertainties that remain after using the available context tools; omit ordinary questions and speculative gaps.", "items": {"$ref": "#/$defs/claim"}},
+    "judgments": {"type": "array", "description": "The approval decision layer. Each item is one independent reviewer decision; observations may be grouped only when evidence establishes a shared root cause and disposition.", "items": {"$ref": "#/$defs/judgment"}}
   },
   "$defs": {
     "evidence": {
@@ -40,7 +41,28 @@
     },
     "risk": {
       "type": "object", "additionalProperties": false, "required": ["id", "title", "description", "level", "evidence"],
-      "properties": {"id": {"type": "string"}, "title": {"type": "string"}, "description": {"type": "string"}, "level": {"type": "string", "enum": ["low", "medium", "high", "critical", "unknown"]}, "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}}}
+      "properties": {"id": {"type": "string"}, "title": {"type": "string", "description": "A specific root-cause finding, not a category or vague concern."}, "description": {"type": "string", "description": "The concrete failure scenario, trigger, and user or system impact."}, "level": {"type": "string", "description": "Severity calibrated to realistic impact and likelihood.", "enum": ["low", "medium", "high", "critical", "unknown"]}, "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}}}
+    },
+    "observation": {
+      "type": "object", "additionalProperties": false, "required": ["id", "title", "description", "evidence"],
+      "properties": {
+        "id": {"type": "string", "description": "An opaque local observation label."},
+        "title": {"type": "string", "description": "A concise statement of the observed problem or uncertainty."},
+        "description": {"type": "string", "description": "The concrete behavior and impact represented by this observation."},
+        "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}}
+      }
+    },
+    "judgment": {
+      "type": "object", "additionalProperties": false, "required": ["id", "title", "description", "kind", "level", "groupingRationale", "observations"],
+      "properties": {
+        "id": {"type": "string", "description": "An opaque local judgment label."},
+        "title": {"type": "string", "description": "The single decision the reviewer must make."},
+        "description": {"type": "string", "description": "The shared root cause, failure scenario, and approval impact."},
+        "kind": {"type": "string", "enum": ["risk", "unknown"]},
+        "level": {"type": "string", "enum": ["low", "medium", "high", "critical", "unknown"]},
+        "groupingRationale": {"type": "string", "description": "Why all observations share one root cause and would be resolved or accepted together. Use an empty string for a single observation."},
+        "observations": {"type": "array", "items": {"$ref": "#/$defs/observation"}}
+      }
     },
     "affectedArea": {
       "type": "object", "additionalProperties": false, "required": ["name", "description", "evidence"],
@@ -72,10 +94,10 @@
         "files": {"type": "array", "items": {"$ref": "#/$defs/file"}},
         "symbols": {"type": "array", "items": {"$ref": "#/$defs/symbol"}},
         "behavioralChanges": {"type": "array", "items": {"$ref": "#/$defs/behavior"}},
-        "risks": {"type": "array", "items": {"$ref": "#/$defs/risk"}},
+        "risks": {"type": "array", "description": "Independent decision-relevant risks for this review area; do not repeat a root cause represented elsewhere.", "items": {"$ref": "#/$defs/risk"}},
         "facts": {"type": "array", "items": {"$ref": "#/$defs/claim"}},
         "inferences": {"type": "array", "items": {"$ref": "#/$defs/claim"}},
-        "unknowns": {"type": "array", "items": {"$ref": "#/$defs/claim"}},
+        "unknowns": {"type": "array", "description": "Material approval uncertainties still unresolved after investigation.", "items": {"$ref": "#/$defs/claim"}},
         "relatedTests": {"type": "array", "items": {"$ref": "#/$defs/test"}},
         "suggestedQuestions": {"type": "array", "items": {"$ref": "#/$defs/question"}}
       }
