@@ -444,23 +444,58 @@ type ReviewComment struct {
 	UpdatedAt time.Time     `json:"updatedAt"`
 }
 
+// JudgmentDecision records the reviewer's local disposition for one agent
+// finding: accepted as a tradeoff (with a rationale when required), flagged as
+// a concern, or marked as needing more evidence. Decisions are private local
+// state and are cleared when a new analysis replaces the findings they judged.
+type JudgmentDecision struct {
+	SessionID   string    `json:"sessionId"`
+	FindingID   string    `json:"findingId"`
+	Disposition string    `json:"disposition"`
+	Note        string    `json:"note,omitempty"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+}
+
 type ReviewSession struct {
-	ID                string            `json:"id"`
-	PullRequest       PullRequest       `json:"pullRequest"`
-	BaseSHA           string            `json:"baseSha"`
-	HeadSHA           string            `json:"headSha"`
-	Status            SessionStatus     `json:"status"`
-	AnalysisStatus    AnalysisStatus    `json:"analysisStatus"`
-	Analysis          *ReviewAnalysis   `json:"analysis,omitempty"`
-	LatestAnalysisRun *AnalysisRun      `json:"latestAnalysisRun,omitempty"`
-	Chapters          []ChapterProgress `json:"chapters"`
-	Notes             []ReviewNote      `json:"notes"`
-	Comments          []ReviewComment   `json:"comments"`
-	Progress          ReviewProgress    `json:"progress"`
-	IsStale           bool              `json:"isStale"`
-	StaleReason       string            `json:"staleReason,omitempty"`
-	CreatedAt         time.Time         `json:"createdAt"`
-	UpdatedAt         time.Time         `json:"updatedAt"`
+	ID                string             `json:"id"`
+	PullRequest       PullRequest        `json:"pullRequest"`
+	BaseSHA           string             `json:"baseSha"`
+	HeadSHA           string             `json:"headSha"`
+	Status            SessionStatus      `json:"status"`
+	AnalysisStatus    AnalysisStatus     `json:"analysisStatus"`
+	Analysis          *ReviewAnalysis    `json:"analysis,omitempty"`
+	LatestAnalysisRun *AnalysisRun       `json:"latestAnalysisRun,omitempty"`
+	Chapters          []ChapterProgress  `json:"chapters"`
+	Notes             []ReviewNote       `json:"notes"`
+	Comments          []ReviewComment    `json:"comments"`
+	Decisions         []JudgmentDecision `json:"decisions"`
+	Progress          ReviewProgress     `json:"progress"`
+	IsStale           bool               `json:"isStale"`
+	StaleReason       string             `json:"staleReason,omitempty"`
+	CreatedAt         time.Time          `json:"createdAt"`
+	UpdatedAt         time.Time          `json:"updatedAt"`
+}
+
+// RevisionDeltaFile is one file that changed between the analyzed head and the
+// current pull request head, annotated with local review context.
+type RevisionDeltaFile struct {
+	File            ChangedFile `json:"file"`
+	CitedByFindings []string    `json:"citedByFindings,omitempty"`
+	HasDraftComment bool        `json:"hasDraftComment"`
+}
+
+// RevisionDelta describes what changed between the revision an analysis
+// reviewed and the pull request's current head. It is computed from pinned
+// local Git objects only; no agent output is involved.
+type RevisionDelta struct {
+	Available   bool                `json:"available"`
+	Reason      string              `json:"reason,omitempty"`
+	FromHeadSHA string              `json:"fromHeadSha"`
+	ToHeadSHA   string              `json:"toHeadSha"`
+	BaseChanged bool                `json:"baseChanged"`
+	CommitCount int                 `json:"commitCount"`
+	Commits     []Commit            `json:"commits"`
+	Files       []RevisionDeltaFile `json:"files"`
 }
 
 type DependencyStatus struct {

@@ -207,6 +207,27 @@ export function buildAgentReviewBrief(analysis: ReviewAnalysis, coverage?: Analy
   return {recommendation, changes, findings, verified, blindSpots}
 }
 
+// briefRiskLevel derives the highest agent-identified risk from the brief's
+// findings. It returns undefined when the analysis flagged no rated risks, so
+// callers can distinguish "no risks found" from "risk pending".
+export function briefRiskLevel(brief: AgentReviewBrief): RiskLevel | undefined {
+  const levels = brief.findings.filter((finding) => finding.kind === 'risk' && finding.riskLevel && finding.riskLevel !== 'unknown').map((finding) => finding.riskLevel!)
+  if (!levels.length) return undefined
+  return levels.reduce((highest, level) => riskRank(level) < riskRank(highest) ? level : highest)
+}
+
+// decisionReviewMap rebuilds the in-memory decision state from the persisted
+// session decisions.
+export function decisionReviewMap(decisions: {findingId: string; disposition: string; note?: string}[] = []): DecisionReviewMap {
+  const map: DecisionReviewMap = {}
+  for (const decision of decisions) {
+    if (decision.disposition === 'accepted' || decision.disposition === 'concern' || decision.disposition === 'needsEvidence') {
+      map[decision.findingId] = {disposition: decision.disposition, note: decision.note}
+    }
+  }
+  return map
+}
+
 export function dispositionLabel(disposition: DecisionDisposition) {
   if (disposition === 'accepted') return 'Accepted as tradeoff'
   if (disposition === 'concern') return 'Concern'

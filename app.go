@@ -1287,6 +1287,27 @@ func (a *App) SetChapterStatus(sessionID, chapterID string, status domain.Chapte
 	}
 	return a.GetSession(sessionID)
 }
+
+// SetJudgmentDecision persists the reviewer's local disposition for one agent
+// finding so accepted tradeoffs and their rationales survive restarts.
+func (a *App) SetJudgmentDecision(sessionID, findingID, disposition, note string) (domain.ReviewSession, error) {
+	switch disposition {
+	case "unreviewed", "accepted", "concern", "needsEvidence":
+	default:
+		return domain.ReviewSession{}, errors.New("unknown judgment disposition")
+	}
+	if strings.TrimSpace(findingID) == "" || len(findingID) > 200 {
+		return domain.ReviewSession{}, errors.New("invalid finding identifier")
+	}
+	if len(note) > 20000 {
+		return domain.ReviewSession{}, errors.New("decision rationale must stay under 20,000 characters")
+	}
+	decision := domain.JudgmentDecision{SessionID: sessionID, FindingID: findingID, Disposition: disposition, Note: note, UpdatedAt: time.Now().UTC()}
+	if err := a.store.SaveJudgmentDecision(a.appContext(), decision); err != nil {
+		return domain.ReviewSession{}, err
+	}
+	return a.GetSession(sessionID)
+}
 func (a *App) SaveNote(input NoteInput) (domain.ReviewNote, error) {
 	if strings.TrimSpace(input.Body) == "" || len(input.Body) > 20000 {
 		return domain.ReviewNote{}, errors.New("note must contain 1 to 20,000 characters")
@@ -1930,6 +1951,9 @@ func normalizeSession(session domain.ReviewSession) domain.ReviewSession {
 	}
 	if session.Comments == nil {
 		session.Comments = []domain.ReviewComment{}
+	}
+	if session.Decisions == nil {
+		session.Decisions = []domain.JudgmentDecision{}
 	}
 	if session.Analysis == nil {
 		return session

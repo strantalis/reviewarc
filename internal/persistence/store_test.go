@@ -45,7 +45,7 @@ func TestMigrationsAndReopen(t *testing.T) {
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&applied); err != nil {
 		t.Fatal(err)
 	}
-	if applied != 6 {
+	if applied != 7 {
 		t.Fatalf("applied migrations = %d", applied)
 	}
 }
@@ -175,6 +175,90 @@ func TestListPullRequestSummariesProjectsLatestReviewState(t *testing.T) {
 	wantProgress := domain.ReviewProgress{Total: 3, Reviewed: 1, Blocked: 1, Clarify: 1, Percent: 33}
 	if got.Progress != wantProgress {
 		t.Fatalf("progress=%+v, want %+v", got.Progress, wantProgress)
+	}
+}
+
+func TestListPullRequestSummariesDerivesRiskFromJudgments(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	ref := domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}
+	pullRequest := domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{
+		Ref: domain.PullRequestRef{Repository: ref, Number: 7}, Title: "Judgment-centric analysis",
+		AnalysisStatus: domain.AnalysisNotStarted, RiskLevel: domain.RiskUnknown, BaseSHA: "base", HeadSHA: "head",
+	}}
+	if err := s.UpsertPullRequest(ctx, pullRequest); err != nil {
+		t.Fatal(err)
+	}
+	session := domain.ReviewSession{ID: "judgments", PullRequest: pullRequest, BaseSHA: "base", HeadSHA: "head", Status: domain.SessionReady, AnalysisStatus: domain.AnalysisNotStarted}
+	if err := s.SaveSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	analysis := domain.ReviewAnalysis{
+		SchemaVersion: 1, BaseSHA: "base", HeadSHA: "head",
+		Judgments: []domain.ReviewJudgment{
+			{ID: "j1", Title: "Risky", Kind: "risk", Level: domain.RiskCritical},
+			{ID: "j2", Title: "Open question", Kind: "unknown", Level: domain.RiskUnknown},
+		},
+		Chapters: []domain.ReviewChapter{{ID: "c1", Risks: []domain.ReviewRisk{{ID: "cr", Level: domain.RiskLow}}}},
+	}
+	if err := s.SaveCompletedAnalysis(ctx, session.ID, analysis); err != nil {
+		t.Fatal(err)
+	}
+	items, err := s.ListPullRequestSummaries(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].RiskLevel != domain.RiskCritical {
+		t.Fatalf("judgment risk should reach the inbox projection: %+v", items)
+	}
+}
+
+func TestJudgmentDecisionsPersistAndClearOnNewAnalysis(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	session := testSession()
+	if err := s.SaveSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveAnalysis(ctx, session.ID, domain.ReviewAnalysis{SchemaVersion: 1, BaseSHA: "base", HeadSHA: "head"}); err != nil {
+		t.Fatal(err)
+	}
+	decision := domain.JudgmentDecision{SessionID: session.ID, FindingID: "judgment:judgment-1", Disposition: "accepted", Note: "Bounded retries are acceptable here."}
+	if err := s.SaveJudgmentDecision(ctx, decision); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveJudgmentDecision(ctx, domain.JudgmentDecision{SessionID: session.ID, FindingID: "judgment:judgment-2", Disposition: "concern"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetSession(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Decisions) != 2 || got.Decisions[0].Disposition != "accepted" || got.Decisions[0].Note != decision.Note {
+		t.Fatalf("decisions=%+v", got.Decisions)
+	}
+	if got.Decisions[0].UpdatedAt.IsZero() {
+		t.Fatal("decision timestamp missing")
+	}
+	if err := s.SaveJudgmentDecision(ctx, domain.JudgmentDecision{SessionID: session.ID, FindingID: "judgment:judgment-2", Disposition: "unreviewed"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.GetSession(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Decisions) != 1 {
+		t.Fatalf("unreviewed should remove the row: %+v", got.Decisions)
+	}
+	if err := s.SaveAnalysis(ctx, session.ID, domain.ReviewAnalysis{SchemaVersion: 1, BaseSHA: "base", HeadSHA: "head2"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.GetSession(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Decisions) != 0 {
+		t.Fatalf("new analysis must clear stale decisions: %+v", got.Decisions)
 	}
 }
 

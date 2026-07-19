@@ -1,4 +1,4 @@
-import type { AccessibleRepositoryRefresh, AccountState, AnalysisConfiguration, AnalysisProfile, AnalysisRequest, BootstrapState, ChapterStatus, ChangedFile, DiffFile, EnvironmentState, FileContent, InboxAnalysis, InboxResult, Operation, OperationSnapshot, PublishPreview, PullRequestRef, PullRequestReviewComment, RepositoryPage, ReviewComment, ReviewNote, ReviewSession, SelectedRepositoryRefresh, SoftwareUpdateStatus, SourceSelection, SourceState, ThreadReplyPreview, UpdateChannel, Organization } from './types'
+import type { AccessibleRepositoryRefresh, AccountState, AnalysisConfiguration, AnalysisProfile, AnalysisRequest, BootstrapState, ChapterStatus, ChangedFile, DiffFile, EnvironmentState, FileContent, InboxAnalysis, InboxResult, Operation, OperationSnapshot, PublishPreview, PullRequestRef, PullRequestReviewComment, RepositoryPage, ReviewComment, ReviewNote, ReviewSession, RevisionDelta, SelectedRepositoryRefresh, SoftwareUpdateStatus, SourceSelection, SourceState, ThreadReplyPreview, UpdateChannel, Organization } from './types'
 
 type WailsMethod = (...args: unknown[]) => Promise<unknown>
 type AppMethodName = keyof typeof import('../wailsjs/go/main/App')
@@ -50,6 +50,7 @@ export const backend = {
   openPullRequest: (ref: PullRequestRef) => call<ReviewSession>(['OpenPullRequest'], ref),
   queueInboxAnalysis: (ref: PullRequestRef) => call<InboxAnalysis>(['QueueInboxAnalysis'], ref),
   refreshPullRequestContext: (sessionId: string) => call<ReviewSession>(['RefreshPullRequestContext'], sessionId),
+  getRevisionDelta: (sessionId: string) => call<RevisionDelta>(['GetRevisionDelta'], sessionId),
   getAnalysisConfiguration: () => call<AnalysisConfiguration>(['GetAnalysisConfiguration']),
   refreshAnalysisHarnesses: () => call<AnalysisConfiguration>(['RefreshAnalysisHarnesses']),
   saveAnalysisDefaults: (profile: AnalysisProfile) => call<AnalysisConfiguration>(['SaveAnalysisDefaults'], profile),
@@ -61,6 +62,7 @@ export const backend = {
   getDiff: (sessionId: string, path: string) => call<DiffFile>(['GetDiff'], sessionId, path),
   getFile: (sessionId: string, path: string, revision: 'base' | 'head') => call<FileContent>(['GetFile'], sessionId, path, revision),
   updateChapter: (sessionId: string, chapterId: string, status: ChapterStatus) => call<ReviewSession>(['SetChapterStatus'], sessionId, chapterId, status),
+  saveJudgmentDecision: (sessionId: string, findingId: string, disposition: string, note = '') => call<ReviewSession>(['SetJudgmentDecision'], sessionId, findingId, disposition, note),
   saveNote: (sessionId: string, chapterId: string, body: string, id = '') => call<ReviewNote>(['SaveNote'], {id, sessionId, chapterId, body}),
   deleteNote: (id: string) => call<void>(['DeleteNote'], id),
   saveDraft: (sessionId: string, chapterId: string, body: string, path?: string, startLine?: number, startSide: 'LEFT' | 'RIGHT' = 'RIGHT', line?: number, side: 'LEFT' | 'RIGHT' = 'RIGHT', id = '') => call<ReviewComment>(['SaveDraftComment'], {id, sessionId, chapterId, kind: path ? 'inline' : 'general', body, path: path ?? '', startLine, startSide: startLine ? startSide : '', line: line ?? 0, side}),

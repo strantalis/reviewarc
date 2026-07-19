@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { CheckRun, EvidenceReference, ReviewAnalysis, ReviewJudgment, ReviewRisk } from '../../types'
-import { buildAgentReviewBrief, reviewGate } from './decision'
+import { briefRiskLevel, buildAgentReviewBrief, decisionReviewMap, reviewGate } from './decision'
 
 const check = (id: number, name: string, status: string, conclusion = ''): CheckRun => ({
   id,
@@ -136,5 +136,47 @@ describe('buildAgentReviewBrief judgments', () => {
 
     expect(brief.findings).toHaveLength(2)
     expect(brief.findings.every((finding) => finding.observations.length === 1)).toBe(true)
+  })
+})
+
+describe('briefRiskLevel', () => {
+  const brief = (findings: Partial<import('./decision').AgentReviewFinding>[]) => ({
+    recommendation: 'inconclusive' as const,
+    changes: [],
+    verified: [],
+    blindSpots: [],
+    findings: findings.map((finding, index) => ({
+      id: `f-${index}`, title: 't', detail: 'd', kind: 'risk' as const, evidence: [], chapterId: '', observations: [], ...finding,
+    })),
+  })
+
+  it('returns undefined when the analysis flagged no rated risks', () => {
+    expect(briefRiskLevel(brief([]))).toBeUndefined()
+    expect(briefRiskLevel(brief([{kind: 'unknown', riskLevel: undefined}]))).toBeUndefined()
+    expect(briefRiskLevel(brief([{riskLevel: 'unknown'}]))).toBeUndefined()
+  })
+
+  it('returns the highest rated risk across findings', () => {
+    expect(briefRiskLevel(brief([{riskLevel: 'low'}, {riskLevel: 'critical'}, {riskLevel: 'medium'}]))).toBe('critical')
+    expect(briefRiskLevel(brief([{riskLevel: 'low'}, {kind: 'unknown'}]))).toBe('low')
+  })
+})
+
+describe('decisionReviewMap', () => {
+  it('rebuilds decision state from persisted session decisions', () => {
+    const map = decisionReviewMap([
+      {findingId: 'judgment:j1', disposition: 'accepted', note: 'Bounded retries are fine.'},
+      {findingId: 'judgment:j2', disposition: 'concern'},
+      {findingId: 'judgment:j3', disposition: 'unreviewed'},
+      {findingId: 'judgment:j4', disposition: 'garbage'},
+    ])
+    expect(map['judgment:j1']).toEqual({disposition: 'accepted', note: 'Bounded retries are fine.'})
+    expect(map['judgment:j2']).toEqual({disposition: 'concern', note: undefined})
+    expect(map['judgment:j3']).toBeUndefined()
+    expect(map['judgment:j4']).toBeUndefined()
+  })
+
+  it('handles missing decision lists', () => {
+    expect(decisionReviewMap(undefined)).toEqual({})
   })
 })

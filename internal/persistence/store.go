@@ -444,9 +444,20 @@ func (s *Store) ListPullRequestSummaries(ctx context.Context) ([]domain.PullRequ
 		         WHEN a.analysis_json IS NULL THEN -1
 		         WHEN NOT json_valid(a.analysis_json) THEN -2
 		         ELSE COALESCE((
-		           SELECT MAX(CASE json_extract(r.value, '$.level')
-		             WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 WHEN 'critical' THEN 4 ELSE 0 END)
-		           FROM json_each(a.analysis_json, '$.risks') r
+		           SELECT MAX(rank) FROM (
+		             SELECT CASE json_extract(r.value, '$.level')
+		               WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 WHEN 'critical' THEN 4 ELSE 0 END AS rank
+		             FROM json_each(COALESCE(json_extract(a.analysis_json, '$.risks'), '[]')) r
+		             UNION ALL
+		             SELECT CASE WHEN json_extract(j.value, '$.kind') = 'risk' THEN CASE json_extract(j.value, '$.level')
+		               WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 WHEN 'critical' THEN 4 ELSE 0 END ELSE 0 END
+		             FROM json_each(COALESCE(json_extract(a.analysis_json, '$.judgments'), '[]')) j
+		             UNION ALL
+		             SELECT CASE json_extract(cr.value, '$.level')
+		               WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 WHEN 'critical' THEN 4 ELSE 0 END
+		             FROM json_each(COALESCE(json_extract(a.analysis_json, '$.chapters'), '[]')) c,
+		                  json_each(COALESCE(json_extract(c.value, '$.risks'), '[]')) cr
+		           )
 		         ), 0)
 		       END,
 		       COALESCE((SELECT COUNT(*) FROM chapter_progress cp WHERE cp.session_id=s.id), 0),
@@ -544,6 +555,9 @@ func (s *Store) SaveAnalysis(ctx context.Context, sessionID string, analysis dom
 	if _, err = tx.ExecContext(ctx, `INSERT INTO analyses(session_id,schema_version,base_sha,head_sha,analysis_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET schema_version=excluded.schema_version,base_sha=excluded.base_sha,head_sha=excluded.head_sha,analysis_json=excluded.analysis_json,created_at=excluded.created_at,updated_at=excluded.updated_at`, sessionID, analysis.SchemaVersion, analysis.BaseSHA, analysis.HeadSHA, b, encodeTime(created), encodeTime(now)); err != nil {
 		return err
 	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM judgment_decisions WHERE session_id=?`, sessionID); err != nil {
+		return err
+	}
 	if _, err = tx.ExecContext(ctx, `UPDATE review_sessions SET analysis_status=?,is_stale=0,stale_reason='',updated_at=? WHERE id=?`, domain.AnalysisReady, encodeTime(now), sessionID); err != nil {
 		return err
 	}
@@ -575,6 +589,9 @@ func saveCompletedAnalysisTx(ctx context.Context, tx *sql.Tx, sessionID string, 
 		created = now
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO analyses(session_id,schema_version,base_sha,head_sha,analysis_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET schema_version=excluded.schema_version,base_sha=excluded.base_sha,head_sha=excluded.head_sha,analysis_json=excluded.analysis_json,created_at=excluded.created_at,updated_at=excluded.updated_at`, sessionID, analysis.SchemaVersion, analysis.BaseSHA, analysis.HeadSHA, body, encodeTime(created), encodeTime(now)); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM judgment_decisions WHERE session_id=?`, sessionID); err != nil {
 		return err
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT chapter_id,status FROM chapter_progress WHERE session_id=?`, sessionID)
@@ -918,8 +935,48 @@ func (s *Store) GetSession(ctx context.Context, id string) (domain.ReviewSession
 	if err != nil {
 		return v, err
 	}
+	v.Decisions, err = s.ListJudgmentDecisions(ctx, id)
+	if err != nil {
+		return v, err
+	}
 	v.Progress = calculateProgress(v.Chapters)
 	return v, nil
+}
+
+// ListJudgmentDecisions returns the reviewer's local finding dispositions for
+// one session.
+func (s *Store) ListJudgmentDecisions(ctx context.Context, sessionID string) ([]domain.JudgmentDecision, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT finding_id,disposition,note,updated_at FROM judgment_decisions WHERE session_id=? ORDER BY finding_id`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]domain.JudgmentDecision, 0)
+	for rows.Next() {
+		decision := domain.JudgmentDecision{SessionID: sessionID}
+		var updated string
+		if err := rows.Scan(&decision.FindingID, &decision.Disposition, &decision.Note, &updated); err != nil {
+			return nil, err
+		}
+		decision.UpdatedAt, _ = decodeTime(updated)
+		out = append(out, decision)
+	}
+	return out, rows.Err()
+}
+
+// SaveJudgmentDecision upserts one finding disposition. Setting a finding back
+// to "unreviewed" removes the stored row.
+func (s *Store) SaveJudgmentDecision(ctx context.Context, decision domain.JudgmentDecision) error {
+	if decision.Disposition == "unreviewed" {
+		_, err := s.db.ExecContext(ctx, `DELETE FROM judgment_decisions WHERE session_id=? AND finding_id=?`, decision.SessionID, decision.FindingID)
+		return err
+	}
+	now := decision.UpdatedAt
+	if now.IsZero() {
+		now = time.Now()
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO judgment_decisions(session_id,finding_id,disposition,note,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(session_id,finding_id) DO UPDATE SET disposition=excluded.disposition,note=excluded.note,updated_at=excluded.updated_at`, decision.SessionID, decision.FindingID, decision.Disposition, decision.Note, encodeTime(now))
+	return err
 }
 
 func (s *Store) ListSessions(ctx context.Context) ([]domain.ReviewSession, error) {

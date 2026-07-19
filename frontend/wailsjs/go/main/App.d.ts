@@ -31,6 +31,8 @@ export function GetDiff(arg1:string,arg2:string):Promise<domain.DiffFile>;
 
 export function GetFile(arg1:string,arg2:string,arg3:domain.Revision):Promise<domain.FileContent>;
 
+export function GetRevisionDelta(arg1:string):Promise<domain.RevisionDelta>;
+
 export function GetSession(arg1:string):Promise<domain.ReviewSession>;
 
 export function GetUpdateStatus():Promise<main.SoftwareUpdateStatus>;
@@ -84,6 +86,8 @@ export function SaveSelections(arg1:Array<domain.SourceSelection>):Promise<void>
 export function SearchOwnerRepositories(arg1:main.RepositorySearchInput):Promise<main.RepositoryPage>;
 
 export function SetChapterStatus(arg1:string,arg2:string,arg3:domain.ChapterStatus):Promise<domain.ReviewSession>;
+
+export function SetJudgmentDecision(arg1:string,arg2:string,arg3:string,arg4:string):Promise<domain.ReviewSession>;
 
 export function SetUpdateChannel(arg1:string):Promise<main.SoftwareUpdateStatus>;
 

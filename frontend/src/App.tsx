@@ -15,7 +15,8 @@ import {
   SplitDiffView, SymbolNavigator, ThreadReplyConfirmation, draftTargetFor, type DraftTarget,
 } from './features/review/ReviewContent'
 import { AgentFindingDetail, AgentReviewBrief, ReviewGatePanel } from './features/review/DecisionMode'
-import { buildAgentReviewBrief, reviewGate, type DecisionReview, type DecisionReviewMap } from './features/review/decision'
+import { StaleRevisionDelta } from './features/review/StaleDelta'
+import { briefRiskLevel, buildAgentReviewBrief, decisionReviewMap, reviewGate, type DecisionReview, type DecisionReviewMap } from './features/review/decision'
 import { SourceSelector } from './features/sources/SourceSelector'
 import { WindowToggleMaximise } from '../wailsjs/runtime/runtime'
 import { relativeTime, repoName } from './lib'
@@ -53,6 +54,14 @@ export function App() {
   const [reviewChapterId, setReviewChapterId] = useState('')
   const [reviewFindingId, setReviewFindingId] = useState('')
   const [decisionReview, setDecisionReview] = useState<DecisionReviewMap>({})
+  // Reload persisted finding decisions when a different session opens or a new
+  // analysis replaces the findings they judged.
+  const decisionScope = session ? `${session.id}:${session.analysis?.createdAt ?? ''}` : ''
+  const sessionDecisions = session?.decisions
+  useEffect(() => {
+    setDecisionReview(decisionReviewMap(sessionDecisions))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [decisionScope])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [commandOpen, setCommandOpen] = useState(false)
@@ -459,13 +468,15 @@ function AnalysisOverview({session, analysisConfiguration, coverageOpen, onCover
   const reviews = pr.reviews ?? []
   const comments = pr.reviewComments ?? []
   const brief = buildAgentReviewBrief(analysis, session.latestAnalysisRun?.coverage)
+  const analysisRisk = briefRiskLevel(brief)
   const discussionCount = reviews.length + comments.length
   const visibleDiscussionCount = Math.min(reviews.length, 3) + Math.min(comments.length, 3)
 
   return <div className="review-brief-layout">
     <section className="overview-document" aria-label="Pull request review overview">
-      <header className="overview-masthead"><div><span className="repo-label">{repoName(pr)}</span><h1><span>#{pr.ref.number}</span> {pr.title}</h1><div className="hero-meta"><span>@{pr.author.login}</span><span>{pr.baseRef} ← {pr.headRef}</span><span>{pr.commits.length} commit{pr.commits.length === 1 ? '' : 's'}</span><span>{pr.changedFiles} files</span><span className="additions">+{pr.additions}</span><span className="deletions">−{pr.deletions}</span></div></div><div className="hero-status">{!session.isStale && <AnalysisBadge status={session.analysisStatus}/>}<RiskBadge level={pr.riskLevel}/><small>Head {pr.headSha.slice(0, 8)}</small></div></header>
+      <header className="overview-masthead"><div><span className="repo-label">{repoName(pr)}</span><h1><span>#{pr.ref.number}</span> {pr.title}</h1><div className="hero-meta"><span>@{pr.author.login}</span><span>{pr.baseRef} ← {pr.headRef}</span><span>{pr.commits.length} commit{pr.commits.length === 1 ? '' : 's'}</span><span>{pr.changedFiles} files</span><span className="additions">+{pr.additions}</span><span className="deletions">−{pr.deletions}</span></div></div><div className="hero-status">{!session.isStale && <AnalysisBadge status={session.analysisStatus}/>}{analysisRisk && <RiskBadge level={analysisRisk}/>}<small>Head {pr.headSha.slice(0, 8)}</small></div></header>
       {statusBanner}
+      {session.isStale && <StaleRevisionDelta sessionId={session.id}/>}
       {gate.status === 'blocked' || gate.status === 'waiting'
         ? <ReviewGatePanel gate={gate} refreshing={checksRefreshing} onRefresh={onRefreshChecks} onOpenCheck={(check) => backend.openGitHubURL(check.detailsUrl || check.url)}/>
         : <AgentReviewBrief brief={brief} stale={session.isStale} disabled={reviewDisabled} onInspect={(finding) => onReview(finding.chapterId, finding.id)} onOpenReview={() => brief.findings.length ? onReview(brief.findings[0].chapterId, brief.findings[0].id) : onReview('', '__summary__')}/>
@@ -532,6 +543,9 @@ export function ReviewWorkspace({session, initialChapterId = '', initialFindingI
   const updateDecisionReview = (findingId: string, review: DecisionReview) => {
     if (onDecisionReview) onDecisionReview(findingId, review)
     else setLocalDecisionReview((current) => ({...current, [findingId]: review}))
+    backend.saveJudgmentDecision(session.id, findingId, review.disposition, review.note ?? '')
+      .then(onSession)
+      .catch((err) => setActionError(`The decision could not be saved locally: ${errorText(err)}`))
   }
   const openFinding = (targetFinding: (typeof findings)[number]) => {
     setActiveFindingId(targetFinding.id)
@@ -768,7 +782,7 @@ function SoftwareUpdateSettings({update, busy, onCheck, onSetChannel, onInstall}
   const copy = updateStatusCopy(update)
   const showSuccess = update.state === 'idle' && update.lastCheckedAt
   const installable = update.state === 'available' || update.state === 'ready'
-  return <section className="software-update-settings"><div className="settings-section-heading"><h2>Software updates</h2><p>Choose which signed releases ReviewArc should offer.</p><code>v{update.currentVersion} · build {update.currentBuild}</code></div><div className="settings-section-body"><div className="update-channel-control"><div><strong>Release channel</strong><small>{update.channel === 'beta' ? 'Beta includes early builds and all newer GA releases.' : 'Stable receives generally available releases only.'}</small></div><div role="group" aria-label="Release channel"><button type="button" aria-pressed={update.channel === 'stable'} disabled={busy || unavailable} onClick={() => onSetChannel('stable')}>Stable</button><button type="button" aria-pressed={update.channel === 'beta'} disabled={busy || unavailable} onClick={() => onSetChannel('beta')}>Beta</button></div></div>{update.channel === 'beta' && <p className="beta-channel-note"><AlertTriangle size={14}/>Beta builds may be less stable. Returning to Stable does not downgrade the installed app.</p>}<div className={`update-status-row state-${update.state}${showSuccess ? ' success' : ''}`} role="status"><span>{update.state === 'checking' || update.state === 'downloading' || update.state === 'installing' ? <LoaderCircle className="spin" size={15}/> : update.state === 'failed' ? <AlertTriangle size={15}/> : installable || showSuccess ? <Check size={15}/> : <RefreshCw size={15}/>}</span><div><strong>{copy.headline}</strong>{copy.detail && <small>{copy.detail}</small>}{progress !== undefined && <div className="update-download-progress" aria-label={`Download ${progress}% complete`}><i style={{width: `${progress}%`}}/></div>}</div><div className="update-actions">{update.release?.releaseNotesUrl && <button className="button text small" onClick={() => backend.openReleaseNotesURL(update.release!.releaseNotesUrl!)}>Release notes<ExternalLink size={12}/></button>}{installable ? <button className="button primary small" disabled={busy} onClick={onInstall}>{update.state === 'ready' ? 'Install and restart…' : 'Install update…'}</button> : <button className="button secondary small" disabled={busy || unavailable} onClick={onCheck}>{busy || update.state === 'checking' ? <LoaderCircle className="spin" size={13}/> : <RefreshCw size={13}/>} {update.state === 'failed' ? 'Try again' : 'Check now'}</button>}</div></div></div></section>
+  return <section className="software-update-settings"><div className="settings-section-heading"><h2>Software updates</h2><p>Choose which signed releases ReviewArc should offer.</p><code>v{update.currentVersion} · build {update.currentBuild}</code></div><div className="settings-section-body"><div className="update-channel-control"><div><strong>Release channel</strong><small>{update.channel === 'beta' ? 'Beta includes early builds and all newer GA releases.' : 'Stable receives generally available releases only.'}</small></div><div role="group" aria-label="Release channel"><button type="button" aria-pressed={update.channel === 'stable'} disabled={busy || unavailable} onClick={() => onSetChannel('stable')}>Stable</button><button type="button" aria-pressed={update.channel === 'beta'} disabled={busy || unavailable} onClick={() => onSetChannel('beta')}>Beta</button></div></div>{update.channel === 'beta' && <p className="beta-channel-note"><AlertTriangle size={14}/>Beta builds may be less stable. Returning to Stable does not downgrade the installed app.</p>}<div className={`update-status-row state-${update.state}${showSuccess ? ' success' : ''}`} role="status"><span>{update.state === 'checking' || update.state === 'downloading' || update.state === 'installing' ? <LoaderCircle className="spin" size={15}/> : update.state === 'failed' ? <AlertTriangle size={15}/> : installable || showSuccess ? <Check size={15}/> : <RefreshCw size={15}/>}</span><div><strong>{copy.headline}</strong>{copy.detail && <small>{copy.detail}</small>}{progress !== undefined && <div className="update-download-progress" aria-label={`Download ${progress}% complete`}><i style={{transform: `scaleX(${progress / 100})`}}/></div>}</div><div className="update-actions">{update.release?.releaseNotesUrl && <button className="button text small" onClick={() => backend.openReleaseNotesURL(update.release!.releaseNotesUrl!)}>Release notes<ExternalLink size={12}/></button>}{installable ? <button className="button primary small" disabled={busy} onClick={onInstall}>{update.state === 'ready' ? 'Install and restart…' : 'Install update…'}</button> : <button className="button secondary small" disabled={busy || unavailable} onClick={onCheck}>{busy || update.state === 'checking' ? <LoaderCircle className="spin" size={13}/> : <RefreshCw size={13}/>} {update.state === 'failed' ? 'Try again' : 'Check now'}</button>}</div></div></div></section>
 }
 
 function UpdateInstallConfirmation({update, busy, onCancel, onConfirm}: {update: SoftwareUpdateStatus; busy: boolean; onCancel: () => void; onConfirm: () => void}) {

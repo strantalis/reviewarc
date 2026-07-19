@@ -101,12 +101,18 @@ export interface ReviewComment {
   startSide?: 'LEFT' | 'RIGHT'; line?: number; side?: 'LEFT' | 'RIGHT'; status: 'draft' | 'published' | 'failed'; githubId?: string; githubUrl?: string; createdAt: string; updatedAt: string
 }
 export interface CommentRange { startLine: number; startSide: 'LEFT' | 'RIGHT'; endLine: number; endSide: 'LEFT' | 'RIGHT' }
+export interface JudgmentDecision { sessionId: string; findingId: string; disposition: string; note?: string; updatedAt: string }
 export interface ReviewSession {
   id: string; pullRequest: PullRequest; baseSha: string; headSha: string; status: 'preparing' | 'ready' | 'failed'
   analysisStatus: AnalysisStatus; analysis?: ReviewAnalysis; chapters: {chapterId: string; status: ChapterStatus; updatedAt: string}[]
-  notes: ReviewNote[]; comments: ReviewComment[]; progress: ReviewProgress; isStale: boolean; staleReason?: string
+  notes: ReviewNote[]; comments: ReviewComment[]; decisions?: JudgmentDecision[]; progress: ReviewProgress; isStale: boolean; staleReason?: string
   latestAnalysisRun?: AnalysisRun
   createdAt: string; updatedAt: string
+}
+export interface RevisionDeltaFile { file: ChangedFile; citedByFindings?: string[]; hasDraftComment: boolean }
+export interface RevisionDelta {
+  available: boolean; reason?: string; fromHeadSha: string; toHeadSha: string; baseChanged: boolean
+  commitCount: number; commits: Commit[]; files: RevisionDeltaFile[]
 }
 export interface DependencyStatus { name: DependencyName; state: DependencyState; path?: string; version?: string; message?: string }
 export type AppPaths = domain.AppPaths
