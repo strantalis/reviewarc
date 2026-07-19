@@ -3,6 +3,8 @@
 import {domain} from '../models';
 import {main} from '../models';
 
+export function ArchiveSession(arg1:string):Promise<domain.ReviewSession>;
+
 export function Bootstrap():Promise<domain.BootstrapState>;
 
 export function CancelOperation(arg1:string):Promise<void>;
@@ -12,6 +14,8 @@ export function CheckForUpdates():Promise<main.SoftwareUpdateStatus>;
 export function ConfirmPublish(arg1:string,arg2:string):Promise<Array<domain.ReviewComment>>;
 
 export function ConfirmThreadReply(arg1:string,arg2:string):Promise<domain.PullRequestReviewComment>;
+
+export function DeleteArchivedSession(arg1:string):Promise<void>;
 
 export function DeleteDraftComment(arg1:string):Promise<void>;
 
@@ -24,6 +28,8 @@ export function DiscardThreadReplyPreview(arg1:string):Promise<void>;
 export function GetActiveAnalysisOperation(arg1:string):Promise<main.OperationSnapshot>;
 
 export function GetAnalysisConfiguration():Promise<main.AnalysisConfiguration>;
+
+export function GetArchiveRetentionDays():Promise<number>;
 
 export function GetChangedFiles(arg1:string):Promise<Array<domain.ChangedFile>>;
 
@@ -40,6 +46,8 @@ export function GetUpdateStatus():Promise<main.SoftwareUpdateStatus>;
 export function InstallUpdate():Promise<void>;
 
 export function ListAccessibleRepositories(arg1:main.AccessibleRepositorySearchInput):Promise<main.RepositoryPage>;
+
+export function ListArchivedSessions():Promise<Array<domain.ReviewSession>>;
 
 export function ListCachedOwnerRepositories(arg1:string):Promise<main.RepositoryPage>;
 
@@ -75,6 +83,8 @@ export function RefreshSelectedRepositories():Promise<main.SelectedRepositoryRef
 
 export function RefreshSourceAccess(arg1:Array<domain.Organization>):Promise<Array<domain.Organization>>;
 
+export function RestoreSession(arg1:string):Promise<domain.ReviewSession>;
+
 export function SaveAnalysisDefaults(arg1:domain.AnalysisProfile):Promise<main.AnalysisConfiguration>;
 
 export function SaveDraftComment(arg1:main.CommentInput):Promise<domain.ReviewComment>;
@@ -84,6 +94,8 @@ export function SaveNote(arg1:main.NoteInput):Promise<domain.ReviewNote>;
 export function SaveSelections(arg1:Array<domain.SourceSelection>):Promise<void>;
 
 export function SearchOwnerRepositories(arg1:main.RepositorySearchInput):Promise<main.RepositoryPage>;
+
+export function SetArchiveRetentionDays(arg1:number):Promise<number>;
 
 export function SetChapterStatus(arg1:string,arg2:string,arg3:domain.ChapterStatus):Promise<domain.ReviewSession>;
 

@@ -107,6 +107,7 @@ export interface ReviewSession {
   analysisStatus: AnalysisStatus; analysis?: ReviewAnalysis; chapters: {chapterId: string; status: ChapterStatus; updatedAt: string}[]
   notes: ReviewNote[]; comments: ReviewComment[]; decisions?: JudgmentDecision[]; progress: ReviewProgress; isStale: boolean; staleReason?: string
   latestAnalysisRun?: AnalysisRun
+  archivedAt?: string; archiveReason?: 'manual' | 'approved'
   createdAt: string; updatedAt: string
 }
 export interface RevisionDeltaFile { file: ChangedFile; citedByFindings?: string[]; hasDraftComment: boolean }

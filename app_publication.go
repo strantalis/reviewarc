@@ -136,6 +136,7 @@ func (a *App) ConfirmPublish(token, digest string) ([]domain.ReviewComment, erro
 	delete(a.publish, token)
 	a.mu.Unlock()
 	if !ok {
+		publication, publicationErr := a.store.GetReviewPublication(a.appContext(), token, digest)
 		comments, err := a.store.ApplyReviewPublication(a.appContext(), token, digest)
 		if errors.Is(err, persistence.ErrNotFound) {
 			return nil, errors.New("publish confirmation is invalid or expired")
@@ -145,6 +146,11 @@ func (a *App) ConfirmPublish(token, digest string) ([]domain.ReviewComment, erro
 		}
 		if err != nil {
 			return nil, err
+		}
+		if publicationErr == nil && publication.Event == "APPROVE" {
+			if _, err := a.archiveSession(publication.SessionID, domain.ArchiveReasonApproved); err != nil {
+				return nil, fmt.Errorf("review published but could not be archived locally: %w", err)
+			}
 		}
 		return publishResult(comments), nil
 	}
@@ -184,6 +190,11 @@ func (a *App) ConfirmPublish(token, digest string) ([]domain.ReviewComment, erro
 	comments, err := a.store.ApplyReviewPublication(a.appContext(), token, digest)
 	if err != nil {
 		return nil, err
+	}
+	if pending.preview.Event == "APPROVE" {
+		if _, err := a.archiveSession(pending.sessionID, domain.ArchiveReasonApproved); err != nil {
+			return nil, fmt.Errorf("review published but could not be archived locally: %w", err)
+		}
 	}
 	return publishResult(comments), nil
 }

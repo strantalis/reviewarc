@@ -471,6 +471,7 @@ func (s *Store) ListPullRequestSummaries(ctx context.Context) ([]domain.PullRequ
 			ORDER BY latest.updated_at DESC LIMIT 1
 		)
 		LEFT JOIN analyses a ON a.session_id=s.id
+		WHERE s.id IS NULL OR s.archived_at IS NULL
 		ORDER BY p.updated_at DESC`, domain.ChapterReviewed, domain.ChapterBlocked, domain.ChapterNeedsClarification)
 	if err != nil {
 		return nil, err
@@ -898,7 +899,8 @@ func (s *Store) GetSession(ctx context.Context, id string) (domain.ReviewSession
 	var v domain.ReviewSession
 	var pr []byte
 	var created, updated string
-	err := s.db.QueryRowContext(ctx, `SELECT id,base_sha,head_sha,status,analysis_status,pull_request_json,is_stale,stale_reason,created_at,updated_at FROM review_sessions WHERE id=?`, id).Scan(&v.ID, &v.BaseSHA, &v.HeadSHA, &v.Status, &v.AnalysisStatus, &pr, &v.IsStale, &v.StaleReason, &created, &updated)
+	var archivedAt sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT id,base_sha,head_sha,status,analysis_status,pull_request_json,is_stale,stale_reason,archived_at,archive_reason,created_at,updated_at FROM review_sessions WHERE id=?`, id).Scan(&v.ID, &v.BaseSHA, &v.HeadSHA, &v.Status, &v.AnalysisStatus, &pr, &v.IsStale, &v.StaleReason, &archivedAt, &v.ArchiveReason, &created, &updated)
 	if err != nil {
 		return v, queryErr("load review session", err)
 	}
@@ -907,6 +909,13 @@ func (s *Store) GetSession(ctx context.Context, id string) (domain.ReviewSession
 	}
 	v.CreatedAt, _ = decodeTime(created)
 	v.UpdatedAt, _ = decodeTime(updated)
+	if archivedAt.Valid {
+		archived, decodeErr := decodeTime(archivedAt.String)
+		if decodeErr != nil {
+			return v, fmt.Errorf("load review session %q: invalid archive timestamp: %w", id, decodeErr)
+		}
+		v.ArchivedAt = &archived
+	}
 	var analysis []byte
 	err = s.db.QueryRowContext(ctx, `SELECT analysis_json FROM analyses WHERE session_id=?`, id).Scan(&analysis)
 	if err == nil {
@@ -980,7 +989,11 @@ func (s *Store) SaveJudgmentDecision(ctx context.Context, decision domain.Judgme
 }
 
 func (s *Store) ListSessions(ctx context.Context) ([]domain.ReviewSession, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM review_sessions ORDER BY updated_at DESC`)
+	return s.listSessions(ctx, `SELECT id FROM review_sessions WHERE archived_at IS NULL ORDER BY updated_at DESC`)
+}
+
+func (s *Store) listSessions(ctx context.Context, query string, args ...any) ([]domain.ReviewSession, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1013,7 +1026,7 @@ func (s *Store) ListSessions(ctx context.Context) ([]domain.ReviewSession, error
 
 func (s *Store) LatestSessionForPullRequest(ctx context.Context, ref domain.PullRequestRef) (domain.ReviewSession, error) {
 	var id string
-	if err := s.db.QueryRowContext(ctx, `SELECT id FROM review_sessions WHERE repo_key=? AND pr_number=? ORDER BY updated_at DESC LIMIT 1`, repoKey(ref.Repository), ref.Number).Scan(&id); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT id FROM review_sessions WHERE id=(SELECT id FROM review_sessions WHERE repo_key=? AND pr_number=? ORDER BY updated_at DESC LIMIT 1) AND archived_at IS NULL`, repoKey(ref.Repository), ref.Number).Scan(&id); err != nil {
 		return domain.ReviewSession{}, queryErr("load latest review session", err)
 	}
 	return s.GetSession(ctx, id)
@@ -1176,7 +1189,7 @@ func scanReviewComment(row rowScanner) (domain.ReviewComment, error) {
 // reviewer-authored progress, notes, or draft comments.
 func (s *Store) MarkStaleIfChanged(ctx context.Context, ref domain.PullRequestRef, baseSHA, headSHA string) (bool, error) {
 	reason := fmt.Sprintf("pull request revision changed to %s..%s", baseSHA, headSHA)
-	res, err := s.db.ExecContext(ctx, `UPDATE review_sessions SET is_stale=1,analysis_status=?,stale_reason=?,updated_at=? WHERE repo_key=? AND pr_number=? AND (base_sha<>? OR head_sha<>?) AND is_stale=0`, domain.AnalysisStale, reason, encodeTime(time.Now()), repoKey(ref.Repository), ref.Number, baseSHA, headSHA)
+	res, err := s.db.ExecContext(ctx, `UPDATE review_sessions SET is_stale=1,analysis_status=?,stale_reason=?,archived_at=NULL,archive_reason='',updated_at=? WHERE repo_key=? AND pr_number=? AND (base_sha<>? OR head_sha<>?) AND (is_stale=0 OR archived_at IS NOT NULL)`, domain.AnalysisStale, reason, encodeTime(time.Now()), repoKey(ref.Repository), ref.Number, baseSHA, headSHA)
 	if err != nil {
 		return false, err
 	}

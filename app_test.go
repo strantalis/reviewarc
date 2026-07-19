@@ -1417,6 +1417,47 @@ func TestPublishRequiresMatchingConfirmationAndUsesFixtureBackedGitHubFlow(t *te
 	}
 }
 
+func TestApprovedReviewWithoutCommentsArchivesSession(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ref := domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api", CloneURL: "https://github.com/acme/api.git"}
+	baseSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	headSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	pr := domain.PullRequest{
+		PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: ref, Number: 7}, Title: "Fixture PR", BaseSHA: baseSHA, HeadSHA: headSHA},
+		BaseRef:            "main", HeadRef: "feature", HeadRepository: ref,
+	}
+	session := domain.ReviewSession{ID: "session", PullRequest: pr, BaseSHA: baseSHA, HeadSHA: headSHA, Status: domain.SessionReady, AnalysisStatus: domain.AnalysisReady}
+	if err := store.SaveSession(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+	metadata := `{"number":7,"title":"Fixture PR","html_url":"https://github.com/acme/api/pull/7","updated_at":"2026-07-11T12:00:00Z","user":{"login":"author"},"base":{"ref":"main","sha":"` + baseSHA + `","repo":{"name":"api","clone_url":"https://github.com/acme/api.git","owner":{"login":"acme"}}},"head":{"ref":"feature","sha":"` + headSHA + `","repo":{"name":"api","clone_url":"https://github.com/acme/api.git","owner":{"login":"acme"}}}}`
+	runner := &pullRequestFixtureRunner{metadata: []byte(metadata)}
+	app := &App{github: githubclient.New(runner), store: store, prepared: newPreparedReviewCache(0, 0, 0), publish: map[string]pendingPublish{}, analysisBySession: map[string]string{}}
+
+	preview, err := app.PrepareReview(session.ID, nil, "APPROVE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, err := app.ConfirmPublish(preview.Token, preview.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(published) != 0 {
+		t.Fatalf("published comments = %+v", published)
+	}
+	archived, err := store.GetSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if archived.ArchivedAt == nil || archived.ArchiveReason != domain.ArchiveReasonApproved {
+		t.Fatalf("approved session was not archived: %+v", archived)
+	}
+}
+
 func TestConfirmPublishResumesDurableReceiptWithoutRepublishing(t *testing.T) {
 	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
 	if err != nil {
@@ -1462,6 +1503,37 @@ func TestConfirmPublishResumesDurableReceiptWithoutRepublishing(t *testing.T) {
 	}
 	if len(runner.commands) != 0 {
 		t.Fatalf("durable retry called GitHub: %+v", runner.commands)
+	}
+}
+
+func TestConfirmPublishRetryArchivesApprovedSession(t *testing.T) {
+	store, err := persistence.Open(filepath.Join(t.TempDir(), "reviewarc.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	session := domain.ReviewSession{
+		ID:          "session",
+		PullRequest: domain.PullRequest{PullRequestSummary: domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}, Number: 7}, BaseSHA: "base", HeadSHA: "head"}},
+		BaseSHA:     "base", HeadSHA: "head", Status: domain.SessionReady, AnalysisStatus: domain.AnalysisReady,
+	}
+	if err := store.SaveSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StartReviewPublication(ctx, "token", "digest", session.ID, session.PullRequest.Ref, session.HeadSHA, "APPROVE", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordReviewPublicationReceipt(ctx, "token", "digest", "991", "https://github.com/acme/api/pull/7#pullrequestreview-991"); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{store: store, prepared: newPreparedReviewCache(0, 0, 0), publish: map[string]pendingPublish{}, analysisBySession: map[string]string{}}
+	if comments, err := app.ConfirmPublish("token", "digest"); err != nil || len(comments) != 0 {
+		t.Fatalf("confirm retry comments=%+v err=%v", comments, err)
+	}
+	archived, err := store.GetSession(ctx, session.ID)
+	if err != nil || archived.ArchivedAt == nil || archived.ArchiveReason != domain.ArchiveReasonApproved {
+		t.Fatalf("retry did not archive approved session=%+v err=%v", archived, err)
 	}
 }
 

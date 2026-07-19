@@ -15,6 +15,7 @@ type ValidationStatus string
 type ClaimKind string
 type ChapterStatus string
 type SessionStatus string
+type ArchiveReason string
 type CommentKind string
 type CommentStatus string
 type DiffSide string
@@ -75,6 +76,13 @@ const (
 	SessionPreparing SessionStatus = "preparing"
 	SessionReady     SessionStatus = "ready"
 	SessionFailed    SessionStatus = "failed"
+
+	ArchiveReasonManual   ArchiveReason = "manual"
+	ArchiveReasonApproved ArchiveReason = "approved"
+	// ArchiveManual and ArchiveApproved remain concise aliases for app-facing
+	// lifecycle calls.
+	ArchiveManual   = ArchiveReasonManual
+	ArchiveApproved = ArchiveReasonApproved
 
 	CommentGeneral   CommentKind   = "general"
 	CommentInline    CommentKind   = "inline"
@@ -472,8 +480,22 @@ type ReviewSession struct {
 	Progress          ReviewProgress     `json:"progress"`
 	IsStale           bool               `json:"isStale"`
 	StaleReason       string             `json:"staleReason,omitempty"`
+	ArchivedAt        *time.Time         `json:"archivedAt,omitempty"`
+	ArchiveReason     ArchiveReason      `json:"archiveReason,omitempty"`
 	CreatedAt         time.Time          `json:"createdAt"`
 	UpdatedAt         time.Time          `json:"updatedAt"`
+}
+
+// ArchiveRetention controls how long archived reviews remain locally
+// restorable. Days is zero when automatic deletion is disabled.
+type ArchiveRetention struct {
+	Days int `json:"days"`
+}
+
+// ReviewPublication is the durable state needed to reconcile a GitHub review
+// publication after the app restarts.
+type ReviewPublication struct {
+	Token, Digest, SessionID, Event, State, GitHubID, GitHubURL string
 }
 
 // RevisionDeltaFile is one file that changed between the analyzed head and the

@@ -25,6 +25,7 @@ import (
 	"reviewarc/internal/analysisbundle"
 	"reviewarc/internal/analysiscontext"
 	"reviewarc/internal/appdata"
+	cleanupservice "reviewarc/internal/cleanup"
 	"reviewarc/internal/dependencies"
 	"reviewarc/internal/domain"
 	gitcache "reviewarc/internal/git"
@@ -208,6 +209,8 @@ type App struct {
 	analysisBySession map[string]string
 	operationHistory  map[string][]Operation
 	analysisWake      chan struct{}
+	activeBundles     map[string]struct{}
+	cleanupScheduler  *cleanupservice.Scheduler
 	schedulerCancel   context.CancelFunc
 	schedulerWG       sync.WaitGroup
 	publish           map[string]pendingPublish
@@ -241,7 +244,12 @@ func NewApp() (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	app := &App{paths: paths, detector: dependencies.New(runner), github: githubclient.New(runner), store: store, repos: gitcache.NewManager(paths.Repositories, paths.Worktrees, runner, gitcache.Options{RemoteURL: remoteURL}), runner: runner, harnesses: registry, prepared: newPreparedReviewCache(0, 0, 0), active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}, operationHistory: map[string][]Operation{}, analysisWake: make(chan struct{}, 2), publish: map[string]pendingPublish{}, threadReplies: map[string]pendingThreadReply{}, gitProtocol: gitProtocol}
+	app := &App{paths: paths, detector: dependencies.New(runner), github: githubclient.New(runner), store: store, repos: gitcache.NewManager(paths.Repositories, paths.Worktrees, runner, gitcache.Options{RemoteURL: remoteURL}), runner: runner, harnesses: registry, prepared: newPreparedReviewCache(0, 0, 0), active: map[string]context.CancelFunc{}, analysisBySession: map[string]string{}, operationHistory: map[string][]Operation{}, analysisWake: make(chan struct{}, 2), activeBundles: map[string]struct{}{}, publish: map[string]pendingPublish{}, threadReplies: map[string]pendingThreadReply{}, gitProtocol: gitProtocol}
+	app.cleanupScheduler, err = cleanupservice.NewScheduler(cleanupservice.JobFunc(app.runArchiveCleanup), cleanupservice.SchedulerOptions{Interval: archiveCleanupInterval})
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
 	app.configureUpdater()
 	return app, nil
 }
@@ -277,6 +285,8 @@ func (a *App) startup(ctx context.Context) {
 			a.schedulerWG.Add(1)
 			go a.analysisWorker(schedulerCtx)
 		}
+		a.schedulerWG.Add(1)
+		go a.archiveCleanupLoop(schedulerCtx)
 	}
 	a.mu.Unlock()
 	a.wakeAnalysisWorkers()
@@ -701,7 +711,7 @@ func (a *App) RefreshInbox() (InboxState, error) {
 	if err != nil {
 		return InboxState{}, err
 	}
-	result.Items = mergeInboxReviewState(result.Items, local)
+	result.Items = mergeInboxReviewState(activeRemotePullRequests(result.Items, local), local)
 	return InboxState{Items: result.Items, Errors: result.Errors, Partial: result.Partial}, nil
 }
 
@@ -1479,7 +1489,18 @@ func (a *App) runAnalysis(ctx context.Context, op Operation, session domain.Revi
 		a.failAnalysisOperation(op, contextFailure(err), domain.AnalysisCoverage{})
 		return
 	}
-	defer func() { _ = lease.Close() }()
+	a.mu.Lock()
+	if a.activeBundles == nil {
+		a.activeBundles = map[string]struct{}{}
+	}
+	a.activeBundles[lease.Reference.Path] = struct{}{}
+	a.mu.Unlock()
+	defer func() {
+		a.mu.Lock()
+		delete(a.activeBundles, lease.Reference.Path)
+		a.mu.Unlock()
+		_ = lease.Close()
+	}()
 	bundle, err := analysisbundle.Open(a.paths.Root, lease.Reference.Path, lease.Reference.Digest)
 	if err != nil {
 		a.failAnalysisOperation(op, contextFailure(err), domain.AnalysisCoverage{})

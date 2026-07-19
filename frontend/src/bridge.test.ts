@@ -51,3 +51,14 @@ describe('analysis harness bridge', () => {
     expect(start).toHaveBeenCalledWith('session-1')
   })
 })
+
+describe('archive bridge', () => {
+  it('maps the UI Never value to the zero-day backend contract', async () => {
+    const get = vi.fn().mockResolvedValue(0)
+    const set = vi.fn().mockResolvedValue(undefined)
+    window.go = {main: {App: {GetArchiveRetentionDays: get, SetArchiveRetentionDays: set}}}
+    await expect(backend.getArchiveRetentionDays()).resolves.toBeNull()
+    await backend.setArchiveRetentionDays(null)
+    expect(set).toHaveBeenCalledWith(0)
+  })
+})

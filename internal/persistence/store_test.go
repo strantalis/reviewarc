@@ -45,7 +45,7 @@ func TestMigrationsAndReopen(t *testing.T) {
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&applied); err != nil {
 		t.Fatal(err)
 	}
-	if applied != 8 {
+	if applied != 9 {
 		t.Fatalf("applied migrations = %d", applied)
 	}
 }
@@ -540,6 +540,181 @@ func TestAnalysisProfileRoundTripAndValidation(t *testing.T) {
 	}
 	if err := s.SaveAnalysisProfile(ctx, domain.AnalysisProfile{}); err == nil {
 		t.Fatal("invalid profile accepted")
+	}
+}
+
+func TestArchiveRetentionDefaultsPersistsAndCanBeDisabled(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	retention, err := s.GetArchiveRetention(ctx)
+	if err != nil || retention.Days != 30 {
+		t.Fatalf("default retention=%+v err=%v", retention, err)
+	}
+	if err := s.SaveArchiveRetention(ctx, domain.ArchiveRetention{Days: 90}); err != nil {
+		t.Fatal(err)
+	}
+	retention, err = s.GetArchiveRetention(ctx)
+	if err != nil || retention.Days != 90 {
+		t.Fatalf("saved retention=%+v err=%v", retention, err)
+	}
+	if err := s.SaveArchiveRetention(ctx, domain.ArchiveRetention{Days: -1}); err == nil {
+		t.Fatal("negative retention was accepted")
+	}
+	session := testSession()
+	if err := s.SaveSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ArchiveSession(ctx, session.ID, domain.ArchiveReasonManual); err != nil {
+		t.Fatal(err)
+	}
+	if candidates, err := s.ListArchivePurgeCandidates(ctx, time.Now().AddDate(0, 0, 91)); err != nil || len(candidates) != 1 || candidates[0].ID != session.ID {
+		t.Fatalf("purge candidates=%+v err=%v", candidates, err)
+	}
+	if err := s.SaveArchiveRetention(ctx, domain.ArchiveRetention{}); err != nil {
+		t.Fatal(err)
+	}
+	if candidates, err := s.ListArchivePurgeCandidates(ctx, time.Now().AddDate(0, 0, 365)); err != nil || len(candidates) != 0 {
+		t.Fatalf("disabled retention candidates=%+v err=%v", candidates, err)
+	}
+}
+
+func TestArchiveRestoreAndPermanentDeletionPreserveThenCascadeReviewContent(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	session := testSession()
+	if err := s.SaveSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveAnalysis(ctx, session.ID, domain.ReviewAnalysis{SchemaVersion: 1, BaseSHA: session.BaseSHA, HeadSHA: session.HeadSHA, Chapters: []domain.ReviewChapter{{ID: "flow"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetChapterStatus(ctx, session.ID, "flow", domain.ChapterReviewed); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveNote(ctx, domain.ReviewNote{ID: "archive-note", SessionID: session.ID, Body: "keep this"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveComment(ctx, domain.ReviewComment{ID: "archive-draft", SessionID: session.ID, Kind: domain.CommentGeneral, Body: "keep this too", Status: domain.CommentDraft}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveJudgmentDecision(ctx, domain.JudgmentDecision{SessionID: session.ID, FindingID: "finding", Disposition: "concern"}); err != nil {
+		t.Fatal(err)
+	}
+	run := domain.AnalysisRun{ID: "archive-run", SessionID: session.ID, Profile: domain.AnalysisProfile{Harness: domain.HarnessCodex, Model: "model", Reasoning: domain.ReasoningMedium}, ContextTransport: domain.ContextInline, SchemaVersion: 1, InputFingerprint: "archive"}
+	if err := s.StartAnalysisRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ArchiveSession(ctx, session.ID, domain.ArchiveReasonManual); err != nil {
+		t.Fatal(err)
+	}
+	archived, err := s.GetSession(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if archived.ArchivedAt == nil || archived.ArchiveReason != domain.ArchiveReasonManual || archived.Analysis == nil || len(archived.Notes) != 1 || len(archived.Comments) != 1 || len(archived.Decisions) != 1 || len(archived.Chapters) != 1 {
+		t.Fatalf("archived session lost durable review content: %+v", archived)
+	}
+	if archived.LatestAnalysisRun == nil || archived.LatestAnalysisRun.Status != domain.AnalysisRunCancelled || archived.AnalysisStatus != domain.AnalysisReady {
+		t.Fatalf("archive did not safely stop analysis: %+v", archived)
+	}
+	if sessions, err := s.ListSessions(ctx); err != nil || len(sessions) != 0 {
+		t.Fatalf("active sessions=%+v err=%v", sessions, err)
+	}
+	if sessions, err := s.ListArchivedSessions(ctx); err != nil || len(sessions) != 1 || sessions[0].ID != session.ID {
+		t.Fatalf("archived sessions=%+v err=%v", sessions, err)
+	}
+	if _, err := s.LatestSessionForPullRequest(ctx, session.PullRequest.Ref); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("archived session returned as active latest: %v", err)
+	}
+	if err := s.RestoreSession(ctx, session.ID); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := s.GetSession(ctx, session.ID)
+	if err != nil || restored.ArchivedAt != nil || restored.ArchiveReason != "" || len(restored.Comments) != 1 {
+		t.Fatalf("restored session=%+v err=%v", restored, err)
+	}
+	if err := s.ArchiveSession(ctx, session.ID, domain.ArchiveReasonManual); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteSession(ctx, session.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetSession(ctx, session.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted session error=%v", err)
+	}
+	for _, table := range []string{"analyses", "chapter_progress", "notes", "comments", "analysis_runs", "judgment_decisions"} {
+		var count int
+		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table+` WHERE session_id=?`, session.ID).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("%s rows=%d err=%v after cascade delete", table, count, err)
+		}
+	}
+}
+
+func TestArchiveResurfacesAsStaleOnlyWhenPullRequestRevisionChanges(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	session := testSession()
+	if err := s.SaveSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertPullRequest(ctx, session.PullRequest); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ArchiveSession(ctx, session.ID, domain.ArchiveReasonManual); err != nil {
+		t.Fatal(err)
+	}
+	items, err := s.ListPullRequestSummaries(ctx)
+	if err != nil || len(items) != 0 {
+		t.Fatalf("same-head archived summary=%+v err=%v", items, err)
+	}
+	changed := session.PullRequest.PullRequestSummary
+	changed.HeadSHA = "new-head"
+	stats, err := s.RefreshInboxPullRequests(ctx, []domain.PullRequestSummary{changed})
+	if err != nil || stats.StaleSessions != 1 {
+		t.Fatalf("refresh stats=%+v err=%v", stats, err)
+	}
+	reopened, err := s.GetSession(ctx, session.ID)
+	if err != nil || reopened.ArchivedAt != nil || !reopened.IsStale || reopened.AnalysisStatus != domain.AnalysisStale {
+		t.Fatalf("reopened session=%+v err=%v", reopened, err)
+	}
+	items, err = s.ListPullRequestSummaries(ctx)
+	if err != nil || len(items) != 1 || items[0].SessionID != session.ID || items[0].AnalysisStatus != domain.AnalysisStale {
+		t.Fatalf("changed-head active summary=%+v err=%v", items, err)
+	}
+}
+
+func TestApprovedZeroCommentPublicationIsDurableAndBlocksPurgeUntilApplied(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	session := testSession()
+	if err := s.SaveSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ArchiveSession(ctx, session.ID, domain.ArchiveReasonApproved); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.StartReviewPublication(ctx, "approve-token", "approve-digest", session.ID, session.PullRequest.Ref, session.HeadSHA, "APPROVE", nil); err != nil {
+		t.Fatalf("zero-comment approval was rejected: %v", err)
+	}
+	if err := s.StartReviewPublication(ctx, "comment-token", "comment-digest", session.ID, session.PullRequest.Ref, session.HeadSHA, "COMMENT", nil); err == nil {
+		t.Fatal("zero-comment COMMENT was accepted")
+	}
+	publication, err := s.GetReviewPublication(ctx, "approve-token", "approve-digest")
+	if err != nil || publication.SessionID != session.ID || publication.Event != "APPROVE" || publication.State != "publishing" {
+		t.Fatalf("publication=%+v err=%v", publication, err)
+	}
+	if err := s.DeleteSession(ctx, session.ID); !errors.Is(err, ErrSessionBusy) {
+		t.Fatalf("purge during unresolved approval error=%v", err)
+	}
+	if err := s.RecordReviewPublicationReceipt(ctx, "approve-token", "approve-digest", "991", "https://github.test/review/991"); err != nil {
+		t.Fatal(err)
+	}
+	comments, err := s.ApplyReviewPublication(ctx, "approve-token", "approve-digest")
+	if err != nil || len(comments) != 0 {
+		t.Fatalf("zero-comment apply comments=%+v err=%v", comments, err)
+	}
+	if err := s.DeleteSession(ctx, session.ID); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -1713,6 +1713,9 @@ export namespace domain {
 	    isStale: boolean;
 	    staleReason?: string;
 	    // Go type: time
+	    archivedAt?: any;
+	    archiveReason?: string;
+	    // Go type: time
 	    createdAt: any;
 	    // Go type: time
 	    updatedAt: any;
@@ -1738,6 +1741,8 @@ export namespace domain {
 	        this.progress = this.convertValues(source["progress"], ReviewProgress);
 	        this.isStale = source["isStale"];
 	        this.staleReason = source["staleReason"];
+	        this.archivedAt = this.convertValues(source["archivedAt"], null);
+	        this.archiveReason = source["archiveReason"];
 	        this.createdAt = this.convertValues(source["createdAt"], null);
 	        this.updatedAt = this.convertValues(source["updatedAt"], null);
 	    }

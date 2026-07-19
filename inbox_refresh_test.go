@@ -42,3 +42,14 @@ func TestMergeInboxReviewStateDoesNotMutateRemoteSlice(t *testing.T) {
 		t.Fatalf("remote input mutated: %+v", remote[0])
 	}
 }
+
+func TestActiveRemotePullRequestsOmitsArchivedProjection(t *testing.T) {
+	repository := domain.RepositoryRef{Host: "github.com", Owner: "acme", Name: "api"}
+	active := domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: repository, Number: 1}}
+	archived := domain.PullRequestSummary{Ref: domain.PullRequestRef{Repository: repository, Number: 2}}
+
+	got := activeRemotePullRequests([]domain.PullRequestSummary{active, archived}, []domain.PullRequestSummary{active})
+	if len(got) != 1 || got[0].Ref.Number != active.Ref.Number {
+		t.Fatalf("active remote pull requests = %+v", got)
+	}
+}

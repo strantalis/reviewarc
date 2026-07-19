@@ -49,7 +49,7 @@ func (s *Store) RefreshInboxPullRequests(ctx context.Context, items []domain.Pul
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	stale, err := tx.PrepareContext(ctx, `UPDATE review_sessions SET is_stale=1,analysis_status=?,stale_reason=?,updated_at=? WHERE repo_key=? AND pr_number=? AND (base_sha<>? OR head_sha<>?) AND is_stale=0`)
+	stale, err := tx.PrepareContext(ctx, `UPDATE review_sessions SET is_stale=1,analysis_status=?,stale_reason=?,archived_at=NULL,archive_reason='',updated_at=? WHERE repo_key=? AND pr_number=? AND (base_sha<>? OR head_sha<>?) AND (is_stale=0 OR archived_at IS NOT NULL)`)
 	if err != nil {
 		return stats, fmt.Errorf("refresh inbox: prepare stale update: %w", err)
 	}

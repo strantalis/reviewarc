@@ -47,6 +47,15 @@ export const backend = {
   searchOwnerRepositories: (owner: string, query: string, cursor = '', organization = false) => call<RepositoryPage>(['SearchOwnerRepositories'], {owner, query, cursor, organization}),
   saveSelections: (selections: SourceSelection[]) => call<void>(['SaveSelections'], selections),
   refreshInbox: () => call<InboxResult>(['RefreshInbox']),
+  archiveSession: (sessionId: string) => call<void>(['ArchiveSession'], sessionId),
+  restoreSession: (sessionId: string) => call<void>(['RestoreSession'], sessionId),
+  deleteArchivedSession: (sessionId: string) => call<void>(['DeleteArchivedSession'], sessionId),
+  listArchivedSessions: () => call<ReviewSession[]>(['ListArchivedSessions']),
+  getArchiveRetentionDays: async () => {
+    const days = await call<number>(['GetArchiveRetentionDays'])
+    return days === 0 ? null : days
+  },
+  setArchiveRetentionDays: (days: number | null) => call<void>(['SetArchiveRetentionDays'], days ?? 0),
   openPullRequest: (ref: PullRequestRef) => call<ReviewSession>(['OpenPullRequest'], ref),
   queueInboxAnalysis: (ref: PullRequestRef) => call<InboxAnalysis>(['QueueInboxAnalysis'], ref),
   refreshPullRequestContext: (sessionId: string) => call<ReviewSession>(['RefreshPullRequestContext'], sessionId),

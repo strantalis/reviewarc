@@ -16,8 +16,8 @@ var (
 )
 
 type reviewPublication struct {
-	Token, Digest, SessionID, State, GitHubID, GitHubURL string
-	DraftIDs                                             []string
+	domain.ReviewPublication
+	DraftIDs []string
 }
 
 func (s *Store) SetCommentPublication(ctx context.Context, id string, status domain.CommentStatus, githubID, githubURL string) error {
@@ -29,7 +29,7 @@ func (s *Store) SetCommentPublication(ctx context.Context, id string, status dom
 }
 
 func (s *Store) StartReviewPublication(ctx context.Context, token, digest, sessionID string, ref domain.PullRequestRef, headSHA, event string, draftIDs []string) error {
-	if token == "" || digest == "" || sessionID == "" || ref.Number <= 0 || headSHA == "" || event == "" || len(draftIDs) == 0 {
+	if token == "" || digest == "" || sessionID == "" || ref.Number <= 0 || headSHA == "" || !validReviewEvent(event) || (event != "APPROVE" && len(draftIDs) == 0) {
 		return errors.New("start review publication: invalid publication")
 	}
 	seen := make(map[string]bool, len(draftIDs))
@@ -112,7 +112,7 @@ func (s *Store) ApplyReviewPublication(ctx context.Context, token, digest string
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	publication, err := scanReviewPublication(tx.QueryRowContext(ctx, `SELECT token,digest,session_id,draft_ids_json,state,github_id,github_url FROM review_publications WHERE token=? AND digest=?`, token, digest))
+	publication, err := scanReviewPublication(tx.QueryRowContext(ctx, `SELECT token,digest,session_id,event,draft_ids_json,state,github_id,github_url FROM review_publications WHERE token=? AND digest=?`, token, digest))
 	if err != nil {
 		return nil, queryErr("load review publication", err)
 	}
@@ -169,11 +169,27 @@ func (s *Store) ApplyReviewPublication(ctx context.Context, token, digest string
 func scanReviewPublication(row rowScanner) (reviewPublication, error) {
 	var publication reviewPublication
 	var draftIDs []byte
-	if err := row.Scan(&publication.Token, &publication.Digest, &publication.SessionID, &draftIDs, &publication.State, &publication.GitHubID, &publication.GitHubURL); err != nil {
+	if err := row.Scan(&publication.Token, &publication.Digest, &publication.SessionID, &publication.Event, &draftIDs, &publication.State, &publication.GitHubID, &publication.GitHubURL); err != nil {
 		return publication, err
 	}
-	if err := json.Unmarshal(draftIDs, &publication.DraftIDs); err != nil || len(publication.DraftIDs) == 0 {
+	if err := json.Unmarshal(draftIDs, &publication.DraftIDs); err != nil || (len(publication.DraftIDs) == 0 && publication.Event != "APPROVE") {
 		return publication, errors.New("corrupt review publication draft IDs")
 	}
 	return publication, nil
+}
+
+// GetReviewPublication returns the durable identity and event for a review
+// publication so callers can finish post-publication lifecycle work after a
+// restart erased their in-memory preview.
+func (s *Store) GetReviewPublication(ctx context.Context, token, digest string) (domain.ReviewPublication, error) {
+	var publication domain.ReviewPublication
+	err := s.db.QueryRowContext(ctx, `SELECT token,digest,session_id,event,state,github_id,github_url FROM review_publications WHERE token=? AND digest=?`, token, digest).Scan(&publication.Token, &publication.Digest, &publication.SessionID, &publication.Event, &publication.State, &publication.GitHubID, &publication.GitHubURL)
+	if err != nil {
+		return publication, queryErr("load review publication", err)
+	}
+	return publication, nil
+}
+
+func validReviewEvent(event string) bool {
+	return event == "COMMENT" || event == "APPROVE" || event == "REQUEST_CHANGES"
 }
