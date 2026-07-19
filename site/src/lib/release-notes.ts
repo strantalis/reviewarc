@@ -66,6 +66,16 @@ const releaseNotes: Record<string, PublicReleaseNotes> = {
       "Stricter frontend and Go linting, expanded tests, and internal maintainability work catch regressions earlier.",
     ],
   },
+  "0.1.0-beta.13": {
+    summary: "ReviewArc now turns agent analysis into explicit human judgments, with persisted tradeoffs and a precise view of what changed since your review.",
+    changes: [
+      "Start with a concise agent recommendation—ready for human approval, hold, or insufficient evidence—plus verified coverage and blind spots.",
+      "Work through decision-critical findings in priority order, inspect validated evidence and existing discussion, then accept a tradeoff with rationale or draft a change for the author.",
+      "Accepted tradeoffs and rationales stay local and survive restarts, while a replacement analysis clears decisions tied to superseded findings.",
+      "When a reviewed pull request changes, see the exact commits and interdiff files since the analyzed revision, linked to affected findings and local drafts.",
+      "Repository discovery handles partial GitHub failures more clearly, and analysis status stays synchronized between the overview and inbox.",
+    ],
+  },
 };
 
 export function releaseNotesFor(version: string): PublicReleaseNotes | null {
