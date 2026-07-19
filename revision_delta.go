@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -11,8 +12,8 @@ const maxDeltaCommits = 20
 
 // GetRevisionDelta reports what changed between the revision the current
 // analysis reviewed and the pull request's current head. It reads pinned local
-// Git objects only; when either revision is no longer available the delta is
-// returned as unavailable instead of failing the stale review view.
+// Git objects only and performs no fetches, so it fails when either revision
+// has left the local cache; callers treat that as "delta unavailable".
 func (a *App) GetRevisionDelta(sessionID string) (domain.RevisionDelta, error) {
 	ctx := a.appContext()
 	session, err := a.store.GetSession(ctx, sessionID)
@@ -33,11 +34,11 @@ func (a *App) GetRevisionDelta(sessionID string) (domain.RevisionDelta, error) {
 	}
 	files, err := a.repos.DeltaFiles(ctx, state.repository, from, to)
 	if err != nil {
-		return domain.RevisionDelta{FromHeadSHA: from, ToHeadSHA: to, Reason: "The previously analyzed revision is no longer in the local cache."}, nil
+		return domain.RevisionDelta{}, fmt.Errorf("revision delta unavailable: %w", err)
 	}
 	commits, commitCount, err := a.repos.DeltaCommits(ctx, state.repository, from, to, maxDeltaCommits)
 	if err != nil {
-		return domain.RevisionDelta{FromHeadSHA: from, ToHeadSHA: to, Reason: "The commit range between the revisions could not be read."}, nil
+		return domain.RevisionDelta{}, fmt.Errorf("revision delta unavailable: %w", err)
 	}
 	return buildRevisionDelta(session, from, to, files, commits, commitCount), nil
 }
