@@ -76,6 +76,15 @@ const releaseNotes: Record<string, PublicReleaseNotes> = {
       "Repository discovery handles partial GitHub failures more clearly, and analysis status stays synchronized between the overview and inbox.",
     ],
   },
+  "0.1.0-beta.14": {
+    summary: "Archived reviews now stay out of the active inbox while remaining recoverable until their retention window expires.",
+    changes: [
+      "Archive any review from the inbox or review workspace, while successful approvals are archived automatically.",
+      "Browse archived reviews, restore them, see their scheduled deletion date, or permanently delete them with explicit confirmation.",
+      "Archived review history is retained for 30 days by default, with configurable 7-day, 30-day, 90-day, and Never options.",
+      "Startup and daily cleanup remove expired archives and stale temporary analysis bundles safely, while a new pull-request revision resurfaces an archived review for fresh analysis.",
+    ],
+  },
 };
 
 export function releaseNotesFor(version: string): PublicReleaseNotes | null {
