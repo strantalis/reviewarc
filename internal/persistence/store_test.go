@@ -97,6 +97,9 @@ func TestAccessibleRepositoryMigrationRepairsPreAccountCatalog(t *testing.T) {
 		}
 		hasAccount = hasAccount || name == "account_login"
 	}
+	if err := columns.Err(); err != nil {
+		t.Fatal(err)
+	}
 	if !hasAccount {
 		t.Fatal("accessible repository catalog was not rebuilt with account isolation")
 	}
