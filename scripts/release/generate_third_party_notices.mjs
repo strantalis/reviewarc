@@ -47,7 +47,7 @@ const frontendLicenseFallbacks = new Map([
 const extraGoLicenseFiles = new Map([
   ['golang.org/x/exp', ['PATENTS']],
   ['golang.org/x/sys', ['PATENTS']],
-  ['modernc.org/libc', ['LICENSE-GO']],
+  ['modernc.org/libc', ['LICENSE-3RD-PARTY.md']],
   ['modernc.org/mathutil', ['mersenne/LICENSE']],
   ['modernc.org/memory', ['LICENSE-GO', 'LICENSE-MMAP-GO']],
 ])
