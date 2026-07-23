@@ -125,38 +125,60 @@ code { font-family: var(--font-mono); font-variant-ligatures: none; font-variant
 
 .site-header, main, footer { width: min(1240px, calc(100% - 2rem)); margin-inline: auto; }
 .site-header {
-  min-height: 72px;
+  min-height: 78px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
+  gap: 1.5rem;
   border-bottom: 1px solid var(--line);
 }
-.site-header nav { display: flex; align-items: center; gap: .25rem; }
+.site-header nav {
+  display: flex;
+  align-items: center;
+  gap: .1rem;
+}
 .site-header nav a {
   min-height: 44px;
   padding: .65rem .7rem;
   display: inline-flex;
   align-items: center;
+  color: var(--muted);
   font-size: var(--text-meta);
   font-weight: var(--weight-semibold);
   text-decoration: none;
+  transition: color 160ms ease, background 160ms ease, transform 160ms var(--ease-out);
 }
-.site-header nav a:hover { color: var(--accent); }
+.site-header nav a:hover {
+  color: var(--ink);
+}
+.site-header nav a:active { transform: translateY(1px); }
 .site-header .header-download {
   min-height: 44px;
-  margin-inline-start: .25rem;
-  padding-inline: .9rem;
-  background: var(--inverse);
-  color: var(--inverse-ink);
+  margin-inline-start: .45rem;
+  padding-inline: 1rem;
   border-radius: var(--radius-control);
+  background: var(--accent);
+  color: var(--download-ink);
 }
-.site-header .header-download:hover { background: var(--accent); color: var(--download-ink); }
-.brand { min-height: 44px; display: inline-flex; align-items: center; gap: .65rem; font-weight: var(--weight-semibold); text-decoration: none; letter-spacing: -.02em; }
-.brand-mark { display: block; width: 31px; height: 25px; flex: none; }
+.site-header .header-download:hover {
+  background: var(--download-hover);
+  color: var(--download-ink);
+}
+.brand {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: .75rem;
+  color: var(--ink);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-semibold);
+  text-decoration: none;
+  letter-spacing: -.025em;
+}
+.brand-mark { display: block; width: 34px; height: auto; flex: none; }
 :root[data-theme="dark"] .brand-mark { filter: brightness(1.38) saturate(.9); }
-.theme-control { position: relative; width: 44px; height: 44px; padding: 0; display: inline-grid; place-items: center; border: 1px solid var(--line); border-radius: var(--radius-control); color: var(--muted); background: var(--surface); cursor: pointer; transition: color 160ms ease, border-color 160ms ease, background 160ms ease, transform 160ms var(--ease-out); }
-.theme-control:hover { color: var(--ink); border-color: color-mix(in oklch, var(--accent), var(--line) 45%); background: var(--accent-soft); }
+.theme-control { position: relative; width: 44px; height: 44px; margin-inline-start: .35rem; padding: 0; display: inline-grid; place-items: center; border: 1px solid var(--line); border-radius: var(--radius-control); color: var(--muted); background: var(--surface); cursor: pointer; transition: color 160ms ease, border-color 160ms ease, background 160ms ease, transform 160ms var(--ease-out); }
+.theme-control:hover { color: var(--ink); background: var(--accent-soft); }
 .theme-control:active { transform: translateY(1px); }
 .theme-control:focus-visible { outline: 3px solid color-mix(in oklch, var(--accent), transparent 25%); outline-offset: 3px; }
 .theme-control svg { display: none; grid-area: 1 / 1; }
@@ -352,10 +374,10 @@ footer nav a { min-height: 44px; display: inline-flex; align-items: center; text
 @media (max-width: 520px) {
   .site-header, main, footer { width: min(1240px, calc(100% - 1.25rem)); }
   .site-header { min-height: 64px; gap: .5rem; }
-  .wide-nav-link { display: none !important; }
+  .compact-nav-link { display: none !important; }
   .site-header nav { gap: 0; }
   .site-header nav a { padding-inline: .5rem; }
-  .site-header .header-download { padding-inline: .7rem; }
+  .site-header .header-download { margin-inline-start: .1rem; padding-inline: .75rem; }
   .brand { gap: .5rem; }
   .brand-mark { width: 27px; height: auto; }
 
