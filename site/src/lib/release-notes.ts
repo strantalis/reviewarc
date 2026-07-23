@@ -85,6 +85,15 @@ const releaseNotes: Record<string, PublicReleaseNotes> = {
       "Startup and daily cleanup remove expired archives and stale temporary analysis bundles safely, while a new pull-request revision resurfaces an archived review for fresh analysis.",
     ],
   },
+  "0.1.0-beta.15": {
+    summary: "CI review gates are easier to scan, diagnose, and act on before ReviewArc begins a deep review.",
+    changes: [
+      "Passing and incomplete check totals are centered consistently within the review gate.",
+      "Check states use readable labels such as In progress, Failed, and Timed out instead of raw provider values.",
+      "Long check lists show the most relevant checks first and reveal the remainder on demand without silently hiding them.",
+      "Review-gate content now uses consistent spacing across the heading, check list, and refresh action on desktop and smaller windows.",
+    ],
+  },
 };
 
 export function releaseNotesFor(version: string): PublicReleaseNotes | null {

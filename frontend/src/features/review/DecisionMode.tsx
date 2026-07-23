@@ -15,13 +15,39 @@ function recommendationCopy(recommendation: AgentReviewBriefModel['recommendatio
   return {label: 'Insufficient evidence', detail: 'The agent completed its review, but important uncertainty remains.'}
 }
 
+function checkStateLabel(check: CheckRun) {
+  const state = check.conclusion || check.status
+  const labels: Record<string, string> = {
+    action_required: 'Action required',
+    cancelled: 'Cancelled',
+    failure: 'Failed',
+    in_progress: 'In progress',
+    queued: 'Queued',
+    skipped: 'Skipped',
+    stale: 'Stale',
+    startup_failure: 'Workflow unavailable',
+    success: 'Passed',
+    timed_out: 'Timed out',
+  }
+  return labels[state] ?? state.replaceAll('_', ' ')
+}
+
 export function ReviewGatePanel({gate, refreshing = false, onRefresh, onOpenCheck}: {gate: ReviewGate; refreshing?: boolean; onRefresh: () => void; onOpenCheck: (check: CheckRun) => void}) {
   const blocked = gate.status === 'blocked'
   const checks = blocked ? gate.failing : gate.waiting
+  const checkListId = useId()
+  const checkSetKey = checks.map((check) => check.id).join('\u0000')
+  const [expandedCheckSet, setExpandedCheckSet] = useState('')
+  const allChecksVisible = expandedCheckSet === checkSetKey
+  const initialCheckCount = 4
+  const hiddenChecks = checks.slice(initialCheckCount)
+  const visibleChecks = allChecksVisible ? checks : checks.slice(0, initialCheckCount)
+  const checkKind = blocked ? 'failing' : 'incomplete'
+  const disclosureLabel = allChecksVisible ? 'Show fewer checks' : `Show all ${checks.length} ${checkKind} checks`
   return <section className={`review-gate state-${gate.status}`} aria-labelledby="review-gate-title">
     <header><span className="review-gate-icon">{blocked ? <AlertTriangle size={22}/> : <RefreshCw className={refreshing ? 'spin' : ''} size={22}/>}</span><div><span className="review-gate-label">Review gate</span><h2 id="review-gate-title">{blocked ? 'Review paused — CI is failing' : 'Waiting for CI before deep review'}</h2><p>{blocked ? 'ReviewArc stopped before spending agent or reviewer attention. Open the failed check to determine whether the code or its infrastructure needs a rerun.' : 'ReviewArc will refresh the current checks and make the review available once they finish successfully.'}</p></div></header>
     <div className="review-gate-status"><div><strong>{gate.passing.length}/{gate.checks.length}</strong><span>checks passing</span></div><div><strong>{checks.length}</strong><span>{blocked ? 'failing' : 'not complete'}</span></div></div>
-    {checks.length > 0 && <div className="review-gate-checks">{checks.slice(0, 4).map((check) => <div key={check.id}><span><strong>{check.name}</strong><small>{check.conclusion || check.status}{check.appName ? ` · ${check.appName}` : ''}</small></span>{(check.detailsUrl || check.url) && <button className="button text small" onClick={() => onOpenCheck(check)}>Open check<ExternalLink size={12}/></button>}</div>)}</div>}
+    {checks.length > 0 && <div className="review-gate-checks" id={checkListId}>{visibleChecks.map((check) => <div key={check.id}><span><strong>{check.name}</strong><small>{checkStateLabel(check)}{check.appName ? ` · ${check.appName}` : ''}</small></span>{(check.detailsUrl || check.url) && <button className="button text small" aria-label={`Open ${check.name} check`} onClick={() => onOpenCheck(check)}>Open check<ExternalLink size={12}/></button>}</div>)}{hiddenChecks.length > 0 && <div className="review-gate-check-disclosure"><button className="button text small" aria-label={disclosureLabel} aria-controls={checkListId} aria-expanded={allChecksVisible} onClick={() => setExpandedCheckSet(allChecksVisible ? '' : checkSetKey)}>{allChecksVisible ? 'Fewer checks' : `Show ${hiddenChecks.length} more check${hiddenChecks.length === 1 ? '' : 's'}`}<ChevronRight size={13}/></button></div>}</div>}
     <footer><span>{blocked ? 'Resolve or rerun the failing checks, then refresh.' : 'You can leave this page; no review judgment is needed yet.'}</span><button className="button secondary" disabled={refreshing} onClick={onRefresh}>{refreshing ? <RefreshCw className="spin" size={14}/> : <RefreshCw size={14}/>}Refresh checks</button></footer>
   </section>
 }

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { App, appendOperationEvent, DiffView, FileContextView, OverviewScreen, ReviewWorkspace, SettingsScreen, SourceSelector, SplitDiffView } from './App'
 import { AnalysisBadge, Markdown, WindowControls } from './components'
@@ -1031,8 +1031,26 @@ describe('Review brief and chapter reader', () => {
     expect(screen.getByRole('heading', {name: 'Review paused — CI is failing'})).toBeInTheDocument()
     expect(screen.getByRole('button', {name: 'Open review'})).toBeDisabled()
     expect(screen.queryByText('Agent review complete')).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', {name: 'Open check'}))
+    expect(screen.getByText('Failed · GitHub Actions')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', {name: 'Open test check'}))
     expect(openURL).toHaveBeenCalledWith('https://github.com/acme/api/actions/runs/21')
+  })
+
+  it('labels check states and reveals additional CI checks on demand', () => {
+    const base = reviewSession()
+    const checks = ['API validation', 'App coverage', 'App logic tests', 'App RN validation', 'App web validation', 'App formatting'].map((name, index) => ({id: index + 1, name, status: 'in_progress', appName: 'GitHub Actions', url: `https://github.com/acme/api/actions/runs/${index + 1}`, detailsUrl: '', startedAt: '', completedAt: ''}))
+    const session: ReviewSession = {...base, pullRequest: {...base.pullRequest, checkRuns: checks}}
+    window.runtime = {EventsOn: vi.fn(() => () => {})}
+    render(<OverviewScreen session={session} onBack={vi.fn()} onSession={vi.fn()} onReview={vi.fn()}/>)
+
+    const checkList = document.querySelector<HTMLElement>('.review-gate-checks')
+    if (!checkList) throw new Error('Expected the review gate check list')
+    expect(within(checkList).getAllByText('In progress · GitHub Actions')).toHaveLength(4)
+    expect(within(checkList).queryByText('App web validation')).not.toBeInTheDocument()
+    fireEvent.click(within(checkList).getByRole('button', {name: 'Show all 6 incomplete checks'}))
+    expect(within(checkList).getByText('App web validation')).toBeInTheDocument()
+    expect(within(checkList).getByRole('button', {name: 'Show fewer checks'})).toBeInTheDocument()
+    expect(within(checkList).getByRole('button', {name: 'Open App web validation check'})).toBeInTheDocument()
   })
 
   it('polls pending checks and exposes the agent review when CI passes', async () => {
