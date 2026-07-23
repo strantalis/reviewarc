@@ -9,6 +9,7 @@ const description =
   "ReviewArc is a macOS app that runs Codex or Claude Code over a pull request, verifies every citation against the exact revision, and leaves the approval with you.";
 const canonical = new URL("/", Astro.site);
 const ogImage = new URL("/images/og/reviewarc-og.jpg", Astro.site);
+const repositoryUrl = "https://github.com/strantalis/reviewarc";
 const structuredData = {
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
@@ -16,6 +17,7 @@ const structuredData = {
   applicationCategory: "DeveloperApplication",
   description,
   url: canonical.href,
+  codeRepository: repositoryUrl,
   image: ogImage.href,
   offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
 };
@@ -57,6 +59,7 @@ const structuredData = {
       <nav aria-label="Primary navigation">
         <a class="wide-nav-link" href="#review-arc">How it works</a>
         <a href="/docs/">Docs</a>
+        <a href={repositoryUrl}>GitHub</a>
         <a class="header-download is-loading" data-release-action aria-disabled="true">Checking…</a>
         <ThemeControl />
       </nav>
@@ -191,7 +194,7 @@ const structuredData = {
         <span>ReviewArc</span>
       </a>
       <span>A pull request review client for macOS.</span>
-      <nav aria-label="Footer navigation"><a href="/docs/">Docs</a><a href="/docs/security-and-local-data/">Security</a><a href="/legal/notices/">Legal</a><a class="is-loading" data-release-action aria-disabled="true">Checking…</a></nav>
+      <nav aria-label="Footer navigation"><a href="/docs/">Docs</a><a href={repositoryUrl}>GitHub</a><a href="/docs/security-and-local-data/">Security</a><a href="/legal/notices/">Legal</a><a class="is-loading" data-release-action aria-disabled="true">Checking…</a></nav>
     </footer>
 
     <script>

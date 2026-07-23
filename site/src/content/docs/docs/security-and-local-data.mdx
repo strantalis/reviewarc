@@ -5,6 +5,17 @@ description: Understand ReviewArc's trust boundaries, managed repositories, cred
 
 ReviewArc is local-first. Application state lives in the macOS application support directory, including inbox settings, managed Git caches, structured analysis, review progress, private notes, drafts, and publication history.
 
+## Local data layout
+
+The default data root is `~/Library/Application Support/ReviewArc`, and the resolved location is shown in ReviewArc settings.
+
+- `database/reviewarc.db` stores application and review state.
+- `repositories/` and `worktrees/` contain ReviewArc-managed Git data.
+- `cache/analysis-bundles/` contains immutable private artifacts for active analysis runs.
+- `logs/` contains local application diagnostics.
+
+To clear only managed Git data, quit ReviewArc and remove `repositories/` and `worktrees/`. To reset ReviewArc completely, remove the displayed data root. A full reset also deletes private notes, drafts, decisions, progress, and publication history.
+
 ## Managed repositories
 
 ReviewArc does not use or modify your working repositories. It creates isolated, bare Git caches under its own application storage and materializes only the revisions needed for review.

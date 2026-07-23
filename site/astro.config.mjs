@@ -51,6 +51,9 @@ export default defineConfig({
       logo: {
         src: "./src/assets/reviewarc-mark.svg"
       },
+      social: [
+        { icon: "github", label: "GitHub", href: "https://github.com/strantalis/reviewarc" }
+      ],
       customCss: ["./src/styles/fonts.css", "./src/styles/starlight.css"],
       head: [
         { tag: "meta", attrs: { property: "og:image", content: "https://www.reviewarc.dev/images/og/reviewarc-og.jpg" } },
