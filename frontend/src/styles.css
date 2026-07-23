@@ -500,7 +500,7 @@ html, body { color: var(--ink); background: var(--canvas); }
 .review-gate-label, .agent-review-label { color: var(--accent-dark); font-size: var(--text-caption); font-weight: 750; }
 .review-gate h2 { margin: var(--space-2xs) 0; font-size: var(--text-heading); line-height: 1.2; }
 .review-gate header p { max-width: 68ch; margin: 0; color: var(--muted); font-size: var(--text-secondary); line-height: var(--leading-body); }
-.review-gate-status { display: flex; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.review-gate-status { display: flex; justify-content: center; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .review-gate-status > div { min-width: 150px; padding: var(--space-sm) var(--space-lg) var(--space-sm) 0; }
 .review-gate-status > div + div { padding-left: var(--space-lg); border-left: 1px solid var(--line); }
 .review-gate-status strong, .review-gate-status span { display: block; }.review-gate-status strong { font-size: var(--text-subheading); font-variant-numeric: tabular-nums; }.review-gate-status span { color: var(--muted); font-size: var(--text-caption); }
