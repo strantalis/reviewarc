@@ -3,6 +3,8 @@ import starlight from "@astrojs/starlight";
 import vercel from "@astrojs/vercel";
 
 const isDev = process.argv.includes("dev");
+const socialImage = "https://www.reviewarc.dev/images/og/reviewarc-og.jpg?v=2";
+const socialImageAlt = "ReviewArc review brief showing an insufficient-evidence recommendation and findings awaiting human judgment.";
 
 export default defineConfig({
   site: "https://www.reviewarc.dev",
@@ -56,10 +58,14 @@ export default defineConfig({
       ],
       customCss: ["./src/styles/fonts.css", "./src/styles/starlight.css"],
       head: [
-        { tag: "meta", attrs: { property: "og:image", content: "https://www.reviewarc.dev/images/og/reviewarc-og.jpg" } },
+        { tag: "meta", attrs: { property: "og:image", content: socialImage } },
+        { tag: "meta", attrs: { property: "og:image:secure_url", content: socialImage } },
+        { tag: "meta", attrs: { property: "og:image:type", content: "image/jpeg" } },
         { tag: "meta", attrs: { property: "og:image:width", content: "1200" } },
         { tag: "meta", attrs: { property: "og:image:height", content: "630" } },
-        { tag: "meta", attrs: { name: "twitter:image", content: "https://www.reviewarc.dev/images/og/reviewarc-og.jpg" } },
+        { tag: "meta", attrs: { property: "og:image:alt", content: socialImageAlt } },
+        { tag: "meta", attrs: { name: "twitter:image", content: socialImage } },
+        { tag: "meta", attrs: { name: "twitter:image:alt", content: socialImageAlt } },
         { tag: "link", attrs: { rel: "preload", href: "/fonts/commissioner-latin.woff2", as: "font", type: "font/woff2", crossorigin: "anonymous" } },
         { tag: "link", attrs: { rel: "preload", href: "/fonts/spline-sans-mono-latin.woff2", as: "font", type: "font/woff2", crossorigin: "anonymous" } }
       ],

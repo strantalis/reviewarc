@@ -2,6 +2,7 @@
 import "../../styles/landing.css";
 import "../../styles/release.css";
 import reviewArcMark from "../../assets/reviewarc-mark.svg";
+import SocialMetadata from "../../components/SocialMetadata.astro";
 import ThemeControl from "../../components/ThemeControl.astro";
 import ThemeBootstrap from "../../components/ThemeBootstrap.astro";
 import { releaseNotesFor, releaseNoteVersions } from "../../lib/release-notes";
@@ -39,8 +40,8 @@ const releases = releaseNoteVersions()
   }));
 
 const description = "Release notes and signed macOS downloads for every published ReviewArc build.";
+const title = "ReviewArc releases";
 const canonical = new URL("/releases/", Astro.site);
-const ogImage = new URL("/images/og/reviewarc-og.jpg", Astro.site);
 ---
 
 <!doctype html>
@@ -51,17 +52,9 @@ const ogImage = new URL("/images/og/reviewarc-og.jpg", Astro.site);
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f6f8fb" />
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#171d26" />
     <meta name="description" content={description} />
-    <title>ReviewArc releases</title>
+    <title>{title}</title>
     <link rel="canonical" href={canonical.href} />
-    <meta property="og:type" content="website" />
-    <meta property="og:site_name" content="ReviewArc" />
-    <meta property="og:title" content="ReviewArc releases" />
-    <meta property="og:description" content={description} />
-    <meta property="og:url" content={canonical.href} />
-    <meta property="og:image" content={ogImage.href} />
-    <meta property="og:image:width" content="1200" />
-    <meta property="og:image:height" content="630" />
-    <meta name="twitter:card" content="summary_large_image" />
+    <SocialMetadata {canonical} {description} {title} />
     <ThemeBootstrap />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="preload" href="/fonts/commissioner-latin.woff2" as="font" type="font/woff2" crossorigin />
