@@ -10,19 +10,19 @@
     "check": "npm run lint && astro check && vitest run"
   },
   "dependencies": {
-    "@astrojs/starlight": "0.41.3",
-    "@astrojs/vercel": "11.0.3",
-    "@vercel/blob": "2.6.1",
-    "astro": "7.1.0",
-    "zod": "4.4.3"
+    "@astrojs/starlight": "0.41.10",
+    "@astrojs/vercel": "11.0.8",
+    "@vercel/blob": "2.8.0",
+    "astro": "7.2.9",
+    "zod": "4.5.2"
   },
   "devDependencies": {
-    "@astrojs/check": "0.9.9",
-    "@emnapi/core": "1.11.2",
-    "@emnapi/runtime": "1.11.2",
-    "oxlint": "1.74.0",
+    "@astrojs/check": "0.9.10",
+    "@emnapi/core": "1.11.3",
+    "@emnapi/runtime": "1.11.3",
+    "oxlint": "1.80.0",
     "typescript": "6.0.3",
-    "vitest": "4.1.10"
+    "vitest": "4.1.11"
   },
   "overrides": {
     "path-to-regexp": "6.3.0"
