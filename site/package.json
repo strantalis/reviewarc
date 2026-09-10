@@ -22,7 +22,7 @@
     "@emnapi/runtime": "1.11.2",
     "oxlint": "1.74.0",
     "typescript": "6.0.3",
-    "vitest": "4.1.10"
+    "vitest": "4.1.11"
   },
   "overrides": {
     "path-to-regexp": "6.3.0"
