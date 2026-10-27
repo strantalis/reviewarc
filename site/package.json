@@ -13,7 +13,7 @@
     "@astrojs/starlight": "0.41.3",
     "@astrojs/vercel": "11.0.3",
     "@vercel/blob": "2.6.1",
-    "astro": "7.1.0",
+    "astro": "7.4.2",
     "zod": "4.4.3"
   },
   "devDependencies": {
